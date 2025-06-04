@@ -45,7 +45,7 @@ def load_google_sheet(creds_dict, spreadsheet_id, worksheet_name):
     """Loads data from a Google Sheet into a pandas DataFrame."""
     if creds_dict is None:
         st.error("Google credentials not provided or invalid.")
-        return None
+        return None, None, None # Added None for gc
     try:
         creds = Credentials.from_service_account_info(creds_dict, scopes=['https://www.googleapis.com/auth/spreadsheets'])
         gc = gspread.authorize(creds)
@@ -54,7 +54,7 @@ def load_google_sheet(creds_dict, spreadsheet_id, worksheet_name):
         data = worksheet.get_all_records() # More robust for varying empty cells
         if not data:
             st.info(f"Worksheet '{worksheet_name}' appears to be empty or has no data rows after headers.")
-            return pd.DataFrame() # Return empty DataFrame
+            return pd.DataFrame(), spreadsheet, gc # Return empty DataFrame but valid spreadsheet and gc
         df = pd.DataFrame(data)
         return df, spreadsheet, gc # Return spreadsheet and gc for writing back
     except gspread.exceptions.WorksheetNotFound:
@@ -81,7 +81,9 @@ def preprocess_data(df):
     ]
     for col_name in date_columns_to_convert:
         if col_name in df_processed.columns:
-            df_processed[col_name] = pd.to_datetime(df_processed[col_name], errors='coerce', dayfirst=False, yearfirst=False) # Common date formats
+            # Attempt to convert, ensuring empty strings become NaT
+            df_processed[col_name] = df_processed[col_name].replace('', None) 
+            df_processed[col_name] = pd.to_datetime(df_processed[col_name], errors='coerce', dayfirst=False, yearfirst=False)
     return df_processed
 
 def flag_threshold_delays(df, current_date_str):
@@ -89,23 +91,43 @@ def flag_threshold_delays(df, current_date_str):
     df_flagged = df.copy()
     current_date = pd.Timestamp(current_date_str)
 
+    # Rule 1: Template Done, Awaiting RTF (Threshold: 2 days)
     df_flagged['Flag_Awaiting_RTF'] = False
     if 'Template - Date' in df_flagged.columns and 'Ready to Fab - Date' in df_flagged.columns:
-        valid_rows = df_flagged['Template - Date'].notna() & df_flagged['Ready to Fab - Date'].isna() & pd.api.types.is_datetime64_any_dtype(df_flagged['Template - Date'])
-        df_flagged.loc[valid_rows, 'Flag_Awaiting_RTF'] = \
-            (current_date - df_flagged.loc[valid_rows, 'Template - Date']).dt.days > 2
+        condition_rtf_pending = df_flagged['Template - Date'].notna() & \
+                                df_flagged['Ready to Fab - Date'].isna() & \
+                                pd.api.types.is_datetime64_any_dtype(df_flagged['Template - Date'])
+        if condition_rtf_pending.any(): 
+            df_flagged.loc[condition_rtf_pending, 'Flag_Awaiting_RTF'] = \
+                (current_date - df_flagged.loc[condition_rtf_pending, 'Template - Date']).dt.days > 2
 
+    # Rule 2: Job Created, Awaiting Template (Threshold: 2 days)
     df_flagged['Flag_Awaiting_Template'] = False
     if 'Job Creation' in df_flagged.columns and 'Template - Date' in df_flagged.columns:
-        valid_rows = df_flagged['Job Creation'].notna() & df_flagged['Template - Date'].isna() & pd.api.types.is_datetime64_any_dtype(df_flagged['Job Creation'])
-        df_flagged.loc[valid_rows, 'Flag_Awaiting_Template'] = \
-            (current_date - df_flagged.loc[valid_rows, 'Job Creation']).dt.days > 2
+        condition_template_pending = df_flagged['Job Creation'].notna() & \
+                                     df_flagged['Template - Date'].isna() & \
+                                     pd.api.types.is_datetime64_any_dtype(df_flagged['Job Creation'])
+        if condition_template_pending.any():
+            df_flagged.loc[condition_template_pending, 'Flag_Awaiting_Template'] = \
+                (current_date - df_flagged.loc[condition_template_pending, 'Job Creation']).dt.days > 2
     
+    # Rule 3: Ready to Fab, Awaiting Cutlist (Threshold: 3 days) - MODIFIED
     df_flagged['Flag_Awaiting_Cutlist'] = False
-    if 'Ready to Fab - Date' in df_flagged.columns and 'Cutlist - Date' in df_flagged.columns:
-        valid_rows = df_flagged['Ready to Fab - Date'].notna() & df_flagged['Cutlist - Date'].isna() & pd.api.types.is_datetime64_any_dtype(df_flagged['Ready to Fab - Date'])
-        df_flagged.loc[valid_rows, 'Flag_Awaiting_Cutlist'] = \
-            (current_date - df_flagged.loc[valid_rows, 'Ready to Fab - Date']).dt.days > 3
+    if 'Ready to Fab - Date' in df_flagged.columns and \
+       'Cutlist - Date' in df_flagged.columns and \
+       'Supplied By' in df_flagged.columns:
+        
+        is_not_laminate = ~df_flagged['Supplied By'].astype(str).str.strip().eq('ABB PF - 12')
+        
+        rtf_date_exists = df_flagged['Ready to Fab - Date'].notna()
+        cutlist_date_missing = df_flagged['Cutlist - Date'].isna()
+        is_rtf_date_datetime = pd.api.types.is_datetime64_any_dtype(df_flagged['Ready to Fab - Date'])
+
+        valid_rows_for_cutlist_flag = rtf_date_exists & cutlist_date_missing & is_rtf_date_datetime & is_not_laminate
+        
+        if valid_rows_for_cutlist_flag.any():
+            df_flagged.loc[valid_rows_for_cutlist_flag, 'Flag_Awaiting_Cutlist'] = \
+                (current_date - df_flagged.loc[valid_rows_for_cutlist_flag, 'Ready to Fab - Date']).dt.days > 3
 
     threshold_flag_cols = ['Flag_Awaiting_RTF', 'Flag_Awaiting_Template', 'Flag_Awaiting_Cutlist']
     threshold_flag_cols = [col for col in threshold_flag_cols if col in df_flagged.columns]
@@ -179,12 +201,22 @@ def flag_past_due_activities(df, current_date_str):
         df_flagged[new_flag_col] = False
         if not (date_col in df_flagged.columns and status_col in df_flagged.columns and pd.api.types.is_datetime64_any_dtype(df_flagged[date_col])):
             continue
+        
+        valid_date_rows = df_flagged[date_col].notna()
+        if not valid_date_rows.any(): 
+            continue
 
-        condition_date_past = df_flagged[date_col].notna() & (df_flagged[date_col] < current_date)
+        # Ensure condition_date_past is a boolean Series aligned with df_flagged.index
+        condition_date_past = pd.Series(False, index=df_flagged.index)
+        # Update only where valid_date_rows is True
+        condition_date_past.loc[valid_date_rows] = (df_flagged.loc[valid_date_rows, date_col] < current_date)
+        
         status_cleaned = df_flagged[status_col].fillna('').astype(str).str.lower().str.strip()
         condition_not_complete = ~status_cleaned.isin(completion_terms)
         condition_not_cancelled = ~status_cleaned.isin(cancellation_terms)
+        
         final_condition = condition_date_past & condition_not_complete & condition_not_cancelled
+        
         df_flagged.loc[final_condition, new_flag_col] = True
         past_due_flag_columns_generated.append(new_flag_col)
 
@@ -194,25 +226,55 @@ def flag_past_due_activities(df, current_date_str):
         df_flagged['Flag_Any_PastDue_Activity'] = False
     return df_flagged
 
-def determine_primary_issue(row):
-    if row.get('Flag_PastDue_Install', False): return "Past Due: Install"
-    if row.get('Flag_PastDue_Polish_Fab_Completion', False): return "Past Due: Polish/Fab"
-    # ... (add other primary issue checks in order of priority) ...
-    if row.get('Flag_Awaiting_Template', False): return "Delay: Awaiting Template"
-    if row.get('Flag_Keyword_In_Install_Notes', False): return "Keyword: Install Notes"
-    # Add all other primary issue checks from your Colab script here
-    if row.get('Flag_PastDue_Saw', False): return "Past Due: Saw"
-    if row.get('Flag_PastDue_RTF', False): return "Past Due: RTF"
-    if row.get('Flag_PastDue_Invoice', False): return "Past Due: Invoice"
-    if row.get('Flag_PastDue_Collect_Final', False): return "Past Due: Collect Final"
-    if row.get('Flag_PastDue_Template', False): return "Past Due: Template"
-    if row.get('Flag_Awaiting_Cutlist', False): return "Delay: Awaiting Cutlist"
-    if row.get('Flag_Awaiting_RTF', False): return "Delay: Awaiting RTF"
-    if row.get('Flag_Keyword_In_Template_Notes', False): return "Keyword: Template Notes"
-    if row.get('Flag_Keyword_In_Job_Issues', False): return "Keyword: Job Issues"
-    if row.get('Flag_Keyword_In_QC_Notes', False): return "Keyword: QC Notes"
-    if row.get('Flag_Keyword_In_Saw_Notes', False): return "Keyword: Saw Notes"
-    return "Other Issue"
+def determine_primary_issue_and_days(row, current_calc_date_ts):
+    """Determines a primary issue string and days behind, based on a hierarchy of flags."""
+    # Ensure current_calc_date_ts is a Timestamp
+    if not isinstance(current_calc_date_ts, pd.Timestamp):
+        current_calc_date_ts = pd.Timestamp(current_calc_date_ts)
+
+    # Past Due Flags (Higher Priority)
+    if row.get('Flag_PastDue_Install', False) and pd.notna(row.get('Install - Date')) and pd.api.types.is_datetime64_any_dtype(row.get('Install - Date')):
+        days = (current_calc_date_ts - row['Install - Date']).days
+        return "Past Due: Install", days
+    if row.get('Flag_PastDue_Polish_Fab_Completion', False) and pd.notna(row.get('Polish/Fab Completion - Date')) and pd.api.types.is_datetime64_any_dtype(row.get('Polish/Fab Completion - Date')):
+        days = (current_calc_date_ts - row['Polish/Fab Completion - Date']).days
+        return "Past Due: Polish/Fab", days
+    if row.get('Flag_PastDue_Saw', False) and pd.notna(row.get('Saw - Date')) and pd.api.types.is_datetime64_any_dtype(row.get('Saw - Date')):
+        days = (current_calc_date_ts - row['Saw - Date']).days
+        return "Past Due: Saw", days
+    if row.get('Flag_PastDue_Ready_to_Fab', False) and pd.notna(row.get('Ready to Fab - Date')) and pd.api.types.is_datetime64_any_dtype(row.get('Ready to Fab - Date')): # Matched flag name
+        days = (current_calc_date_ts - row['Ready to Fab - Date']).days
+        return "Past Due: RTF", days
+    if row.get('Flag_PastDue_Invoice', False) and pd.notna(row.get('Invoice - Date')) and pd.api.types.is_datetime64_any_dtype(row.get('Invoice - Date')):
+        days = (current_calc_date_ts - row['Invoice - Date']).days
+        return "Past Due: Invoice", days
+    if row.get('Flag_PastDue_Collect_Final', False) and pd.notna(row.get('Collect Final - Date')) and pd.api.types.is_datetime64_any_dtype(row.get('Collect Final - Date')):
+        days = (current_calc_date_ts - row['Collect Final - Date']).days
+        return "Past Due: Collect Final", days
+    if row.get('Flag_PastDue_Template', False) and pd.notna(row.get('Template - Date')) and pd.api.types.is_datetime64_any_dtype(row.get('Template - Date')):
+        days = (current_calc_date_ts - row['Template - Date']).days
+        return "Past Due: Template", days
+    
+    # Threshold Delay Flags
+    if row.get('Flag_Awaiting_Cutlist', False) and pd.notna(row.get('Ready to Fab - Date')) and pd.api.types.is_datetime64_any_dtype(row.get('Ready to Fab - Date')):
+        days = (current_calc_date_ts - row['Ready to Fab - Date']).days 
+        return "Delay: Awaiting Cutlist", days # Days since RTF
+    if row.get('Flag_Awaiting_RTF', False) and pd.notna(row.get('Template - Date')) and pd.api.types.is_datetime64_any_dtype(row.get('Template - Date')):
+        days = (current_calc_date_ts - row['Template - Date']).days
+        return "Delay: Awaiting RTF", days # Days since Template
+    if row.get('Flag_Awaiting_Template', False) and pd.notna(row.get('Job Creation')) and pd.api.types.is_datetime64_any_dtype(row.get('Job Creation')):
+        days = (current_calc_date_ts - row['Job Creation']).days
+        return "Delay: Awaiting Template", days # Days since Job Creation
+    
+    # Keyword Flags (Days Behind = "N/A")
+    if row.get('Flag_Keyword_In_Install_Notes', False): return "Keyword: Install Notes", "N/A"
+    if row.get('Flag_Keyword_In_Template_Notes', False): return "Keyword: Template Notes", "N/A"
+    if row.get('Flag_Keyword_In_Job_Issues', False): return "Keyword: Job Issues", "N/A"
+    if row.get('Flag_Keyword_In_QC_Notes', False): return "Keyword: QC Notes", "N/A"
+    if row.get('Flag_Keyword_In_Saw_Notes', False): return "Keyword: Saw Notes", "N/A"
+    
+    return "Other Issue", "N/A" # Fallback
+
 
 def write_to_google_sheet(spreadsheet_obj, worksheet_name, df_to_write):
     """Writes a DataFrame to the specified Google Sheet worksheet."""
@@ -223,11 +285,15 @@ def write_to_google_sheet(spreadsheet_obj, worksheet_name, df_to_write):
         worksheet = spreadsheet_obj.worksheet(worksheet_name)
     except gspread.exceptions.WorksheetNotFound:
         st.info(f"Worksheet '{worksheet_name}' not found. Creating it...")
-        worksheet = spreadsheet_obj.add_worksheet(title=worksheet_name, rows=100, cols=len(df_to_write.columns) + 5) # Add some buffer cols
+        num_cols = len(df_to_write.columns) if not df_to_write.empty else 20 
+        worksheet = spreadsheet_obj.add_worksheet(title=worksheet_name, rows=max(100, len(df_to_write) + 5), cols=num_cols + 5)
     
     worksheet.clear()
-    # Convert NaT, NaN, None to empty strings for cleaner sheet output and ensure all data is string
-    df_export = df_to_write.fillna('').astype(str)
+    if df_to_write.empty:
+        st.info(f"No data to write to '{worksheet_name}'. Sheet cleared.")
+        return True
+
+    df_export = df_to_write.fillna('').astype(str) # Ensure all are strings for gspread
     export_values = [df_export.columns.values.tolist()] + df_export.values.tolist()
     worksheet.update(export_values, value_input_option='USER_ENTERED')
     st.success(f"Successfully wrote {len(df_to_write)} rows to worksheet: '{worksheet_name}'")
@@ -256,6 +322,7 @@ final_creds = creds_from_secrets if creds_from_secrets else uploaded_creds_dict
 default_calc_date = pd.Timestamp('2025-06-04').date()
 current_calc_date_input = st.sidebar.date_input("Date for Calculations", value=default_calc_date)
 current_calc_date_str = current_calc_date_input.strftime('%Y-%m-%d')
+current_calc_date_ts = pd.Timestamp(current_calc_date_input) # For passing to determine_primary_issue_and_days
 
 # Initialize session state
 if 'df_analyzed' not in st.session_state: st.session_state.df_analyzed = None
@@ -265,10 +332,11 @@ if 'gc_obj' not in st.session_state: st.session_state.gc_obj = None
 
 if final_creds:
     if st.sidebar.button("🔄 Load and Analyze Job Data", key="load_analyze_button"):
+        st.session_state.df_analyzed = None 
         with st.spinner("Loading data from Google Sheets..."):
             raw_df, spreadsheet, gc_instance = load_google_sheet(final_creds, SPREADSHEET_ID, DATA_WORKSHEET_NAME)
             st.session_state.spreadsheet_obj = spreadsheet
-            st.session_state.gc_obj = gc_instance # Store gc for potential future use
+            st.session_state.gc_obj = gc_instance 
         
         if raw_df is not None and not raw_df.empty:
             st.success(f"Successfully loaded {len(raw_df)} jobs from '{DATA_WORKSHEET_NAME}'.")
@@ -287,17 +355,19 @@ if final_creds:
                     if flag_type_col in st.session_state.df_analyzed.columns:
                         all_flag_summary_cols.append(flag_type_col)
                 
-                if all_flag_summary_cols:
+                if all_flag_summary_cols: 
                     st.session_state.df_analyzed['Flag_Overall_Needs_Attention'] = st.session_state.df_analyzed[all_flag_summary_cols].any(axis=1)
-                else:
+                else: 
                     st.session_state.df_analyzed['Flag_Overall_Needs_Attention'] = False
                 st.success("Data analysis complete!")
+            elif st.session_state.df_analyzed is not None and st.session_state.df_analyzed.empty:
+                 st.info("Data analysis complete, but no jobs matched criteria or the source data led to an empty result after processing.")
             else:
-                st.error("Data analysis resulted in an empty DataFrame or failed.")
+                st.error("Data analysis failed after loading.")
         elif raw_df is not None and raw_df.empty:
-             st.info("Source data sheet is empty. No analysis performed.")
+             st.info(f"Source data sheet '{DATA_WORKSHEET_NAME}' is empty. No analysis performed.")
         else:
-            st.error("Failed to load data from Google Sheets.")
+            st.error("Failed to load data from Google Sheets. Check credentials and sheet sharing.")
 elif not creds_from_secrets:
     st.sidebar.info("Please upload your Google Service Account JSON key to begin.")
 
@@ -311,33 +381,39 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
         priority_jobs_df = df_display[df_display['Flag_Overall_Needs_Attention'] == True].copy()
 
         if not priority_jobs_df.empty:
-            priority_jobs_df.loc[:, 'Primary Issue'] = priority_jobs_df.apply(determine_primary_issue, axis=1)
-            if 'Install - Date' in priority_jobs_df.columns:
+            # Apply the new function to get two columns
+            issues_and_days = priority_jobs_df.apply(
+                lambda row: determine_primary_issue_and_days(row, current_calc_date_ts), axis=1
+            )
+            priority_jobs_df.loc[:, 'Primary Issue'] = [item[0] for item in issues_and_days]
+            priority_jobs_df.loc[:, 'Days Behind'] = [item[1] for item in issues_and_days]
+
+            if 'Install - Date' in priority_jobs_df.columns and pd.api.types.is_datetime64_any_dtype(priority_jobs_df['Install - Date']):
                 priority_jobs_df.sort_values(by='Install - Date', ascending=True, na_position='last', inplace=True)
             
-            display_cols_priority = ['Primary Issue', 'Job Name', 'Salesperson', 'Job Creation', 
+            display_cols_priority = ['Primary Issue', 'Days Behind', 'Job Name', 'Salesperson', 'Job Creation', 
                                      'Template - Date', 'Install - Date', 'Job Status']
             true_flag_cols_in_priority = [col for col in priority_jobs_df.columns if col.startswith('Flag_') and \
                                           col not in ['Flag_Any_Threshold_Delay', 'Flag_Any_Keyword_Issue', 
-                                                      'Flag_Any_PastDue_Activity', 'Flag_Overall_Needs_Attention', 'Primary Issue'] and \
-                                          priority_jobs_df[col].any()]
+                                                      'Flag_Any_PastDue_Activity', 'Flag_Overall_Needs_Attention', 
+                                                      'Primary Issue', 'Days Behind'] and \
+                                          priority_jobs_df[col].any()] # Check if any True in this column
             display_cols_priority.extend(sorted(true_flag_cols_in_priority))
             display_cols_priority = [col for col in display_cols_priority if col in priority_jobs_df.columns]
 
-            st.dataframe(priority_jobs_df[display_cols_priority], height=600)
+
+            st.dataframe(priority_jobs_df[display_cols_priority], height=600, use_container_width=True)
             st.markdown(f"**Total Jobs for 'todo' List: {len(priority_jobs_df)}**")
 
             if st.button("✍️ Update 'todo' Sheet in Google Sheets", key="update_todo_sheet_button"):
                 if st.session_state.spreadsheet_obj:
                     with st.spinner(f"Writing to '{TODO_WORKSHEET_NAME}' sheet..."):
-                        # Prepare only the necessary columns for export
-                        export_df = priority_jobs_df[display_cols_priority].copy()
+                        export_df = priority_jobs_df[display_cols_priority].copy() 
                         write_to_google_sheet(st.session_state.spreadsheet_obj, TODO_WORKSHEET_NAME, export_df)
                 else:
                     st.error("Spreadsheet object not available. Cannot write to Google Sheet. Try reloading data.")
         else:
             st.info("No jobs currently require attention based on the defined criteria.")
-            # Optionally clear the 'todo' sheet if it's empty
             if st.session_state.spreadsheet_obj and st.button("Clear 'todo' Sheet (as no jobs to list)", key="clear_todo_button"):
                  with st.spinner(f"Clearing '{TODO_WORKSHEET_NAME}' sheet..."):
                     write_to_google_sheet(st.session_state.spreadsheet_obj, TODO_WORKSHEET_NAME, pd.DataFrame())
@@ -345,19 +421,39 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
 
     # --- Detailed Breakdown Expander ---
     with st.expander("Show Detailed Flag Counts"):
-        # ... (Detailed flag counts as in previous version) ...
         st.subheader("Threshold-Based Delays")
         if 'Flag_Awaiting_RTF' in df_display.columns: st.metric("Awaiting RTF (>2 days)", df_display['Flag_Awaiting_RTF'].sum())
         if 'Flag_Awaiting_Template' in df_display.columns: st.metric("Awaiting Template (>2 days)", df_display['Flag_Awaiting_Template'].sum())
-        if 'Flag_Awaiting_Cutlist' in df_display.columns: st.metric("Awaiting Cutlist (>3 days)", df_display['Flag_Awaiting_Cutlist'].sum())
-        # ... (add other flag counts here) ...
+        if 'Flag_Awaiting_Cutlist' in df_display.columns: st.metric("Awaiting Cutlist (>3 days, non-laminate)", df_display['Flag_Awaiting_Cutlist'].sum())
+        
+        st.subheader("Keyword Issues in Notes")
+        notes_cols_for_keyword_summary = ['Template - Notes', 'Install - Notes', 'Saw - Notes', 'Job Issues', 'QC - Notes']
+        for note_col_original_name in notes_cols_for_keyword_summary:
+            flag_col_name = f'Flag_Keyword_In_{note_col_original_name.replace(" - ", "_").replace(" ", "_")}'
+            if flag_col_name in df_display.columns:
+                st.write(f"*Keyword in '{note_col_original_name}'*: {df_display[flag_col_name].sum()} jobs")
+        
+        st.subheader("Past Due Activities")
+        past_due_activities_display = [
+            ('Template', 'Flag_PastDue_Template'), ('RTF', 'Flag_PastDue_Ready_to_Fab'), ('Install', 'Flag_PastDue_Install'),
+            ('Invoice', 'Flag_PastDue_Invoice'), ('Collect Final', 'Flag_PastDue_Collect_Final'),
+            ('Saw', 'Flag_PastDue_Saw'), ('Polish/Fab Completion', 'Flag_PastDue_Polish_Fab_Completion')
+        ]
+        for friendly_name, flag_col in past_due_activities_display:
+            if flag_col in past_due_activities_display: # This condition was incorrect, should check df_display.columns
+                 if flag_col in df_display.columns:
+                    st.write(f"*Past Due '{friendly_name}'*: {df_display[flag_col].sum()} jobs")
 
-    if st.checkbox("Show Full Analyzed Data Table"):
+
+    if st.checkbox("Show Full Analyzed Data Table (with all flags)"):
         st.subheader("Full Analyzed Data")
-        st.dataframe(df_display)
+        st.dataframe(df_display, use_container_width=True)
 
 elif final_creds and st.session_state.df_analyzed is not None and st.session_state.df_analyzed.empty:
-    st.info("Analysis complete, but the resulting dataset is empty (e.g. source sheet was empty or no jobs matched criteria).")
+    st.info("Analysis complete. The source data might be empty or no jobs matched the flagging criteria after processing.")
+elif not final_creds and not creds_from_secrets :
+     st.info("Please upload your Google Service Account JSON key in the sidebar and click 'Load and Analyze Job Data'.")
+
 
 st.sidebar.markdown("---")
 st.sidebar.info("Remember to configure `GOOGLE_CREDS_JSON` in Streamlit Secrets for deployed apps.")
