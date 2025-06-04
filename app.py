@@ -79,11 +79,21 @@ def preprocess_data(df):
         'Tile Order - Date', 'Tile Install - Date', 'Service - Date', 'Callback - Date',
         'Invoice - Date', 'Collect Final - Date', 'Follow Up Call - Date'
     ]
+    common_non_date_placeholders = ['', 'None', 'none', 'NAN', 'NaN', 'nan', 'NA', 'NaT', 'nat', 'Pending', 'TBD', 'No Date', '#N/A']
+
     for col_name in date_columns_to_convert:
         if col_name in df_processed.columns:
-            # Attempt to convert, ensuring empty strings become NaT
-            df_processed[col_name] = df_processed[col_name].replace('', None) 
-            df_processed[col_name] = pd.to_datetime(df_processed[col_name], errors='coerce', dayfirst=False, yearfirst=False)
+            # Convert to string, strip whitespace, and replace common placeholders with None
+            df_processed[col_name] = df_processed[col_name].astype(str).str.strip()
+            for placeholder in common_non_date_placeholders:
+                df_processed[col_name] = df_processed[col_name].replace(placeholder, None, regex=False)
+            
+            # Attempt to convert to datetime
+            df_processed[col_name] = pd.to_datetime(df_processed[col_name], errors='coerce')
+            
+            # Optional: If you know the exact format and the above still fails, you can try:
+            # df_processed[col_name] = pd.to_datetime(df_processed[col_name], format='%m/%d/%Y', errors='coerce')
+            # or other formats like '%d/%m/%Y', '%Y-%m-%d', etc.
     return df_processed
 
 def flag_threshold_delays(df, current_date_str):
@@ -206,9 +216,7 @@ def flag_past_due_activities(df, current_date_str):
         if not valid_date_rows.any(): 
             continue
 
-        # Ensure condition_date_past is a boolean Series aligned with df_flagged.index
         condition_date_past = pd.Series(False, index=df_flagged.index)
-        # Update only where valid_date_rows is True
         condition_date_past.loc[valid_date_rows] = (df_flagged.loc[valid_date_rows, date_col] < current_date)
         
         status_cleaned = df_flagged[status_col].fillna('').astype(str).str.lower().str.strip()
@@ -228,43 +236,42 @@ def flag_past_due_activities(df, current_date_str):
 
 def determine_primary_issue_and_days(row, current_calc_date_ts):
     """Determines a primary issue string and days behind, based on a hierarchy of flags."""
-    # Ensure current_calc_date_ts is a Timestamp
     if not isinstance(current_calc_date_ts, pd.Timestamp):
         current_calc_date_ts = pd.Timestamp(current_calc_date_ts)
 
     # Past Due Flags (Higher Priority)
-    if row.get('Flag_PastDue_Install', False) and pd.notna(row.get('Install - Date')) and pd.api.types.is_datetime64_any_dtype(row.get('Install - Date')):
+    if row.get('Flag_PastDue_Install', False) and pd.notna(row.get('Install - Date')) and isinstance(row.get('Install - Date'), pd.Timestamp):
         days = (current_calc_date_ts - row['Install - Date']).days
         return "Past Due: Install", days
-    if row.get('Flag_PastDue_Polish_Fab_Completion', False) and pd.notna(row.get('Polish/Fab Completion - Date')) and pd.api.types.is_datetime64_any_dtype(row.get('Polish/Fab Completion - Date')):
+    if row.get('Flag_PastDue_Polish_Fab_Completion', False) and pd.notna(row.get('Polish/Fab Completion - Date')) and isinstance(row.get('Polish/Fab Completion - Date'), pd.Timestamp):
         days = (current_calc_date_ts - row['Polish/Fab Completion - Date']).days
         return "Past Due: Polish/Fab", days
-    if row.get('Flag_PastDue_Saw', False) and pd.notna(row.get('Saw - Date')) and pd.api.types.is_datetime64_any_dtype(row.get('Saw - Date')):
+    if row.get('Flag_PastDue_Saw', False) and pd.notna(row.get('Saw - Date')) and isinstance(row.get('Saw - Date'), pd.Timestamp):
         days = (current_calc_date_ts - row['Saw - Date']).days
         return "Past Due: Saw", days
-    if row.get('Flag_PastDue_Ready_to_Fab', False) and pd.notna(row.get('Ready to Fab - Date')) and pd.api.types.is_datetime64_any_dtype(row.get('Ready to Fab - Date')): # Matched flag name
+    if row.get('Flag_PastDue_Ready_to_Fab', False) and pd.notna(row.get('Ready to Fab - Date')) and isinstance(row.get('Ready to Fab - Date'), pd.Timestamp): 
         days = (current_calc_date_ts - row['Ready to Fab - Date']).days
         return "Past Due: RTF", days
-    if row.get('Flag_PastDue_Invoice', False) and pd.notna(row.get('Invoice - Date')) and pd.api.types.is_datetime64_any_dtype(row.get('Invoice - Date')):
+    if row.get('Flag_PastDue_Invoice', False) and pd.notna(row.get('Invoice - Date')) and isinstance(row.get('Invoice - Date'), pd.Timestamp):
         days = (current_calc_date_ts - row['Invoice - Date']).days
         return "Past Due: Invoice", days
-    if row.get('Flag_PastDue_Collect_Final', False) and pd.notna(row.get('Collect Final - Date')) and pd.api.types.is_datetime64_any_dtype(row.get('Collect Final - Date')):
+    if row.get('Flag_PastDue_Collect_Final', False) and pd.notna(row.get('Collect Final - Date')) and isinstance(row.get('Collect Final - Date'), pd.Timestamp):
         days = (current_calc_date_ts - row['Collect Final - Date']).days
         return "Past Due: Collect Final", days
-    if row.get('Flag_PastDue_Template', False) and pd.notna(row.get('Template - Date')) and pd.api.types.is_datetime64_any_dtype(row.get('Template - Date')):
+    if row.get('Flag_PastDue_Template', False) and pd.notna(row.get('Template - Date')) and isinstance(row.get('Template - Date'), pd.Timestamp):
         days = (current_calc_date_ts - row['Template - Date']).days
         return "Past Due: Template", days
     
     # Threshold Delay Flags
-    if row.get('Flag_Awaiting_Cutlist', False) and pd.notna(row.get('Ready to Fab - Date')) and pd.api.types.is_datetime64_any_dtype(row.get('Ready to Fab - Date')):
+    if row.get('Flag_Awaiting_Cutlist', False) and pd.notna(row.get('Ready to Fab - Date')) and isinstance(row.get('Ready to Fab - Date'), pd.Timestamp):
         days = (current_calc_date_ts - row['Ready to Fab - Date']).days 
-        return "Delay: Awaiting Cutlist", days # Days since RTF
-    if row.get('Flag_Awaiting_RTF', False) and pd.notna(row.get('Template - Date')) and pd.api.types.is_datetime64_any_dtype(row.get('Template - Date')):
+        return "Delay: Awaiting Cutlist", days 
+    if row.get('Flag_Awaiting_RTF', False) and pd.notna(row.get('Template - Date')) and isinstance(row.get('Template - Date'), pd.Timestamp):
         days = (current_calc_date_ts - row['Template - Date']).days
-        return "Delay: Awaiting RTF", days # Days since Template
-    if row.get('Flag_Awaiting_Template', False) and pd.notna(row.get('Job Creation')) and pd.api.types.is_datetime64_any_dtype(row.get('Job Creation')):
+        return "Delay: Awaiting RTF", days 
+    if row.get('Flag_Awaiting_Template', False) and pd.notna(row.get('Job Creation')) and isinstance(row.get('Job Creation'), pd.Timestamp):
         days = (current_calc_date_ts - row['Job Creation']).days
-        return "Delay: Awaiting Template", days # Days since Job Creation
+        return "Delay: Awaiting Template", days 
     
     # Keyword Flags (Days Behind = "N/A")
     if row.get('Flag_Keyword_In_Install_Notes', False): return "Keyword: Install Notes", "N/A"
