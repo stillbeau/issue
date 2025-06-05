@@ -6,6 +6,7 @@ import re
 from io import StringIO
 import json # For parsing JSON from secrets or uploaded file
 import math # For pagination
+from datetime import datetime # For timestamping notes
 
 # --- Page Configuration ---
 st.set_page_config(layout="wide", page_title="Job Issue Detector", page_icon="⚙️")
@@ -18,16 +19,12 @@ st.markdown("Analyzes job data from Google Sheets to identify issues and create 
 SPREADSHEET_ID = "1iToy3C-Bfn06bjuEM_flHNHwr2k1zMCV1wX9MNKzj38" # YOUR GOOGLE SHEET ID
 DATA_WORKSHEET_NAME = "jobs" # Your main data sheet
 TODO_WORKSHEET_NAME = "todo" # Sheet for the priority list
+ACTION_LOG_WORKSHEET_NAME = "notes" # New sheet for logging actions
 ITEMS_PER_PAGE = 10 # For pagination
 
 # --- Helper Functions (Authentication, Data Loading, Processing) ---
 
 def get_google_creds():
-    """
-    Tries to load Google credentials from Streamlit secrets.
-    If not found (e.g., local development), it will expect a file upload.
-    Returns the credentials dictionary or None.
-    """
     if "google_creds_json" in st.secrets:
         try:
             creds_str = st.secrets["google_creds_json"]
@@ -51,14 +48,13 @@ def load_google_sheet(creds_dict, spreadsheet_id, worksheet_name):
         gc = gspread.authorize(creds)
         spreadsheet = gc.open_by_key(spreadsheet_id)
         worksheet = spreadsheet.worksheet(worksheet_name)
-        data = worksheet.get_all_records() # Reads first row as headers, expects unique headers
+        data = worksheet.get_all_records() 
         if not data:
             st.info(f"Worksheet '{worksheet_name}' appears to be empty or has no data rows after headers.")
             return pd.DataFrame(), spreadsheet, gc 
         df = pd.DataFrame(data)
-        # Ensure critical columns exist, fill with empty string if not, to prevent downstream errors
         critical_cols = ['Next Sched. - Activity', 'Next Sched. - Date', 'Next Sched. - Status', 
-                         'Install - Date', 'Supplied By', 'Production #'] # Added Production #
+                         'Install - Date', 'Supplied By', 'Production #', 'Salesperson'] 
         for col in critical_cols:
             if col not in df.columns:
                 df[col] = "" 
@@ -332,6 +328,36 @@ def determine_primary_issue_and_days(row, current_calc_date_ts):
             
     return "Other Issue", "N/A" 
 
+def append_action_log(spreadsheet_obj, worksheet_name, log_entry_dict):
+    """Appends a log entry to the specified worksheet."""
+    if spreadsheet_obj is None:
+        st.warning("Spreadsheet object not available. Cannot write action log.")
+        return False
+    try:
+        try:
+            log_sheet = spreadsheet_obj.worksheet(worksheet_name)
+        except gspread.exceptions.WorksheetNotFound:
+            st.info(f"Action log worksheet '{worksheet_name}' not found. Creating it...")
+            # Define headers for the new action log sheet
+            action_log_headers = ["Timestamp", "Job Name", "Production #", "Action", "Details", "Assigned To"]
+            log_sheet = spreadsheet_obj.add_worksheet(title=worksheet_name, rows=100, cols=len(action_log_headers) + 5)
+            log_sheet.append_row(action_log_headers) # Add header row
+            st.info(f"Worksheet '{worksheet_name}' created with headers.")
+
+        # Prepare row data, ensuring all header columns are present even if value is empty
+        action_log_headers = log_sheet.row_values(1) # Get headers to ensure order
+        if not action_log_headers : # If sheet was just created and append_row hasn't flushed
+             action_log_headers = ["Timestamp", "Job Name", "Production #", "Action", "Details", "Assigned To"]
+
+
+        row_to_append = [log_entry_dict.get(header, "") for header in action_log_headers]
+        log_sheet.append_row(row_to_append, value_input_option='USER_ENTERED')
+        # st.toast(f"Action logged to '{worksheet_name}'.") # Use toast for less intrusive message
+        return True
+    except Exception as e:
+        st.error(f"Error writing action log to '{worksheet_name}': {e}")
+        return False
+
 
 def write_to_google_sheet(spreadsheet_obj, worksheet_name, df_to_write):
     if spreadsheet_obj is None or df_to_write is None:
@@ -380,6 +406,7 @@ current_calc_date_input = st.sidebar.date_input("Date for Calculations", value=d
 current_calc_date_str = current_calc_date_input.strftime('%Y-%m-%d')
 current_calc_date_ts = pd.Timestamp(current_calc_date_input)
 
+# Initialize session state
 if 'df_analyzed' not in st.session_state: st.session_state.df_analyzed = None
 if 'spreadsheet_obj' not in st.session_state: st.session_state.spreadsheet_obj = None
 if 'resolved_job_indices' not in st.session_state: st.session_state.resolved_job_indices = set()
@@ -387,6 +414,9 @@ if 'snoozed_job_indices' not in st.session_state: st.session_state.snoozed_job_i
 if 'assignments' not in st.session_state: st.session_state.assignments = {} 
 if 'current_page' not in st.session_state: st.session_state.current_page = 0
 if 'selected_next_activities' not in st.session_state: st.session_state.selected_next_activities = []
+if 'selected_salespersons' not in st.session_state: st.session_state.selected_salespersons = []
+if 'selected_supplied_by' not in st.session_state: st.session_state.selected_supplied_by = []
+if 'sort_by_column' not in st.session_state: st.session_state.sort_by_column = "Install - Date"
 
 
 if final_creds:
@@ -396,7 +426,11 @@ if final_creds:
         st.session_state.snoozed_job_indices = set()
         st.session_state.assignments = {}
         st.session_state.current_page = 0 
-        st.session_state.selected_next_activities = [] 
+        # Don't reset filters on load, allow users to keep them
+        # st.session_state.selected_next_activities = [] 
+        # st.session_state.selected_salespersons = []
+        # st.session_state.selected_supplied_by = []
+
 
         with st.spinner("Loading data from Google Sheets..."):
             raw_df, spreadsheet, gc_instance = load_google_sheet(final_creds, SPREADSHEET_ID, DATA_WORKSHEET_NAME)
@@ -428,6 +462,43 @@ if final_creds:
 elif not creds_from_secrets :
      st.sidebar.info("Please upload your Google Service Account JSON key to begin.")
 
+# --- Filters and Sort Options ---
+if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed.empty:
+    df_for_filters = st.session_state.df_analyzed[st.session_state.df_analyzed.get('Flag_Overall_Needs_Attention', False)].copy()
+    
+    filter_cols = st.columns(3)
+    with filter_cols[0]:
+        if 'Next Sched. - Activity' in df_for_filters.columns:
+            unique_next_activities = sorted(df_for_filters['Next Sched. - Activity'].dropna().astype(str).unique())
+            if unique_next_activities:
+                st.session_state.selected_next_activities = st.multiselect(
+                    "Filter by Next Sched. Activity:", options=unique_next_activities,
+                    default=st.session_state.selected_next_activities, key="next_activity_filter"
+                )
+    with filter_cols[1]:
+        if 'Salesperson' in df_for_filters.columns:
+            unique_salespersons = sorted(df_for_filters['Salesperson'].dropna().astype(str).unique())
+            if unique_salespersons:
+                st.session_state.selected_salespersons = st.multiselect(
+                    "Filter by Salesperson:", options=unique_salespersons,
+                    default=st.session_state.selected_salespersons, key="salesperson_filter"
+                )
+    with filter_cols[2]:
+        if 'Supplied By' in df_for_filters.columns:
+            unique_supplied_by = sorted(df_for_filters['Supplied By'].dropna().astype(str).unique())
+            if unique_supplied_by:
+                st.session_state.selected_supplied_by = st.multiselect(
+                    "Filter by Supplied By:", options=unique_supplied_by,
+                    default=st.session_state.selected_supplied_by, key="supplied_by_filter"
+                )
+    
+    st.session_state.sort_by_column = st.selectbox(
+        "Sort jobs by:",
+        options=["Install - Date", "Days Behind"],
+        index=0 if st.session_state.sort_by_column == "Install - Date" else 1,
+        key="sort_by_select"
+    )
+
 
 # --- Display Interactive "todo" List ---
 if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed.empty and 'Flag_Overall_Needs_Attention' in st.session_state.df_analyzed.columns:
@@ -442,26 +513,32 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
         priority_jobs_df_all_original.loc[:, 'Primary Issue'] = [item[0] for item in issues_and_days_series]
         priority_jobs_df_all_original.loc[:, 'Days Behind'] = [item[1] for item in issues_and_days_series]
         
-        if 'Install - Date' in priority_jobs_df_all_original.columns and pd.api.types.is_datetime64_any_dtype(priority_jobs_df_all_original['Install - Date']):
-            priority_jobs_df_all_original.sort_values(by='Install - Date', ascending=True, na_position='last', inplace=True)
-        
-        # --- Filtering by Next Sched. - Activity ---
-        if 'Next Sched. - Activity' in priority_jobs_df_all_original.columns:
-            # Get unique activities from the *original* priority list before session state filtering
-            unique_next_activities = sorted(priority_jobs_df_all_original['Next Sched. - Activity'].dropna().astype(str).unique())
-            if unique_next_activities: 
-                # Use a different key for multiselect to avoid conflict if it was used elsewhere
-                st.session_state.selected_next_activities = st.multiselect(
-                    "Filter by Next Scheduled Activity:",
-                    options=unique_next_activities,
-                    default=st.session_state.get('selected_next_activities', []) # Use .get for safety
-                )
-        
+        # Apply Filters
         priority_jobs_df_filtered = priority_jobs_df_all_original.copy()
         if st.session_state.selected_next_activities and 'Next Sched. - Activity' in priority_jobs_df_filtered.columns:
             priority_jobs_df_filtered = priority_jobs_df_filtered[
                 priority_jobs_df_filtered['Next Sched. - Activity'].isin(st.session_state.selected_next_activities)
             ]
+        if st.session_state.selected_salespersons and 'Salesperson' in priority_jobs_df_filtered.columns:
+            priority_jobs_df_filtered = priority_jobs_df_filtered[
+                priority_jobs_df_filtered['Salesperson'].isin(st.session_state.selected_salespersons)
+            ]
+        if st.session_state.selected_supplied_by and 'Supplied By' in priority_jobs_df_filtered.columns:
+            priority_jobs_df_filtered = priority_jobs_df_filtered[
+                priority_jobs_df_filtered['Supplied By'].isin(st.session_state.selected_supplied_by)
+            ]
+
+        # Apply Sorting
+        sort_ascending = True
+        if st.session_state.sort_by_column == "Install - Date":
+            if 'Install - Date' in priority_jobs_df_filtered.columns and pd.api.types.is_datetime64_any_dtype(priority_jobs_df_filtered['Install - Date']):
+                priority_jobs_df_filtered.sort_values(by='Install - Date', ascending=True, na_position='last', inplace=True)
+        elif st.session_state.sort_by_column == "Days Behind":
+            # Convert 'Days Behind' to numeric for sorting, coercing errors for 'N/A'
+            priority_jobs_df_filtered['Days Behind_numeric'] = pd.to_numeric(priority_jobs_df_filtered['Days Behind'], errors='coerce')
+            priority_jobs_df_filtered.sort_values(by='Days Behind_numeric', ascending=False, na_position='last', inplace=True) # Show most days behind first
+            priority_jobs_df_filtered.drop(columns=['Days Behind_numeric'], inplace=True) # Drop temporary sort column
+        
 
         visible_priority_jobs_df = priority_jobs_df_filtered[
             ~priority_jobs_df_filtered.index.isin(list(st.session_state.resolved_job_indices)) &
@@ -471,13 +548,15 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
         st.header(f"🚩 Jobs Requiring Attention ({len(visible_priority_jobs_df)} currently shown)")
 
         if not visible_priority_jobs_df.empty:
-            total_jobs = len(visible_priority_jobs_df)
-            total_pages = math.ceil(total_jobs / ITEMS_PER_PAGE) if ITEMS_PER_PAGE > 0 else 1
+            total_jobs_to_display = len(visible_priority_jobs_df)
+            total_pages = math.ceil(total_jobs_to_display / ITEMS_PER_PAGE) if ITEMS_PER_PAGE > 0 else 1
             
+            # Reset current_page if it's out of bounds due to filtering
             if st.session_state.current_page >= total_pages and total_pages > 0:
                 st.session_state.current_page = total_pages - 1
             if st.session_state.current_page < 0: 
                  st.session_state.current_page = 0
+
 
             start_idx = st.session_state.current_page * ITEMS_PER_PAGE
             end_idx = start_idx + ITEMS_PER_PAGE
@@ -485,14 +564,13 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
 
             for job_index, row_data in jobs_to_display_on_page.iterrows(): 
                 job_name_display = row_data.get('Job Name', f"Job Index {job_index}")
-                prod_number_display = row_data.get('Production #', '') # Get Production #
+                prod_number_display = row_data.get('Production #', '') 
                 subheader_text = f"{job_name_display}"
                 if prod_number_display and str(prod_number_display).strip() != "":
                     subheader_text += f" (PO: {prod_number_display})"
                 
                 st.subheader(subheader_text)
 
-                # Columns for Issue, Days, Install Date, Next Sched Activity
                 info_cols = st.columns([3,1,2,2])
                 primary_issue_display = row_data.get('Primary Issue', "N/A")
                 days_behind_display = row_data.get('Days Behind', "N/A")
@@ -507,20 +585,35 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
                 info_cols[0].markdown(f"**Issue:** {primary_issue_display}")
                 info_cols[1].markdown(f"**Days:** {days_behind_display}")
                 info_cols[2].markdown(f"**Install:** {install_date_str}")
-                info_cols[3].markdown(f"**Next:** {row_data.get('Next Sched. - Activity', 'N/A')}")
+                info_cols[3].markdown(f"**Next Sched:** {row_data.get('Next Sched. - Activity', 'N/A')}")
                 
-                # Columns for action buttons right after the info
-                action_button_cols = st.columns([1,1,5]) # Adjust ratios as needed
+                action_button_cols = st.columns([1,1,5]) 
                 with action_button_cols[0]:
-                    if st.button("Resolve", key=f"resolve_{job_index}", help="Mark as resolved for this session"):
+                    if st.button("Resolve", key=f"resolve_{job_index}", help="Mark as resolved for this session & log action"):
                         st.session_state.resolved_job_indices.add(job_index)
+                        log_entry = {
+                            "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "Job Name": job_name_display,
+                            "Production #": prod_number_display,
+                            "Action": "Resolved",
+                            "Details": primary_issue_display,
+                            "Assigned To": st.session_state.assignments.get(job_index, "")
+                        }
+                        append_action_log(st.session_state.spreadsheet_obj, ACTION_LOG_WORKSHEET_NAME, log_entry)
                         st.rerun() 
                 with action_button_cols[1]:
-                    if st.button("Snooze", key=f"snooze_{job_index}", help="Hide from view for this session"):
+                    if st.button("Snooze", key=f"snooze_{job_index}", help="Hide from view for this session & log action"):
                         st.session_state.snoozed_job_indices.add(job_index)
+                        log_entry = {
+                            "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "Job Name": job_name_display,
+                            "Production #": prod_number_display,
+                            "Action": "Snoozed",
+                            "Details": primary_issue_display,
+                            "Assigned To": st.session_state.assignments.get(job_index, "")
+                        }
+                        append_action_log(st.session_state.spreadsheet_obj, ACTION_LOG_WORKSHEET_NAME, log_entry)
                         st.rerun() 
-                # The rest of the space in action_button_cols[2] is empty, or you can add more info/actions.
-
 
                 with st.expander("Show Full Details & Notes", expanded=False):
                     st.write("--- Job Details ---")
@@ -549,10 +642,19 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
                             st.text_area(f"", value=str(row_data[note_col]), height=100, key=f"note_{note_col}_{job_index}", disabled=True)
                     
                     current_assignment = st.session_state.assignments.get(job_index, "")
-                    new_assignment = st.text_input("Assign/Notify To (for future use):", value=current_assignment, key=f"assign_{job_index}")
+                    new_assignment = st.text_input("Assign/Notify To:", value=current_assignment, key=f"assign_{job_index}")
                     if new_assignment != current_assignment:
                         st.session_state.assignments[job_index] = new_assignment
-                        st.info(f"Assignment for {job_name_display} updated in session to: {new_assignment}")
+                        log_entry = {
+                            "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "Job Name": job_name_display,
+                            "Production #": prod_number_display,
+                            "Action": "Assigned",
+                            "Details": f"Assigned to: {new_assignment}",
+                            "Assigned To": new_assignment
+                        }
+                        append_action_log(st.session_state.spreadsheet_obj, ACTION_LOG_WORKSHEET_NAME, log_entry)
+                        st.info(f"Assignment for {job_name_display} updated to: {new_assignment} and logged.")
                 st.markdown("---") 
             
             if total_pages > 1:
@@ -570,7 +672,8 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
             if st.button("✍️ Update 'todo' Sheet (with current filtered & paged view)", key="update_todo_sheet_button_interactive"):
                 if st.session_state.spreadsheet_obj:
                     with st.spinner(f"Writing to '{TODO_WORKSHEET_NAME}' sheet..."):
-                        export_cols = ['Primary Issue', 'Days Behind', 'Job Name', 'Production #'] # Added Production #
+                        # Export the currently VISIBLE and FILTERED jobs
+                        export_cols = ['Primary Issue', 'Days Behind', 'Job Name', 'Production #'] 
                         if 'Salesperson' in visible_priority_jobs_df.columns: export_cols.append('Salesperson')
                         for key_col in ['Job Creation', 'Template - Date', 'Install - Date', 'Next Sched. - Activity', 'Next Sched. - Date']: 
                              if key_col in visible_priority_jobs_df.columns:
