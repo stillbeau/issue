@@ -5,6 +5,7 @@ from google.oauth2.service_account import Credentials
 import re
 from io import StringIO
 import json # For parsing JSON from secrets or uploaded file
+import math # For pagination
 
 # --- Page Configuration ---
 st.set_page_config(layout="wide", page_title="Job Issue Detector", page_icon="⚙️")
@@ -17,6 +18,7 @@ st.markdown("Analyzes job data from Google Sheets to identify issues and create 
 SPREADSHEET_ID = "1iToy3C-Bfn06bjuEM_flHNHwr2k1zMCV1wX9MNKzj38" # YOUR GOOGLE SHEET ID
 DATA_WORKSHEET_NAME = "jobs" # Your main data sheet
 TODO_WORKSHEET_NAME = "todo" # Sheet for the priority list
+ITEMS_PER_PAGE = 10 # For pagination
 
 # --- Helper Functions (Authentication, Data Loading, Processing) ---
 
@@ -79,38 +81,32 @@ def preprocess_data(df):
     ]
     common_non_date_placeholders = ['', 'None', 'none', 'NAN', 'NaN', 'nan', 'NA', 'NaT', 'nat', 'Pending', 'TBD', 'No Date', '#N/A', 'NULL', 'null']
 
-    st.write("--- Debugging: Raw Date Values Before Conversion ---") # Debugging
+    # Remove existing debug prints from here, or make them optional
+    # st.write("--- Debugging: Raw Date Values Before Conversion ---") 
     debug_cols_sample = ['Job Creation', 'Template - Date', 'Install - Date', 'Invoice - Date']
 
 
     for col_name in date_columns_to_convert:
         if col_name in df_processed.columns:
-            # Ensure column is string type for string operations
             df_processed[col_name] = df_processed[col_name].astype(str).str.strip()
-            
-            # Replace placeholders
             for placeholder in common_non_date_placeholders:
-                # Use regex=False for exact string replacement, case-sensitive for placeholders like 'None' vs 'none' if needed
-                # Or use str.lower() before replacement if placeholders can have varied casing
                 df_processed[col_name] = df_processed[col_name].replace(placeholder, None, regex=False) 
+            
+            # # Debug: Print a sample of values for key date columns AFTER cleaning, BEFORE to_datetime
+            # if col_name in debug_cols_sample and st.session_state.get("debug_mode", False): # Optional debug mode
+            #     st.write(f"Sample values for '{col_name}' (after cleaning, before pd.to_datetime):")
+            #     unique_vals = df_processed[col_name].dropna().unique()
+            #     st.write(unique_vals[:15]) 
 
-            # Debug: Print a sample of values for key date columns AFTER cleaning, BEFORE to_datetime
-            if col_name in debug_cols_sample:
-                st.write(f"Sample values for '{col_name}' (after cleaning, before pd.to_datetime):")
-                # Show unique non-null values to see what formats we're dealing with
-                unique_vals = df_processed[col_name].dropna().unique()
-                st.write(unique_vals[:15]) # Show up to 15 unique values
-
-            # Attempt to convert to datetime
             df_processed[col_name] = pd.to_datetime(df_processed[col_name], errors='coerce')
             
-            # Debug: Check for NaT proportions after conversion
-            if col_name in debug_cols_sample and df_processed[col_name].isnull().any():
-                 nat_percentage = (df_processed[col_name].isnull().sum() / len(df_processed[col_name])) * 100
-                 if nat_percentage > 0:
-                    st.write(f"**Warning for '{col_name}'**: {nat_percentage:.2f}% values became NaT (Not a Time) after conversion.")
+            # # Debug: Check for NaT proportions after conversion
+            # if col_name in debug_cols_sample and df_processed[col_name].isnull().any() and st.session_state.get("debug_mode", False):
+            #      nat_percentage = (df_processed[col_name].isnull().sum() / len(df_processed[col_name])) * 100
+            #      if nat_percentage > 0:
+            #         st.write(f"**Warning for '{col_name}'**: {nat_percentage:.2f}% values became NaT (Not a Time) after conversion.")
     
-    st.write("--- End Debugging: Raw Date Values ---")
+    # st.write("--- End Debugging: Raw Date Values ---")
     return df_processed
 
 def flag_threshold_delays(df, current_date_str):
@@ -221,9 +217,7 @@ def flag_past_due_activities(df, current_date_str):
             continue
 
         condition_date_past = pd.Series(False, index=df_flagged.index)
-        # Ensure that we only try to compare dates where valid_date_rows is True
-        # and the data in df_flagged.loc[valid_date_rows, date_col] is actually comparable to current_date
-        if valid_date_rows.sum() > 0: # Check if there are any True values in valid_date_rows
+        if valid_date_rows.sum() > 0: 
             condition_date_past.loc[valid_date_rows] = (df_flagged.loc[valid_date_rows, date_col] < current_date)
         
         status_cleaned = df_flagged[status_col].fillna('').astype(str).str.lower().str.strip()
@@ -283,14 +277,13 @@ def determine_primary_issue_and_days(row, current_calc_date_ts):
             issue_description = issue_desc_map.get(flag_col, "Unknown Issue")
             days_behind = "N/A"
             date_col_for_days = date_cols_map.get(flag_col)
-            # Check if the date column exists, is not NaT, and is a Timestamp object
             if date_col_for_days and \
                date_col_for_days in row and \
                pd.notna(row[date_col_for_days]) and \
                isinstance(row[date_col_for_days], pd.Timestamp):
                 try:
                     days_behind = (current_calc_date_ts - row[date_col_for_days]).days
-                except TypeError: # Should not happen if type check is correct
+                except TypeError: 
                     days_behind = "Error Calc Days" 
             return issue_description, days_behind
             
@@ -344,11 +337,14 @@ current_calc_date_input = st.sidebar.date_input("Date for Calculations", value=d
 current_calc_date_str = current_calc_date_input.strftime('%Y-%m-%d')
 current_calc_date_ts = pd.Timestamp(current_calc_date_input)
 
+# Initialize session state
 if 'df_analyzed' not in st.session_state: st.session_state.df_analyzed = None
 if 'spreadsheet_obj' not in st.session_state: st.session_state.spreadsheet_obj = None
 if 'resolved_job_indices' not in st.session_state: st.session_state.resolved_job_indices = set()
 if 'snoozed_job_indices' not in st.session_state: st.session_state.snoozed_job_indices = set()
 if 'assignments' not in st.session_state: st.session_state.assignments = {} 
+if 'current_page' not in st.session_state: st.session_state.current_page = 0
+
 
 if final_creds:
     if st.sidebar.button("🔄 Load and Analyze Job Data", key="load_analyze_button"):
@@ -356,6 +352,7 @@ if final_creds:
         st.session_state.resolved_job_indices = set() 
         st.session_state.snoozed_job_indices = set()
         st.session_state.assignments = {}
+        st.session_state.current_page = 0 # Reset page on new load
 
         with st.spinner("Loading data from Google Sheets..."):
             raw_df, spreadsheet, gc_instance = load_google_sheet(final_creds, SPREADSHEET_ID, DATA_WORKSHEET_NAME)
@@ -364,8 +361,8 @@ if final_creds:
         if raw_df is not None and not raw_df.empty:
             st.success(f"Successfully loaded {len(raw_df)} jobs from '{DATA_WORKSHEET_NAME}'.")
             with st.spinner("Processing and flagging data..."):
-                df_processed = preprocess_data(raw_df) # This is where the debug prints will occur
-                if df_processed.empty and not raw_df.empty: # Check if preprocess_data returned empty
+                df_processed = preprocess_data(raw_df) 
+                if df_processed.empty and not raw_df.empty: 
                     st.warning("Preprocessing returned an empty DataFrame. Check debug output for date parsing issues.")
                 df_threshold_flagged = flag_threshold_delays(df_processed, current_calc_date_str)
                 df_keyword_flagged = flag_keyword_issues(df_threshold_flagged)
@@ -378,11 +375,11 @@ if final_creds:
                 st.success("Data analysis complete!")
             elif st.session_state.df_analyzed is not None and st.session_state.df_analyzed.empty:
                  st.info("Data analysis complete, but no jobs matched criteria or the source data led to an empty result after processing.")
-            else: # df_analyzed is None
+            else: 
                 st.error("Data analysis failed after loading. df_analyzed is None.")
         elif raw_df is not None and raw_df.empty:
              st.info(f"Source data sheet '{DATA_WORKSHEET_NAME}' is empty. No analysis performed.")
-        else: # raw_df is None
+        else: 
             st.error("Failed to load data from Google Sheets. Check credentials and sheet sharing.")
 elif not creds_from_secrets :
      st.sidebar.info("Please upload your Google Service Account JSON key to begin.")
@@ -391,9 +388,14 @@ elif not creds_from_secrets :
 # --- Display Interactive "todo" List ---
 if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed.empty and 'Flag_Overall_Needs_Attention' in st.session_state.df_analyzed.columns:
     df_display_full = st.session_state.df_analyzed.copy()
+    # Ensure DataFrame has a unique index if it doesn't already
+    if not df_display_full.index.is_unique:
+        df_display_full = df_display_full.reset_index(drop=True)
+
     priority_jobs_df_all = df_display_full[df_display_full['Flag_Overall_Needs_Attention'] == True].copy()
 
     if not priority_jobs_df_all.empty:
+        # Apply determine_primary_issue_and_days only if priority_jobs_df_all is not empty
         issues_and_days_series = priority_jobs_df_all.apply(lambda row: determine_primary_issue_and_days(row, current_calc_date_ts), axis=1)
         priority_jobs_df_all.loc[:, 'Primary Issue'] = [item[0] for item in issues_and_days_series]
         priority_jobs_df_all.loc[:, 'Days Behind'] = [item[1] for item in issues_and_days_series]
@@ -409,7 +411,22 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
         st.header(f"🚩 Jobs Requiring Attention ({len(visible_priority_jobs_df)} currently shown)")
 
         if not visible_priority_jobs_df.empty:
-            for job_index, row_data in visible_priority_jobs_df.iterrows(): 
+            # --- Pagination Logic ---
+            total_jobs = len(visible_priority_jobs_df)
+            total_pages = math.ceil(total_jobs / ITEMS_PER_PAGE)
+            
+            # Ensure current_page is within valid bounds
+            if st.session_state.current_page >= total_pages and total_pages > 0:
+                st.session_state.current_page = total_pages - 1
+            if st.session_state.current_page < 0:
+                 st.session_state.current_page = 0
+
+
+            start_idx = st.session_state.current_page * ITEMS_PER_PAGE
+            end_idx = start_idx + ITEMS_PER_PAGE
+            jobs_to_display_on_page = visible_priority_jobs_df.iloc[start_idx:end_idx]
+
+            for job_index, row_data in jobs_to_display_on_page.iterrows(): 
                 job_name_display = row_data.get('Job Name', f"Job Index {job_index}")
                 primary_issue_display = row_data.get('Primary Issue', "N/A")
                 days_behind_display = row_data.get('Days Behind', "N/A")
@@ -448,10 +465,10 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
                     action_cols = st.columns(3)
                     if action_cols[0].button("Mark Resolved (Session)", key=f"resolve_{job_index}"):
                         st.session_state.resolved_job_indices.add(job_index)
-                        st.experimental_rerun() 
+                        st.rerun() 
                     if action_cols[1].button("Snooze (Session)", key=f"snooze_{job_index}"):
                         st.session_state.snoozed_job_indices.add(job_index)
-                        st.experimental_rerun()
+                        st.rerun() 
                     
                     current_assignment = st.session_state.assignments.get(job_index, "")
                     new_assignment = st.text_input("Assign/Notify To:", value=current_assignment, key=f"assign_{job_index}")
@@ -459,6 +476,17 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
                         st.session_state.assignments[job_index] = new_assignment
                         st.info(f"Assignment for {job_name_display} updated in session to: {new_assignment}")
                 st.markdown("---") 
+            
+            # --- Pagination Controls ---
+            if total_pages > 1:
+                page_cols = st.columns(3)
+                if page_cols[0].button("⬅️ Previous Page", disabled=(st.session_state.current_page == 0)):
+                    st.session_state.current_page -= 1
+                    st.rerun()
+                page_cols[1].write(f"Page {st.session_state.current_page + 1} of {total_pages}")
+                if page_cols[2].button("Next Page ➡️", disabled=(st.session_state.current_page >= total_pages - 1)):
+                    st.session_state.current_page += 1
+                    st.rerun()
 
             if st.button("✍️ Update 'todo' Sheet (with current view)", key="update_todo_sheet_button_interactive"):
                 if st.session_state.spreadsheet_obj:
@@ -477,10 +505,10 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
                         write_to_google_sheet(st.session_state.spreadsheet_obj, TODO_WORKSHEET_NAME, export_df_final)
                 else:
                     st.error("Spreadsheet object not available. Cannot write to Google Sheet. Try reloading data.")
-        else:
+        else: # If visible_priority_jobs_df is empty
             if not priority_jobs_df_all.empty and visible_priority_jobs_df.empty :
                  st.info("All priority jobs have been locally resolved or snoozed for this session.")
-            else:
+            else: # If priority_jobs_df_all was also empty
                 st.info("No jobs currently require attention based on the defined criteria.")
             
             if st.session_state.spreadsheet_obj and st.button("Clear 'todo' Sheet (as no jobs to show/list)", key="clear_todo_button_interactive"):
@@ -490,7 +518,7 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
         st.warning("Overall attention flag not found. Analysis might be incomplete.")
 
     with st.expander("Show Detailed Flag Counts (from full analyzed data)"):
-        df_full_for_counts = st.session_state.df_analyzed # Use the full analyzed df for accurate total counts
+        df_full_for_counts = st.session_state.df_analyzed 
         st.subheader("Threshold-Based Delays")
         if 'Flag_Awaiting_RTF' in df_full_for_counts.columns: st.metric("Awaiting RTF (>2 days)", df_full_for_counts['Flag_Awaiting_RTF'].sum())
         if 'Flag_Awaiting_Template' in df_full_for_counts.columns: st.metric("Awaiting Template (>2 days)", df_full_for_counts['Flag_Awaiting_Template'].sum())
@@ -510,7 +538,7 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
             ('Saw', 'Flag_PastDue_Saw'), ('Polish/Fab Completion', 'Flag_PastDue_Polish_Fab_Completion')
         ]
         for friendly_name, flag_col in past_due_activities_display:
-            if flag_col in df_full_for_counts.columns: # Check against df_full_for_counts.columns
+            if flag_col in df_full_for_counts.columns: 
                 st.write(f"*Past Due '{friendly_name}'*: {df_full_for_counts[flag_col].sum()} jobs")
 
     if st.checkbox("Show Full Analyzed Data Table (with all flags)", key="show_full_data_interactive"):
