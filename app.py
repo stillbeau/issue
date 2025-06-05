@@ -22,6 +22,11 @@ TODO_WORKSHEET_NAME = "todo" # Sheet for the priority list
 ACTION_LOG_WORKSHEET_NAME = "notes" # New sheet for logging actions
 ITEMS_PER_PAGE = 10 # For pagination
 
+# Define completion and cancellation terms globally for helper functions
+COMPLETION_TERMS = ['complete', 'completed', 'done', 'installed', 'invoiced', 'paid', 'sent', 'received', 'closed', 'fabricated']
+CANCELLATION_TERMS = ['cancelled', 'canceled', 'void', 'voided']
+
+
 # --- Helper Functions (Authentication, Data Loading, Processing) ---
 
 def get_google_creds():
@@ -54,7 +59,8 @@ def load_google_sheet(creds_dict, spreadsheet_id, worksheet_name):
             return pd.DataFrame(), spreadsheet, gc 
         df = pd.DataFrame(data)
         critical_cols = ['Next Sched. - Activity', 'Next Sched. - Date', 'Next Sched. - Status', 
-                         'Install - Date', 'Supplied By', 'Production #', 'Salesperson'] 
+                         'Install - Date', 'Supplied By', 'Production #', 'Salesperson',
+                         'Template - Status', 'Ready to Fab - Status', 'Cutlist - Status'] # Ensure status cols exist
         for col in critical_cols:
             if col not in df.columns:
                 df[col] = "" 
@@ -109,33 +115,52 @@ def flag_threshold_delays(df, current_date_str):
     df_flagged = df.copy()
     current_date = pd.Timestamp(current_date_str)
 
+    # Rule 1: Template Done, Awaiting RTF
     df_flagged['Flag_Awaiting_RTF'] = False
-    if 'Template - Date' in df_flagged.columns and 'Ready to Fab - Date' in df_flagged.columns:
-        condition_rtf_pending = df_flagged['Template - Date'].notna() & \
+    if 'Template - Date' in df_flagged.columns and 'Ready to Fab - Date' in df_flagged.columns and 'Ready to Fab - Status' in df_flagged.columns:
+        rtf_status_cleaned = df_flagged['Ready to Fab - Status'].fillna('').astype(str).str.lower().str.strip()
+        rtf_status_not_done = ~rtf_status_cleaned.isin(COMPLETION_TERMS + CANCELLATION_TERMS)
+        
+        condition_rtf_pending = (df_flagged['Template - Date'].notna() & \
                                 df_flagged['Ready to Fab - Date'].isna() & \
-                                pd.api.types.is_datetime64_any_dtype(df_flagged['Template - Date'])
+                                pd.api.types.is_datetime64_any_dtype(df_flagged['Template - Date']) & \
+                                rtf_status_not_done)
         if condition_rtf_pending.any(): 
             df_flagged.loc[condition_rtf_pending, 'Flag_Awaiting_RTF'] = \
                 (current_date - df_flagged.loc[condition_rtf_pending, 'Template - Date']).dt.days > 2
 
+    # Rule 2: Job Created, Awaiting Template
     df_flagged['Flag_Awaiting_Template'] = False
-    if 'Job Creation' in df_flagged.columns and 'Template - Date' in df_flagged.columns:
-        condition_template_pending = df_flagged['Job Creation'].notna() & \
+    if 'Job Creation' in df_flagged.columns and 'Template - Date' in df_flagged.columns and 'Template - Status' in df_flagged.columns:
+        template_status_cleaned = df_flagged['Template - Status'].fillna('').astype(str).str.lower().str.strip()
+        template_status_not_done = ~template_status_cleaned.isin(COMPLETION_TERMS + CANCELLATION_TERMS)
+
+        condition_template_pending = (df_flagged['Job Creation'].notna() & \
                                      df_flagged['Template - Date'].isna() & \
-                                     pd.api.types.is_datetime64_any_dtype(df_flagged['Job Creation'])
+                                     pd.api.types.is_datetime64_any_dtype(df_flagged['Job Creation']) & \
+                                     template_status_not_done)
         if condition_template_pending.any():
             df_flagged.loc[condition_template_pending, 'Flag_Awaiting_Template'] = \
                 (current_date - df_flagged.loc[condition_template_pending, 'Job Creation']).dt.days > 2
     
+    # Rule 3: Ready to Fab, Awaiting Cutlist
     df_flagged['Flag_Awaiting_Cutlist'] = False
     if 'Ready to Fab - Date' in df_flagged.columns and \
        'Cutlist - Date' in df_flagged.columns and \
-       'Supplied By' in df_flagged.columns: 
+       'Supplied By' in df_flagged.columns and \
+       'Cutlist - Status' in df_flagged.columns: 
+        
         is_not_laminate = ~df_flagged['Supplied By'].astype(str).str.strip().eq('ABB PF - 12')
+        
+        cutlist_status_cleaned = df_flagged['Cutlist - Status'].fillna('').astype(str).str.lower().str.strip()
+        cutlist_status_not_done = ~cutlist_status_cleaned.isin(COMPLETION_TERMS + CANCELLATION_TERMS)
+
         rtf_date_exists = df_flagged['Ready to Fab - Date'].notna()
         cutlist_date_missing = df_flagged['Cutlist - Date'].isna()
         is_rtf_date_datetime = pd.api.types.is_datetime64_any_dtype(df_flagged['Ready to Fab - Date'])
-        valid_rows_for_cutlist_flag = rtf_date_exists & cutlist_date_missing & is_rtf_date_datetime & is_not_laminate
+        
+        valid_rows_for_cutlist_flag = rtf_date_exists & cutlist_date_missing & is_rtf_date_datetime & is_not_laminate & cutlist_status_not_done
+        
         if valid_rows_for_cutlist_flag.any():
             df_flagged.loc[valid_rows_for_cutlist_flag, 'Flag_Awaiting_Cutlist'] = \
                 (current_date - df_flagged.loc[valid_rows_for_cutlist_flag, 'Ready to Fab - Date']).dt.days > 3
@@ -191,9 +216,7 @@ def flag_past_due_activities(df, current_date_str):
     if df is None or df.empty: return pd.DataFrame()
     df_flagged = df.copy()
     current_date = pd.Timestamp(current_date_str)
-    completion_terms = ['complete', 'completed', 'done', 'installed', 'invoiced', 'paid', 'sent', 'received', 'closed', 'fabricated']
-    cancellation_terms = ['cancelled', 'canceled', 'void', 'voided']
-    
+        
     activities_to_check_past_due = [
         ('Next_Sched_Activity', 'Next Sched. - Date', 'Next Sched. - Status'),
         ('Template', 'Template - Date', 'Template - Status'),
@@ -233,8 +256,8 @@ def flag_past_due_activities(df, current_date_str):
             condition_date_past.loc[valid_date_rows] = (df_flagged.loc[valid_date_rows, date_col] < current_date)
         
         status_cleaned = df_flagged[status_col].fillna('').astype(str).str.lower().str.strip()
-        condition_not_complete = ~status_cleaned.isin(completion_terms)
-        condition_not_cancelled = ~status_cleaned.isin(cancellation_terms)
+        condition_not_complete = ~status_cleaned.isin(COMPLETION_TERMS)
+        condition_not_cancelled = ~status_cleaned.isin(CANCELLATION_TERMS)
         final_condition = condition_date_past & condition_not_complete & condition_not_cancelled
         
         df_flagged.loc[final_condition, new_flag_col] = True
@@ -282,7 +305,7 @@ def determine_primary_issue_and_days(row, current_calc_date_ts):
         'Flag_Awaiting_Cutlist': "Delay: Awaiting Cutlist",
         'Flag_Awaiting_RTF': "Delay: Awaiting RTF",
         'Flag_Awaiting_Template': "Delay: Awaiting Template",
-        'Flag_Keyword_In_Next_Sched_Notes': "Keyword: Next Sched. Notes", 
+        'Flag_Keyword_In_Next_Sched_Notes': "Keyword: Next Sched. Notes", # Uses cleaned flag name
         'Flag_Keyword_In_Install_Notes': "Keyword: Install Notes",
         'Flag_Keyword_In_Template_Notes': "Keyword: Template Notes",
         'Flag_Keyword_In_Job_Issues': "Keyword: Job Issues", 
@@ -338,21 +361,17 @@ def append_action_log(spreadsheet_obj, worksheet_name, log_entry_dict):
             log_sheet = spreadsheet_obj.worksheet(worksheet_name)
         except gspread.exceptions.WorksheetNotFound:
             st.info(f"Action log worksheet '{worksheet_name}' not found. Creating it...")
-            # Define headers for the new action log sheet
             action_log_headers = ["Timestamp", "Job Name", "Production #", "Action", "Details", "Assigned To"]
             log_sheet = spreadsheet_obj.add_worksheet(title=worksheet_name, rows=100, cols=len(action_log_headers) + 5)
-            log_sheet.append_row(action_log_headers) # Add header row
+            log_sheet.append_row(action_log_headers) 
             st.info(f"Worksheet '{worksheet_name}' created with headers.")
 
-        # Prepare row data, ensuring all header columns are present even if value is empty
-        action_log_headers = log_sheet.row_values(1) # Get headers to ensure order
-        if not action_log_headers : # If sheet was just created and append_row hasn't flushed
+        action_log_headers = log_sheet.row_values(1) 
+        if not action_log_headers : 
              action_log_headers = ["Timestamp", "Job Name", "Production #", "Action", "Details", "Assigned To"]
-
 
         row_to_append = [log_entry_dict.get(header, "") for header in action_log_headers]
         log_sheet.append_row(row_to_append, value_input_option='USER_ENTERED')
-        # st.toast(f"Action logged to '{worksheet_name}'.") # Use toast for less intrusive message
         return True
     except Exception as e:
         st.error(f"Error writing action log to '{worksheet_name}': {e}")
@@ -406,7 +425,6 @@ current_calc_date_input = st.sidebar.date_input("Date for Calculations", value=d
 current_calc_date_str = current_calc_date_input.strftime('%Y-%m-%d')
 current_calc_date_ts = pd.Timestamp(current_calc_date_input)
 
-# Initialize session state
 if 'df_analyzed' not in st.session_state: st.session_state.df_analyzed = None
 if 'spreadsheet_obj' not in st.session_state: st.session_state.spreadsheet_obj = None
 if 'resolved_job_indices' not in st.session_state: st.session_state.resolved_job_indices = set()
@@ -426,11 +444,6 @@ if final_creds:
         st.session_state.snoozed_job_indices = set()
         st.session_state.assignments = {}
         st.session_state.current_page = 0 
-        # Don't reset filters on load, allow users to keep them
-        # st.session_state.selected_next_activities = [] 
-        # st.session_state.selected_salespersons = []
-        # st.session_state.selected_supplied_by = []
-
 
         with st.spinner("Loading data from Google Sheets..."):
             raw_df, spreadsheet, gc_instance = load_google_sheet(final_creds, SPREADSHEET_ID, DATA_WORKSHEET_NAME)
@@ -464,40 +477,47 @@ elif not creds_from_secrets :
 
 # --- Filters and Sort Options ---
 if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed.empty:
-    df_for_filters = st.session_state.df_analyzed[st.session_state.df_analyzed.get('Flag_Overall_Needs_Attention', False)].copy()
-    
-    filter_cols = st.columns(3)
-    with filter_cols[0]:
-        if 'Next Sched. - Activity' in df_for_filters.columns:
-            unique_next_activities = sorted(df_for_filters['Next Sched. - Activity'].dropna().astype(str).unique())
-            if unique_next_activities:
-                st.session_state.selected_next_activities = st.multiselect(
-                    "Filter by Next Sched. Activity:", options=unique_next_activities,
-                    default=st.session_state.selected_next_activities, key="next_activity_filter"
-                )
-    with filter_cols[1]:
-        if 'Salesperson' in df_for_filters.columns:
-            unique_salespersons = sorted(df_for_filters['Salesperson'].dropna().astype(str).unique())
-            if unique_salespersons:
-                st.session_state.selected_salespersons = st.multiselect(
-                    "Filter by Salesperson:", options=unique_salespersons,
-                    default=st.session_state.selected_salespersons, key="salesperson_filter"
-                )
-    with filter_cols[2]:
-        if 'Supplied By' in df_for_filters.columns:
-            unique_supplied_by = sorted(df_for_filters['Supplied By'].dropna().astype(str).unique())
-            if unique_supplied_by:
-                st.session_state.selected_supplied_by = st.multiselect(
-                    "Filter by Supplied By:", options=unique_supplied_by,
-                    default=st.session_state.selected_supplied_by, key="supplied_by_filter"
-                )
-    
-    st.session_state.sort_by_column = st.selectbox(
-        "Sort jobs by:",
-        options=["Install - Date", "Days Behind"],
-        index=0 if st.session_state.sort_by_column == "Install - Date" else 1,
-        key="sort_by_select"
-    )
+    # Ensure 'Flag_Overall_Needs_Attention' exists before trying to filter on it
+    if 'Flag_Overall_Needs_Attention' in st.session_state.df_analyzed.columns:
+        df_for_filters = st.session_state.df_analyzed[st.session_state.df_analyzed['Flag_Overall_Needs_Attention']].copy()
+    else:
+        df_for_filters = pd.DataFrame() # Empty DataFrame if the flag column is missing
+
+    if not df_for_filters.empty:
+        filter_cols = st.columns(3)
+        with filter_cols[0]:
+            if 'Next Sched. - Activity' in df_for_filters.columns:
+                unique_next_activities = sorted(df_for_filters['Next Sched. - Activity'].dropna().astype(str).unique())
+                if unique_next_activities:
+                    st.session_state.selected_next_activities = st.multiselect(
+                        "Filter by Next Sched. Activity:", options=unique_next_activities,
+                        default=st.session_state.selected_next_activities, key="next_activity_filter"
+                    )
+        with filter_cols[1]:
+            if 'Salesperson' in df_for_filters.columns:
+                unique_salespersons = sorted(df_for_filters['Salesperson'].dropna().astype(str).unique())
+                if unique_salespersons:
+                    st.session_state.selected_salespersons = st.multiselect(
+                        "Filter by Salesperson:", options=unique_salespersons,
+                        default=st.session_state.selected_salespersons, key="salesperson_filter"
+                    )
+        with filter_cols[2]:
+            if 'Supplied By' in df_for_filters.columns:
+                unique_supplied_by = sorted(df_for_filters['Supplied By'].dropna().astype(str).unique())
+                if unique_supplied_by:
+                    st.session_state.selected_supplied_by = st.multiselect(
+                        "Filter by Supplied By:", options=unique_supplied_by,
+                        default=st.session_state.selected_supplied_by, key="supplied_by_filter"
+                    )
+        
+        st.session_state.sort_by_column = st.selectbox(
+            "Sort jobs by:",
+            options=["Install - Date", "Days Behind"],
+            index=0 if st.session_state.sort_by_column == "Install - Date" else 1,
+            key="sort_by_select"
+        )
+    else:
+        st.info("No jobs currently require attention to apply filters.")
 
 
 # --- Display Interactive "todo" List ---
@@ -534,10 +554,9 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
             if 'Install - Date' in priority_jobs_df_filtered.columns and pd.api.types.is_datetime64_any_dtype(priority_jobs_df_filtered['Install - Date']):
                 priority_jobs_df_filtered.sort_values(by='Install - Date', ascending=True, na_position='last', inplace=True)
         elif st.session_state.sort_by_column == "Days Behind":
-            # Convert 'Days Behind' to numeric for sorting, coercing errors for 'N/A'
             priority_jobs_df_filtered['Days Behind_numeric'] = pd.to_numeric(priority_jobs_df_filtered['Days Behind'], errors='coerce')
-            priority_jobs_df_filtered.sort_values(by='Days Behind_numeric', ascending=False, na_position='last', inplace=True) # Show most days behind first
-            priority_jobs_df_filtered.drop(columns=['Days Behind_numeric'], inplace=True) # Drop temporary sort column
+            priority_jobs_df_filtered.sort_values(by='Days Behind_numeric', ascending=False, na_position='last', inplace=True) 
+            priority_jobs_df_filtered.drop(columns=['Days Behind_numeric'], inplace=True) 
         
 
         visible_priority_jobs_df = priority_jobs_df_filtered[
@@ -551,7 +570,6 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
             total_jobs_to_display = len(visible_priority_jobs_df)
             total_pages = math.ceil(total_jobs_to_display / ITEMS_PER_PAGE) if ITEMS_PER_PAGE > 0 else 1
             
-            # Reset current_page if it's out of bounds due to filtering
             if st.session_state.current_page >= total_pages and total_pages > 0:
                 st.session_state.current_page = total_pages - 1
             if st.session_state.current_page < 0: 
