@@ -68,45 +68,38 @@ def preprocess_data(df):
     if df is None or df.empty:
         return pd.DataFrame()
     df_processed = df.copy()
+    # Updated list of date columns based on user's new sheet structure
     date_columns_to_convert = [
-        'Job Creation', 'Template - Date', 'Send Quote - Date', 'Photo Layout - Date',
+        'Next Sched. - Date', 'Job Creation', 'Template - Date', 'Photo Layout - Date',
         'Ready to Fab - Date', 'Rework - Date', 'Cutlist - Date', 'Program - Date',
-        'Material Pull - Date', 'Saw - Date', 'CNC - Date', 'Glue-Up Fabrication - Date',
+        'Material Pull - Date', 'Saw - Date', 'CNC - Date', 
         'Polish/Fab Completion - Date', 'Hone Splash - Date', 'QC - Date',
-        'Packaging - Date', 'Ship - Date', 'Transfer - Date', 'Product Rcvd - Date',
-        'Repair - Date', 'Build Up - Date', 'Tearout - Date', 'Delivery - Date',
-        'Install - Date', 'Lift Help - Date', 'Pick Up - Date', 'Courier - Date',
-        'Tile Order - Date', 'Tile Install - Date', 'Service - Date', 'Callback - Date',
-        'Invoice - Date', 'Collect Final - Date', 'Follow Up Call - Date'
+        'Ship - Date', 'Product Rcvd - Date', 'Repair - Date', # First instance of Repair - Date
+        'Delivery - Date', # First instance
+        'Install - Date', # First instance
+        'Pick Up - Date', # First instance
+        'Service - Date', # First instance
+        'Callback - Date', # First instance
+        'Invoice - Date', # First instance
+        'Build Up - Date', 'Tearout - Date', 'Lift Help - Date', 'Courier - Date',
+        'Tile Order - Date', 'Tile Install - Date',
+        'Collect Final - Date', 'Follow Up Call - Date'
     ]
+    # Remove duplicates just in case they were listed multiple times by user, keep first occurrence
+    unique_date_columns = []
+    for col in date_columns_to_convert:
+        if col not in unique_date_columns:
+            unique_date_columns.append(col)
+    date_columns_to_convert = unique_date_columns
+
     common_non_date_placeholders = ['', 'None', 'none', 'NAN', 'NaN', 'nan', 'NA', 'NaT', 'nat', 'Pending', 'TBD', 'No Date', '#N/A', 'NULL', 'null']
-
-    # Remove existing debug prints from here, or make them optional
-    # st.write("--- Debugging: Raw Date Values Before Conversion ---") 
-    debug_cols_sample = ['Job Creation', 'Template - Date', 'Install - Date', 'Invoice - Date']
-
 
     for col_name in date_columns_to_convert:
         if col_name in df_processed.columns:
             df_processed[col_name] = df_processed[col_name].astype(str).str.strip()
             for placeholder in common_non_date_placeholders:
                 df_processed[col_name] = df_processed[col_name].replace(placeholder, None, regex=False) 
-            
-            # # Debug: Print a sample of values for key date columns AFTER cleaning, BEFORE to_datetime
-            # if col_name in debug_cols_sample and st.session_state.get("debug_mode", False): # Optional debug mode
-            #     st.write(f"Sample values for '{col_name}' (after cleaning, before pd.to_datetime):")
-            #     unique_vals = df_processed[col_name].dropna().unique()
-            #     st.write(unique_vals[:15]) 
-
             df_processed[col_name] = pd.to_datetime(df_processed[col_name], errors='coerce')
-            
-            # # Debug: Check for NaT proportions after conversion
-            # if col_name in debug_cols_sample and df_processed[col_name].isnull().any() and st.session_state.get("debug_mode", False):
-            #      nat_percentage = (df_processed[col_name].isnull().sum() / len(df_processed[col_name])) * 100
-            #      if nat_percentage > 0:
-            #         st.write(f"**Warning for '{col_name}'**: {nat_percentage:.2f}% values became NaT (Not a Time) after conversion.")
-    
-    # st.write("--- End Debugging: Raw Date Values ---")
     return df_processed
 
 def flag_threshold_delays(df, current_date_str):
@@ -135,7 +128,7 @@ def flag_threshold_delays(df, current_date_str):
     df_flagged['Flag_Awaiting_Cutlist'] = False
     if 'Ready to Fab - Date' in df_flagged.columns and \
        'Cutlist - Date' in df_flagged.columns and \
-       'Supplied By' in df_flagged.columns:
+       'Supplied By' in df_flagged.columns: # Check if 'Supplied By' still exists
         is_not_laminate = ~df_flagged['Supplied By'].astype(str).str.strip().eq('ABB PF - 12')
         rtf_date_exists = df_flagged['Ready to Fab - Date'].notna()
         cutlist_date_missing = df_flagged['Cutlist - Date'].isna()
@@ -172,13 +165,27 @@ def flag_keyword_issues(df):
         if pd.isna(note_text) or not isinstance(note_text, str): return False
         return bool(re.search(pattern, note_text, re.IGNORECASE))
 
-    notes_columns_to_scan = ['Template - Notes', 'Install - Notes', 'Saw - Notes', 'Job Issues', 'QC - Notes']
+    # Updated list of notes columns to scan
+    notes_columns_to_scan = ['Next Sched. - Notes', 'Template - Notes', 'Install - Notes', 
+                             'Saw - Notes', 'Job Issues', 'QC - Notes', 'Ready to Fab - Notes',
+                             'Rework - Notes', 'Cutlist - Notes', 'Program - Notes', 
+                             'Material Pull - Notes', 'CNC - Notes', 'Polish/Fab Completion - Notes',
+                             'Hone Splash - Notes', 'Ship - Notes', 'Product Rcvd - Notes',
+                             'Repair - Notes', 'Delivery - Notes', 'Pick Up - Notes', 
+                             'Service - Notes', 'Callback - Notes', 'Invoice - Notes', 
+                             'Build Up - Notes', 'Tearout - Notes', 'Lift Help - Notes',
+                             'Courier - Notes', 'Tile Order - Notes', 'Tile Install - Notes',
+                             'Collect Final - Notes', 'Follow Up Call - Notes', 'Address Notes'
+                             ]
+    # Ensure only existing columns are processed
+    actual_notes_cols_to_scan = [col for col in notes_columns_to_scan if col in df_flagged.columns]
+
     keyword_flag_columns_generated = []
-    for col_name in notes_columns_to_scan:
-        if col_name in df_flagged.columns:
-            new_flag_col_name = f'Flag_Keyword_In_{col_name.replace(" - ", "_").replace(" ", "_")}'
-            df_flagged[new_flag_col_name] = df_flagged[col_name].apply(lambda note: find_keywords_in_note(note, keyword_pattern))
-            keyword_flag_columns_generated.append(new_flag_col_name)
+    for col_name in actual_notes_cols_to_scan:
+        # No need to check 'if col_name in df_flagged.columns:' again, already filtered
+        new_flag_col_name = f'Flag_Keyword_In_{col_name.replace(" - ", "_").replace(" ", "_").replace(".","_")}' # Handle '.' in col name for flag
+        df_flagged[new_flag_col_name] = df_flagged[col_name].apply(lambda note: find_keywords_in_note(note, keyword_pattern))
+        keyword_flag_columns_generated.append(new_flag_col_name)
             
     df_flagged['Flag_Any_Keyword_Issue'] = df_flagged[keyword_flag_columns_generated].any(axis=1) if keyword_flag_columns_generated else False
     return df_flagged
@@ -189,28 +196,43 @@ def flag_past_due_activities(df, current_date_str):
     current_date = pd.Timestamp(current_date_str)
     completion_terms = ['complete', 'completed', 'done', 'installed', 'invoiced', 'paid', 'sent', 'received', 'closed', 'fabricated']
     cancellation_terms = ['cancelled', 'canceled', 'void', 'voided']
+    
+    # Updated list of activities to check, ensure columns exist
     activities_to_check_past_due = [
+        ('Next_Sched_Activity', 'Next Sched. - Date', 'Next Sched. - Status'), # New
         ('Template', 'Template - Date', 'Template - Status'),
-        ('RTF', 'Ready_to_Fab', 'Ready to Fab - Date', 'Ready to Fab - Status'),
+        ('RTF', 'Ready_to_Fab', 'Ready to Fab - Date', 'Ready to Fab - Status'), # Special name for flag consistency
         ('Install', 'Install - Date', 'Install - Status'),
         ('Invoice', 'Invoice - Date', 'Invoice - Status'),
         ('Collect_Final', 'Collect Final - Date', 'Collect Final - Status'),
         ('Saw', 'Saw - Date', 'Saw - Status'),
-        ('Polish_Fab_Completion', 'Polish/Fab Completion - Date', 'Polish/Fab Completion - Status')
+        ('Polish_Fab_Completion', 'Polish/Fab Completion - Date', 'Polish/Fab Completion - Status'),
+        # Add more activities here if they have distinct Date/Status columns and need this check
+        ('Cutlist', 'Cutlist - Date', 'Cutlist - Status'),
+        ('Program', 'Program - Date', 'Program - Status'),
+        ('QC', 'QC - Date', 'QC - Status'),
+        ('Delivery', 'Delivery - Date', 'Delivery - Status'),
+        ('Service', 'Service - Date', 'Service - Status'),
+
     ]
     past_due_flag_columns_generated = []
 
     for activity_tuple in activities_to_check_past_due:
-        if len(activity_tuple) == 4 and activity_tuple[0] == 'RTF':
-             activity_name_for_flag, date_col, status_col = activity_tuple[1], activity_tuple[2], activity_tuple[3]
-        elif len(activity_tuple) == 3:
-             activity_name_for_flag, date_col, status_col = activity_tuple[0], activity_tuple[1], activity_tuple[2]
-        else: continue
+        # Unpack tuple, handling the RTF special case if needed (though simplified here)
+        activity_name_for_flag, date_col, status_col = activity_tuple[0], activity_tuple[1], activity_tuple[2]
+        if activity_tuple[0] == 'RTF': # Ensure the flag name is consistent for RTF
+            activity_name_for_flag = activity_tuple[1]
+
 
         new_flag_col = f'Flag_PastDue_{activity_name_for_flag}'
-        df_flagged[new_flag_col] = False
-        if not (date_col in df_flagged.columns and status_col in df_flagged.columns and pd.api.types.is_datetime64_any_dtype(df_flagged[date_col])):
-            continue
+        df_flagged[new_flag_col] = False # Initialize
+
+        # Check if necessary columns exist and date column is actually datetime
+        if not (date_col in df_flagged.columns and \
+                status_col in df_flagged.columns and \
+                pd.api.types.is_datetime64_any_dtype(df_flagged[date_col])):
+            # st.warning(f"Skipping past due check for {activity_name_for_flag}: Missing columns or '{date_col}' not datetime.")
+            continue 
         
         valid_date_rows = df_flagged[date_col].notna()
         if not valid_date_rows.any(): 
@@ -235,48 +257,71 @@ def determine_primary_issue_and_days(row, current_calc_date_ts):
     if not isinstance(current_calc_date_ts, pd.Timestamp):
         current_calc_date_ts = pd.Timestamp(current_calc_date_ts)
 
+    # --- Date columns mapping for "Days Behind" calculation ---
+    # (Ensure these column names match your DataFrame EXACTLY after loading)
     date_cols_map = {
+        'Flag_PastDue_Next_Sched_Activity': 'Next Sched. - Date', # New
         'Flag_PastDue_Install': 'Install - Date',
         'Flag_PastDue_Polish_Fab_Completion': 'Polish/Fab Completion - Date',
         'Flag_PastDue_Saw': 'Saw - Date',
-        'Flag_PastDue_Ready_to_Fab': 'Ready to Fab - Date',
+        'Flag_PastDue_Ready_to_Fab': 'Ready to Fab - Date', # Matches flag_past_due_activities
         'Flag_PastDue_Invoice': 'Invoice - Date',
         'Flag_PastDue_Collect_Final': 'Collect Final - Date',
         'Flag_PastDue_Template': 'Template - Date',
+        'Flag_PastDue_Cutlist': 'Cutlist - Date', # New
+        'Flag_PastDue_Program': 'Program - Date', # New
+        'Flag_PastDue_QC': 'QC - Date', # New
+        'Flag_PastDue_Delivery': 'Delivery - Date', # New
+        'Flag_PastDue_Service': 'Service - Date', # New
         'Flag_Awaiting_Cutlist': 'Ready to Fab - Date', 
         'Flag_Awaiting_RTF': 'Template - Date',       
         'Flag_Awaiting_Template': 'Job Creation'      
     }
+    # --- Issue descriptions mapping ---
     issue_desc_map = {
+        'Flag_PastDue_Next_Sched_Activity': "Past Due: Next Sched. Activity", # New
         'Flag_PastDue_Install': "Past Due: Install",
         'Flag_PastDue_Polish_Fab_Completion': "Past Due: Polish/Fab",
         'Flag_PastDue_Saw': "Past Due: Saw",
-        'Flag_PastDue_Ready_to_Fab': "Past Due: RTF",
+        'Flag_PastDue_Ready_to_Fab': "Past Due: RTF", 
         'Flag_PastDue_Invoice': "Past Due: Invoice",
         'Flag_PastDue_Collect_Final': "Past Due: Collect Final",
         'Flag_PastDue_Template': "Past Due: Template",
+        'Flag_PastDue_Cutlist': "Past Due: Cutlist", # New
+        'Flag_PastDue_Program': "Past Due: Program", # New
+        'Flag_PastDue_QC': "Past Due: QC", # New
+        'Flag_PastDue_Delivery': "Past Due: Delivery", # New
+        'Flag_PastDue_Service': "Past Due: Service", # New
         'Flag_Awaiting_Cutlist': "Delay: Awaiting Cutlist",
         'Flag_Awaiting_RTF': "Delay: Awaiting RTF",
         'Flag_Awaiting_Template': "Delay: Awaiting Template",
+        'Flag_Keyword_In_Next_Sched_Notes': "Keyword: Next Sched. Notes", # New
         'Flag_Keyword_In_Install_Notes': "Keyword: Install Notes",
         'Flag_Keyword_In_Template_Notes': "Keyword: Template Notes",
         'Flag_Keyword_In_Job_Issues': "Keyword: Job Issues",
         'Flag_Keyword_In_QC_Notes': "Keyword: QC Notes",
         'Flag_Keyword_In_Saw_Notes': "Keyword: Saw Notes"
+        # Add more keyword flags if new notes columns are scanned
     }
+    # --- Order of checking flags for primary issue ---
     flag_check_order = [
-        'Flag_PastDue_Install', 'Flag_PastDue_Polish_Fab_Completion', 'Flag_PastDue_Saw', 
+        'Flag_PastDue_Install', 'Flag_PastDue_Next_Sched_Activity', # Added Next Sched
+        'Flag_PastDue_Polish_Fab_Completion', 'Flag_PastDue_Saw', 
         'Flag_PastDue_Ready_to_Fab', 'Flag_PastDue_Invoice', 'Flag_PastDue_Collect_Final', 
-        'Flag_PastDue_Template', 'Flag_Awaiting_Cutlist', 'Flag_Awaiting_RTF', 
-        'Flag_Awaiting_Template', 'Flag_Keyword_In_Install_Notes', 'Flag_Keyword_In_Template_Notes',
+        'Flag_PastDue_Template', 'Flag_PastDue_Cutlist', 'Flag_PastDue_Program', 
+        'Flag_PastDue_QC', 'Flag_PastDue_Delivery', 'Flag_PastDue_Service',
+        'Flag_Awaiting_Cutlist', 'Flag_Awaiting_RTF', 'Flag_Awaiting_Template', 
+        'Flag_Keyword_In_Install_Notes', 'Flag_Keyword_In_Template_Notes',
+        'Flag_Keyword_In_Next_Sched_Notes', # Added Next Sched Notes
         'Flag_Keyword_In_Job_Issues', 'Flag_Keyword_In_QC_Notes', 'Flag_Keyword_In_Saw_Notes'
     ]
 
     for flag_col in flag_check_order:
-        if row.get(flag_col, False):
+        if row.get(flag_col, False): # Check if flag is True for the row
             issue_description = issue_desc_map.get(flag_col, "Unknown Issue")
             days_behind = "N/A"
             date_col_for_days = date_cols_map.get(flag_col)
+            
             if date_col_for_days and \
                date_col_for_days in row and \
                pd.notna(row[date_col_for_days]) and \
@@ -287,7 +332,7 @@ def determine_primary_issue_and_days(row, current_calc_date_ts):
                     days_behind = "Error Calc Days" 
             return issue_description, days_behind
             
-    return "Other Issue", "N/A"
+    return "Other Issue", "N/A" # Fallback if no specific flag matched
 
 
 def write_to_google_sheet(spreadsheet_obj, worksheet_name, df_to_write):
@@ -337,7 +382,6 @@ current_calc_date_input = st.sidebar.date_input("Date for Calculations", value=d
 current_calc_date_str = current_calc_date_input.strftime('%Y-%m-%d')
 current_calc_date_ts = pd.Timestamp(current_calc_date_input)
 
-# Initialize session state
 if 'df_analyzed' not in st.session_state: st.session_state.df_analyzed = None
 if 'spreadsheet_obj' not in st.session_state: st.session_state.spreadsheet_obj = None
 if 'resolved_job_indices' not in st.session_state: st.session_state.resolved_job_indices = set()
@@ -352,7 +396,7 @@ if final_creds:
         st.session_state.resolved_job_indices = set() 
         st.session_state.snoozed_job_indices = set()
         st.session_state.assignments = {}
-        st.session_state.current_page = 0 # Reset page on new load
+        st.session_state.current_page = 0 
 
         with st.spinner("Loading data from Google Sheets..."):
             raw_df, spreadsheet, gc_instance = load_google_sheet(final_creds, SPREADSHEET_ID, DATA_WORKSHEET_NAME)
@@ -363,7 +407,7 @@ if final_creds:
             with st.spinner("Processing and flagging data..."):
                 df_processed = preprocess_data(raw_df) 
                 if df_processed.empty and not raw_df.empty: 
-                    st.warning("Preprocessing returned an empty DataFrame. Check debug output for date parsing issues.")
+                    st.warning("Preprocessing returned an empty DataFrame. Date parsing might have issues.")
                 df_threshold_flagged = flag_threshold_delays(df_processed, current_calc_date_str)
                 df_keyword_flagged = flag_keyword_issues(df_threshold_flagged)
                 df_past_due_flagged = flag_past_due_activities(df_keyword_flagged, current_calc_date_str)
@@ -388,18 +432,17 @@ elif not creds_from_secrets :
 # --- Display Interactive "todo" List ---
 if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed.empty and 'Flag_Overall_Needs_Attention' in st.session_state.df_analyzed.columns:
     df_display_full = st.session_state.df_analyzed.copy()
-    # Ensure DataFrame has a unique index if it doesn't already
     if not df_display_full.index.is_unique:
         df_display_full = df_display_full.reset_index(drop=True)
 
     priority_jobs_df_all = df_display_full[df_display_full['Flag_Overall_Needs_Attention'] == True].copy()
 
     if not priority_jobs_df_all.empty:
-        # Apply determine_primary_issue_and_days only if priority_jobs_df_all is not empty
         issues_and_days_series = priority_jobs_df_all.apply(lambda row: determine_primary_issue_and_days(row, current_calc_date_ts), axis=1)
         priority_jobs_df_all.loc[:, 'Primary Issue'] = [item[0] for item in issues_and_days_series]
         priority_jobs_df_all.loc[:, 'Days Behind'] = [item[1] for item in issues_and_days_series]
         
+        # Ensure 'Install - Date' column exists and is datetime before sorting
         if 'Install - Date' in priority_jobs_df_all.columns and pd.api.types.is_datetime64_any_dtype(priority_jobs_df_all['Install - Date']):
             priority_jobs_df_all.sort_values(by='Install - Date', ascending=True, na_position='last', inplace=True)
         
@@ -411,16 +454,13 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
         st.header(f"🚩 Jobs Requiring Attention ({len(visible_priority_jobs_df)} currently shown)")
 
         if not visible_priority_jobs_df.empty:
-            # --- Pagination Logic ---
             total_jobs = len(visible_priority_jobs_df)
             total_pages = math.ceil(total_jobs / ITEMS_PER_PAGE)
             
-            # Ensure current_page is within valid bounds
             if st.session_state.current_page >= total_pages and total_pages > 0:
                 st.session_state.current_page = total_pages - 1
             if st.session_state.current_page < 0:
                  st.session_state.current_page = 0
-
 
             start_idx = st.session_state.current_page * ITEMS_PER_PAGE
             end_idx = start_idx + ITEMS_PER_PAGE
@@ -430,11 +470,14 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
                 job_name_display = row_data.get('Job Name', f"Job Index {job_index}")
                 primary_issue_display = row_data.get('Primary Issue', "N/A")
                 days_behind_display = row_data.get('Days Behind', "N/A")
-                install_date_display = row_data.get('Install - Date')
+                install_date_display = row_data.get('Install - Date') # This should be a Timestamp object if processed correctly
+                
+                install_date_str = "N/A"
                 if pd.notna(install_date_display) and isinstance(install_date_display, pd.Timestamp):
                     install_date_str = install_date_display.strftime('%Y-%m-%d')
-                else:
-                    install_date_str = "N/A"
+                elif pd.notna(install_date_display): # If it's a string already (should not happen if preprocess is right)
+                    install_date_str = str(install_date_display)
+
 
                 st.subheader(f"{job_name_display}")
                 item_cols = st.columns([3, 2, 3])
@@ -445,17 +488,25 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
                 with st.expander("Show Details & Actions", expanded=False):
                     st.write("--- Job Details ---")
                     st.write("**Key Dates:**")
-                    date_cols_to_show_detail = ['Job Creation', 'Template - Date', 'Ready to Fab - Date', 
-                                               'Cutlist - Date', 'Saw - Date', 'Polish/Fab Completion - Date', 
-                                               'Install - Date', 'Invoice - Date', 'Collect Final - Date']
+                    # Ensure this list matches new column structure
+                    date_cols_to_show_detail = [
+                        'Next Sched. - Date', 'Job Creation', 'Template - Date', 'Ready to Fab - Date', 
+                        'Cutlist - Date', 'Saw - Date', 'Polish/Fab Completion - Date', 
+                        'Install - Date', 'Invoice - Date', 'Collect Final - Date', 'Service - Date'
+                        ]
                     for col in date_cols_to_show_detail:
                         if col in row_data and pd.notna(row_data[col]) and isinstance(row_data[col], pd.Timestamp):
                             st.markdown(f"  *{col.replace(' - Date', '')}:* {row_data[col].strftime('%Y-%m-%d')}")
-                        elif col in row_data and pd.notna(row_data[col]):
+                        elif col in row_data and pd.notna(row_data[col]): # If already string or other non-Timestamp
                              st.markdown(f"  *{col.replace(' - Date', '')}:* {row_data[col]}")
 
+
                     st.write("**Notes:**")
-                    notes_cols_to_display = ['Template - Notes', 'Install - Notes', 'Saw - Notes', 'Job Issues', 'QC - Notes']
+                    # Ensure this list matches new column structure
+                    notes_cols_to_display = [
+                        'Next Sched. - Notes', 'Template - Notes', 'Install - Notes', 
+                        'Saw - Notes', 'Job Issues', 'QC - Notes', 'Address Notes'
+                        ] 
                     for note_col in notes_cols_to_display:
                         if note_col in row_data and pd.notna(row_data[note_col]) and str(row_data[note_col]).strip() != '':
                             st.markdown(f"**{note_col}:**")
@@ -477,7 +528,6 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
                         st.info(f"Assignment for {job_name_display} updated in session to: {new_assignment}")
                 st.markdown("---") 
             
-            # --- Pagination Controls ---
             if total_pages > 1:
                 page_cols = st.columns(3)
                 if page_cols[0].button("⬅️ Previous Page", disabled=(st.session_state.current_page == 0)):
@@ -491,24 +541,37 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
             if st.button("✍️ Update 'todo' Sheet (with current view)", key="update_todo_sheet_button_interactive"):
                 if st.session_state.spreadsheet_obj:
                     with st.spinner(f"Writing to '{TODO_WORKSHEET_NAME}' sheet..."):
-                        export_cols = ['Primary Issue', 'Days Behind', 'Job Name', 'Salesperson', 
-                                       'Job Creation', 'Template - Date', 'Install - Date', 'Job Status']
+                        # Define export columns based on available data
+                        export_cols = ['Primary Issue', 'Days Behind', 'Job Name']
+                        if 'Salesperson' in visible_priority_jobs_df.columns: export_cols.append('Salesperson')
+                        # Add other key identifying columns that exist
+                        for key_col in ['Job Creation', 'Template - Date', 'Install - Date', 'Next Sched. - Activity', 'Next Sched. - Date']:
+                             if key_col in visible_priority_jobs_df.columns:
+                                export_cols.append(key_col)
+                        
+                        # 'Job Status' might have been removed by user, or might not be in priority_df
+                        # Check existence before adding
+                        if 'Job Status' in visible_priority_jobs_df.columns:
+                            export_cols.append('Job Status')
+
+
                         true_flag_cols_in_visible = [col for col in visible_priority_jobs_df.columns if col.startswith('Flag_') and \
                                           col not in ['Flag_Any_Threshold_Delay', 'Flag_Any_Keyword_Issue', 
                                                       'Flag_Any_PastDue_Activity', 'Flag_Overall_Needs_Attention', 
                                                       'Primary Issue', 'Days Behind'] and \
                                           visible_priority_jobs_df[col].any()]
                         export_cols.extend(sorted(true_flag_cols_in_visible))
+                        # Ensure all columns in export_cols actually exist in the dataframe before selection
                         export_cols = [col for col in export_cols if col in visible_priority_jobs_df.columns] 
                         
                         export_df_final = visible_priority_jobs_df[export_cols].copy()
                         write_to_google_sheet(st.session_state.spreadsheet_obj, TODO_WORKSHEET_NAME, export_df_final)
                 else:
                     st.error("Spreadsheet object not available. Cannot write to Google Sheet. Try reloading data.")
-        else: # If visible_priority_jobs_df is empty
+        else: 
             if not priority_jobs_df_all.empty and visible_priority_jobs_df.empty :
                  st.info("All priority jobs have been locally resolved or snoozed for this session.")
-            else: # If priority_jobs_df_all was also empty
+            else: 
                 st.info("No jobs currently require attention based on the defined criteria.")
             
             if st.session_state.spreadsheet_obj and st.button("Clear 'todo' Sheet (as no jobs to show/list)", key="clear_todo_button_interactive"):
@@ -525,17 +588,33 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
         if 'Flag_Awaiting_Cutlist' in df_full_for_counts.columns: st.metric("Awaiting Cutlist (>3 days, non-laminate)", df_full_for_counts['Flag_Awaiting_Cutlist'].sum())
         
         st.subheader("Keyword Issues in Notes")
-        notes_cols_for_keyword_summary = ['Template - Notes', 'Install - Notes', 'Saw - Notes', 'Job Issues', 'QC - Notes']
-        for note_col_original_name in notes_cols_for_keyword_summary:
-            flag_col_name = f'Flag_Keyword_In_{note_col_original_name.replace(" - ", "_").replace(" ", "_")}'
+        # Update this list to match notes_columns_to_scan in flag_keyword_issues
+        notes_cols_for_keyword_summary = ['Next Sched. - Notes', 'Template - Notes', 'Install - Notes', 
+                             'Saw - Notes', 'Job Issues', 'QC - Notes', 'Ready to Fab - Notes',
+                             'Rework - Notes', 'Cutlist - Notes', 'Program - Notes', 
+                             'Material Pull - Notes', 'CNC - Notes', 'Polish/Fab Completion - Notes',
+                             'Hone Splash - Notes', 'Ship - Notes', 'Product Rcvd - Notes',
+                             'Repair - Notes', 'Delivery - Notes', 'Pick Up - Notes', 
+                             'Service - Notes', 'Callback - Notes', 'Invoice - Notes', 
+                             'Build Up - Notes', 'Tearout - Notes', 'Lift Help - Notes',
+                             'Courier - Notes', 'Tile Order - Notes', 'Tile Install - Notes',
+                             'Collect Final - Notes', 'Follow Up Call - Notes', 'Address Notes'
+                             ]
+        actual_notes_cols_for_summary = [col for col in notes_cols_for_keyword_summary if col in df_full_for_counts.columns]
+
+        for note_col_original_name in actual_notes_cols_for_summary:
+            flag_col_name = f'Flag_Keyword_In_{note_col_original_name.replace(" - ", "_").replace(" ", "_").replace(".","_")}'
             if flag_col_name in df_full_for_counts.columns:
                 st.write(f"*Keyword in '{note_col_original_name}'*: {df_full_for_counts[flag_col_name].sum()} jobs")
         
         st.subheader("Past Due Activities")
         past_due_activities_display = [
+            ('Next Sched. Activity', 'Flag_PastDue_Next_Sched_Activity'),
             ('Template', 'Flag_PastDue_Template'), ('RTF', 'Flag_PastDue_Ready_to_Fab'), ('Install', 'Flag_PastDue_Install'),
             ('Invoice', 'Flag_PastDue_Invoice'), ('Collect Final', 'Flag_PastDue_Collect_Final'),
-            ('Saw', 'Flag_PastDue_Saw'), ('Polish/Fab Completion', 'Flag_PastDue_Polish_Fab_Completion')
+            ('Saw', 'Flag_PastDue_Saw'), ('Polish/Fab Completion', 'Flag_PastDue_Polish_Fab_Completion'),
+            ('Cutlist', 'Flag_PastDue_Cutlist'), ('Program', 'Flag_PastDue_Program'),
+            ('QC', 'Flag_PastDue_QC'), ('Delivery', 'Flag_PastDue_Delivery'), ('Service', 'Flag_PastDue_Service')
         ]
         for friendly_name, flag_col in past_due_activities_display:
             if flag_col in df_full_for_counts.columns: 
