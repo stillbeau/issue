@@ -21,6 +21,7 @@ DATA_WORKSHEET_NAME = "jobs" # Your main data sheet
 TODO_WORKSHEET_NAME = "todo" # Sheet for the priority list
 ACTION_LOG_WORKSHEET_NAME = "notes" # New sheet for logging actions
 ITEMS_PER_PAGE = 10 # For pagination
+MORAWARE_SEARCH_URL = "https://floformcountertops.moraware.net/sys/search?&search="
 
 # Define completion and cancellation terms globally for helper functions
 COMPLETION_TERMS = ['complete', 'completed', 'done', 'installed', 'invoiced', 'paid', 'sent', 'received', 'closed', 'fabricated']
@@ -477,11 +478,10 @@ elif not creds_from_secrets :
 
 # --- Filters and Sort Options ---
 if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed.empty:
-    # Ensure 'Flag_Overall_Needs_Attention' exists before trying to filter on it
     if 'Flag_Overall_Needs_Attention' in st.session_state.df_analyzed.columns:
         df_for_filters = st.session_state.df_analyzed[st.session_state.df_analyzed['Flag_Overall_Needs_Attention']].copy()
     else:
-        df_for_filters = pd.DataFrame() # Empty DataFrame if the flag column is missing
+        df_for_filters = pd.DataFrame() 
 
     if not df_for_filters.empty:
         filter_cols = st.columns(3)
@@ -583,11 +583,16 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
             for job_index, row_data in jobs_to_display_on_page.iterrows(): 
                 job_name_display = row_data.get('Job Name', f"Job Index {job_index}")
                 prod_number_display = row_data.get('Production #', '') 
+                
+                # --- MODIFIED: Create clickable markdown link ---
                 subheader_text = f"{job_name_display}"
                 if prod_number_display and str(prod_number_display).strip() != "":
                     subheader_text += f" (PO: {prod_number_display})"
-                
-                st.subheader(subheader_text)
+                    link_url = f"{MORAWARE_SEARCH_URL}{prod_number_display}"
+                    st.markdown(f"### [{subheader_text}]({link_url})", unsafe_allow_html=True)
+                else:
+                    st.subheader(subheader_text)
+
 
                 info_cols = st.columns([3,1,2,2])
                 primary_issue_display = row_data.get('Primary Issue', "N/A")
@@ -605,6 +610,7 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
                 info_cols[2].markdown(f"**Install:** {install_date_str}")
                 info_cols[3].markdown(f"**Next Sched:** {row_data.get('Next Sched. - Activity', 'N/A')}")
                 
+                # --- MODIFIED: Move action buttons to be next to info ---
                 action_button_cols = st.columns([1,1,5]) 
                 with action_button_cols[0]:
                     if st.button("Resolve", key=f"resolve_{job_index}", help="Mark as resolved for this session & log action"):
@@ -690,7 +696,6 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
             if st.button("✍️ Update 'todo' Sheet (with current filtered & paged view)", key="update_todo_sheet_button_interactive"):
                 if st.session_state.spreadsheet_obj:
                     with st.spinner(f"Writing to '{TODO_WORKSHEET_NAME}' sheet..."):
-                        # Export the currently VISIBLE and FILTERED jobs
                         export_cols = ['Primary Issue', 'Days Behind', 'Job Name', 'Production #'] 
                         if 'Salesperson' in visible_priority_jobs_df.columns: export_cols.append('Salesperson')
                         for key_col in ['Job Creation', 'Template - Date', 'Install - Date', 'Next Sched. - Activity', 'Next Sched. - Date']: 
