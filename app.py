@@ -63,7 +63,7 @@ def load_google_sheet(creds_dict, spreadsheet_id, worksheet_name):
         df = pd.DataFrame(data)
         critical_cols = ['Next Sched. - Activity', 'Next Sched. - Date', 'Next Sched. - Status', 
                          'Install - Date', 'Supplied By', 'Production #', 'Salesperson',
-                         'Template - Status', 'Ready to Fab - Status', 'Cutlist - Status'] # Ensure status cols exist
+                         'Template - Status', 'Ready to Fab - Status', 'Cutlist - Status'] 
         for col in critical_cols:
             if col not in df.columns:
                 df[col] = "" 
@@ -370,7 +370,7 @@ def append_action_log(spreadsheet_obj, worksheet_name, log_entry_dict):
             st.info(f"Worksheet '{worksheet_name}' created with headers.")
 
         action_log_headers = log_sheet.row_values(1) 
-        if not action_log_headers : 
+        if not action_log_headers or len(action_log_headers) < 5: 
              action_log_headers = ["Timestamp", "Job Name", "Production #", "Action", "Details", "Assigned To"]
 
         row_to_append = [log_entry_dict.get(header, "") for header in action_log_headers]
@@ -411,18 +411,11 @@ def process_action_log(creds_dict, spreadsheet_id, worksheet_name, current_calc_
     if 'Production #' not in df_jobs.columns:
         st.warning("Main 'jobs' sheet is missing 'Production #' column. Cannot process action log.")
         return snoozed_indices, resolved_indices
-
-    # Make a mapping from Production # to the main DataFrame's index for quick lookups
-    # Handle cases where Production # might be empty or duplicated
-    # df_jobs['Production #'] = df_jobs['Production #'].astype(str)
-    # prod_to_index_map = df_jobs.set_index('Production #').index.get_loc
     
-    # Simpler approach: build a dict, handles duplicates by taking the first index found
     prod_to_index_map = {str(prod_num): idx for idx, prod_num in reversed(list(df_jobs['Production #'].astype(str).items()))}
 
-
     try:
-        # We need a new gspread client instance here because this function isn't cached with the main one
+        # Re-authenticate for this separate operation
         creds = Credentials.from_service_account_info(creds_dict, scopes=['https://www.googleapis.com/auth/spreadsheets'])
         gc = gspread.authorize(creds)
         spreadsheet = gc.open_by_key(spreadsheet_id)
@@ -434,17 +427,14 @@ def process_action_log(creds_dict, spreadsheet_id, worksheet_name, current_calc_
         
         df_log = pd.DataFrame(log_data)
 
-        # Ensure required columns exist in the log
         if not all(col in df_log.columns for col in ["Timestamp", "Production #", "Action"]):
             st.warning(f"Action log sheet '{worksheet_name}' is missing required columns (Timestamp, Production #, Action). Skipping.")
             return snoozed_indices, resolved_indices
 
-        # Process the log
         df_log['Timestamp'] = pd.to_datetime(df_log['Timestamp'], errors='coerce')
         df_log = df_log.dropna(subset=['Timestamp', 'Production #', 'Action'])
         df_log = df_log.sort_values('Timestamp', ascending=False)
         
-        # Get the most recent valid action for each Production #
         latest_actions = df_log.drop_duplicates(subset='Production #', keep='first')
         
         for _, log_row in latest_actions.iterrows():
@@ -464,7 +454,6 @@ def process_action_log(creds_dict, spreadsheet_id, worksheet_name, current_calc_
         return snoozed_indices, resolved_indices
 
     except gspread.exceptions.WorksheetNotFound:
-        # It's okay if the sheet doesn't exist yet, we just return empty sets.
         return snoozed_indices, resolved_indices
     except Exception as e:
         st.error(f"Failed to process action log sheet '{worksheet_name}': {e}")
@@ -496,7 +485,6 @@ current_calc_date_input = st.sidebar.date_input("Date for Calculations", value=d
 current_calc_date_str = current_calc_date_input.strftime('%Y-%m-%d')
 current_calc_date_ts = pd.Timestamp(current_calc_date_input)
 
-# Initialize session state for data that persists across reruns
 if 'df_analyzed' not in st.session_state: st.session_state.df_analyzed = None
 if 'spreadsheet_obj' not in st.session_state: st.session_state.spreadsheet_obj = None
 if 'resolved_job_indices' not in st.session_state: st.session_state.resolved_job_indices = set()
@@ -512,9 +500,6 @@ if 'sort_by_column' not in st.session_state: st.session_state.sort_by_column = "
 if final_creds:
     if st.sidebar.button("🔄 Load and Analyze Job Data", key="load_analyze_button"):
         st.session_state.df_analyzed = None 
-        # Don't reset session actions here; they will be recalculated from the log
-        # st.session_state.resolved_job_indices = set() 
-        # st.session_state.snoozed_job_indices = set()
         st.session_state.assignments = {}
         st.session_state.current_page = 0 
 
@@ -536,7 +521,6 @@ if final_creds:
                 st.session_state.df_analyzed['Flag_Overall_Needs_Attention'] = st.session_state.df_analyzed[all_flag_summary_cols].any(axis=1) if all_flag_summary_cols else False
                 st.success("Data analysis complete!")
 
-                # Read the action log and apply expirations
                 with st.spinner("Reading action log and applying expirations..."):
                     df_to_process_log = st.session_state.df_analyzed
                     if not df_to_process_log.index.is_unique:
@@ -546,17 +530,14 @@ if final_creds:
                     st.session_state.snoozed_job_indices = snoozed
                     st.session_state.resolved_job_indices = resolved
                     st.info(f"Applied expirations: {len(snoozed)} jobs snoozed, {len(resolved)} jobs recently resolved.")
-
-            # ... (rest of the error/empty handling) ...
+        # ... (rest of the error/empty handling) ...
 
 elif not creds_from_secrets :
      st.sidebar.info("Please upload your Google Service Account JSON key to begin.")
 
 
 # --- Display Interactive "todo" List ---
-# This entire block should only run if analysis has completed successfully
 if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed.empty and 'Flag_Overall_Needs_Attention' in st.session_state.df_analyzed.columns:
-    # Rest of the display logic from the previous correct version...
     df_display_full = st.session_state.df_analyzed.copy()
     if not df_display_full.index.is_unique: 
         df_display_full = df_display_full.reset_index(drop=True)
