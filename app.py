@@ -369,9 +369,7 @@ def append_action_log(spreadsheet_obj, worksheet_name, log_entry_dict):
             log_sheet.append_row(action_log_headers) 
             st.info(f"Worksheet '{worksheet_name}' created with headers.")
 
-        action_log_headers = log_sheet.row_values(1) 
-        if not action_log_headers or len(action_log_headers) < 5: 
-             action_log_headers = ["Timestamp", "Job Name", "Production #", "Action", "Details", "Assigned To"]
+        action_log_headers = ["Timestamp", "Job Name", "Production #", "Action", "Details", "Assigned To"]
 
         row_to_append = [log_entry_dict.get(header, "") for header in action_log_headers]
         log_sheet.append_row(row_to_append, value_input_option='USER_ENTERED')
@@ -534,6 +532,50 @@ if final_creds:
 
 elif not creds_from_secrets :
      st.sidebar.info("Please upload your Google Service Account JSON key to begin.")
+
+
+# --- Filters and Sort Options ---
+if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed.empty:
+    if 'Flag_Overall_Needs_Attention' in st.session_state.df_analyzed.columns:
+        df_for_filters = st.session_state.df_analyzed[st.session_state.df_analyzed['Flag_Overall_Needs_Attention']].copy()
+    else:
+        df_for_filters = pd.DataFrame() 
+
+    if not df_for_filters.empty:
+        filter_cols = st.columns(3)
+        with filter_cols[0]:
+            if 'Next Sched. - Activity' in df_for_filters.columns:
+                unique_next_activities = sorted(df_for_filters['Next Sched. - Activity'].dropna().astype(str).unique())
+                if unique_next_activities:
+                    st.session_state.selected_next_activities = st.multiselect(
+                        "Filter by Next Sched. Activity:", options=unique_next_activities,
+                        default=st.session_state.selected_next_activities, key="next_activity_filter"
+                    )
+        with filter_cols[1]:
+            if 'Salesperson' in df_for_filters.columns:
+                unique_salespersons = sorted(df_for_filters['Salesperson'].dropna().astype(str).unique())
+                if unique_salespersons:
+                    st.session_state.selected_salespersons = st.multiselect(
+                        "Filter by Salesperson:", options=unique_salespersons,
+                        default=st.session_state.selected_salespersons, key="salesperson_filter"
+                    )
+        with filter_cols[2]:
+            if 'Supplied By' in df_for_filters.columns:
+                unique_supplied_by = sorted(df_for_filters['Supplied By'].dropna().astype(str).unique())
+                if unique_supplied_by:
+                    st.session_state.selected_supplied_by = st.multiselect(
+                        "Filter by Supplied By:", options=unique_supplied_by,
+                        default=st.session_state.selected_supplied_by, key="supplied_by_filter"
+                    )
+        
+        st.session_state.sort_by_column = st.selectbox(
+            "Sort jobs by:",
+            options=["Install - Date", "Days Behind"],
+            index=0 if st.session_state.sort_by_column == "Install - Date" else 1,
+            key="sort_by_select"
+        )
+    else:
+        st.info("No jobs currently require attention to apply filters.")
 
 
 # --- Display Interactive "todo" List ---
