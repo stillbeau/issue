@@ -68,6 +68,9 @@ def load_google_sheet(creds_dict, spreadsheet_id, worksheet_name):
         for col in critical_cols:
             if col not in df.columns:
                 df[col] = "" 
+        # Ensure Production # is string for .startswith() logic
+        if 'Production #' in df.columns:
+            df['Production #'] = df['Production #'].astype(str)
         return df, spreadsheet, gc 
     except gspread.exceptions.GSpreadException as e: 
         if "duplicate" in str(e).lower():
@@ -590,27 +593,43 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
     with st.expander("🚚 Truck Weight Calculator"):
         selected_date_for_week = st.date_input("Select any date within the desired ship week:")
         if selected_date_for_week:
-            # Calculate Monday (start) and Sunday (end) of the selected week
             start_of_week = selected_date_for_week - timedelta(days=selected_date_for_week.weekday())
             end_of_week = start_of_week + timedelta(days=6)
             st.info(f"Calculating weight for week: {start_of_week.strftime('%Y-%m-%d')} to {end_of_week.strftime('%Y-%m-%d')}")
 
             if 'Ship - Date' in df_for_ui_elements.columns:
-                # Ensure the 'Ship - Date' column is in datetime format before comparison
                 jobs_for_week = df_for_ui_elements[
                     (df_for_ui_elements['Ship - Date'].dt.date >= start_of_week) &
                     (df_for_ui_elements['Ship - Date'].dt.date <= end_of_week)
                 ]
                 
                 if not jobs_for_week.empty:
-                    total_sqft = jobs_for_week['Total Job SqFT'].sum()
-                    total_weight = total_sqft * LBS_PER_SQFT
+                    # Filter for Stone and Laminate jobs
+                    stone_jobs = jobs_for_week[jobs_for_week['Production #'].str.startswith('09')]
+                    laminate_jobs = jobs_for_week[jobs_for_week['Production #'].str.startswith('04')]
                     
-                    calc_cols = st.columns(3)
-                    calc_cols[0].metric("Jobs in Selected Week", len(jobs_for_week))
-                    calc_cols[1].metric("Total Square Footage", f"{total_sqft:,.2f} sqft")
-                    calc_cols[2].metric("Estimated Weight", f"{total_weight:,.2f} lbs")
-                    st.dataframe(jobs_for_week[['Job Name', 'Production #', 'Total Job SqFT', 'Ship - Date']].sort_values(by='Ship - Date'))
+                    # Calculate Stone metrics
+                    stone_sqft = stone_jobs['Total Job SqFT'].sum()
+                    stone_weight = stone_sqft * LBS_PER_SQFT
+                    
+                    # Calculate Laminate metrics
+                    laminate_sqft = laminate_jobs['Total Job SqFT'].sum()
+
+                    st.markdown("---")
+                    st.subheader("Stone Jobs on Truck")
+                    calc_cols_stone = st.columns(3)
+                    calc_cols_stone[0].metric("Stone Jobs", len(stone_jobs))
+                    calc_cols_stone[1].metric("Stone SqFt", f"{stone_sqft:,.2f} sqft")
+                    calc_cols_stone[2].metric("Estimated Stone Weight", f"{stone_weight:,.2f} lbs")
+                    st.dataframe(stone_jobs[['Job Name', 'Production #', 'Total Job SqFT', 'Ship - Date']].sort_values(by='Ship - Date'))
+                    
+                    st.markdown("---")
+                    st.subheader("Laminate Jobs on Truck")
+                    calc_cols_lam = st.columns(3)
+                    calc_cols_lam[0].metric("Laminate Jobs", len(laminate_jobs))
+                    calc_cols_lam[1].metric("Laminate SqFt", f"{laminate_sqft:,.2f} sqft")
+                    st.dataframe(laminate_jobs[['Job Name', 'Production #', 'Total Job SqFT', 'Ship - Date']].sort_values(by='Ship - Date'))
+
                 else:
                     st.info(f"No jobs found for the selected week.")
             else:
