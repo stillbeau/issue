@@ -63,7 +63,7 @@ def load_google_sheet(creds_dict, spreadsheet_id, worksheet_name):
             return pd.DataFrame(), spreadsheet, gc 
         df = pd.DataFrame(data)
         critical_cols = ['Next Sched. - Activity', 'Next Sched. - Date', 'Next Sched. - Status', 
-                         'Install - Date', 'Supplied By', 'Production #', 'Salesperson',
+                         'Install - Date', 'Supplied By', 'Production #', 'Salesperson', 'Ship - Date',
                          'Template - Status', 'Ready to Fab - Status', 'Cutlist - Status', 'Total Job SqFT'] 
         for col in critical_cols:
             if col not in df.columns:
@@ -588,23 +588,28 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
             st.info("No jobs currently require attention to apply filters.")
 
     with st.expander("🚚 Truck Weight Calculator"):
-        # Create a list of jobs to select from, combining Job Name and Production #
-        # Use the full analyzed dataframe so any job can be selected
-        df_for_ui_elements['display_name'] = df_for_ui_elements['Job Name'].astype(str) + " (PO: " + df_for_ui_elements['Production #'].astype(str) + ")"
-        job_options = df_for_ui_elements['display_name'].tolist()
-        selected_jobs_display_names = st.multiselect("Select jobs for this truckload:", options=job_options)
-        
-        if selected_jobs_display_names:
-            # Get the data for the selected jobs
-            selected_jobs_df = df_for_ui_elements[df_for_ui_elements['display_name'].isin(selected_jobs_display_names)]
-            total_sqft = selected_jobs_df['Total Job SqFT'].sum()
-            total_weight = total_sqft * LBS_PER_SQFT
-
-            # Display the results
-            calc_cols = st.columns(3)
-            calc_cols[0].metric("Jobs Selected", len(selected_jobs_df))
-            calc_cols[1].metric("Total Square Footage", f"{total_sqft:,.2f} sqft")
-            calc_cols[2].metric("Estimated Weight", f"{total_weight:,.2f} lbs")
+        selected_ship_date = st.date_input("Select a Ship Date to calculate weight:")
+        if selected_ship_date:
+            # Normalize selected date to match the format in the DataFrame
+            selected_ship_date_ts = pd.to_datetime(selected_ship_date)
+            # Filter the main DataFrame for jobs on the selected ship date
+            if 'Ship - Date' in df_for_ui_elements.columns:
+                # Ensure the 'Ship - Date' column is in datetime format before comparison
+                jobs_for_date = df_for_ui_elements[df_for_ui_elements['Ship - Date'].dt.date == selected_ship_date]
+                
+                if not jobs_for_date.empty:
+                    total_sqft = jobs_for_date['Total Job SqFT'].sum()
+                    total_weight = total_sqft * LBS_PER_SQFT
+                    
+                    calc_cols = st.columns(3)
+                    calc_cols[0].metric("Jobs on this Ship Date", len(jobs_for_date))
+                    calc_cols[1].metric("Total Square Footage", f"{total_sqft:,.2f} sqft")
+                    calc_cols[2].metric("Estimated Weight", f"{total_weight:,.2f} lbs")
+                    st.dataframe(jobs_for_date[['Job Name', 'Production #', 'Total Job SqFT']])
+                else:
+                    st.info(f"No jobs found for ship date: {selected_ship_date.strftime('%Y-%m-%d')}")
+            else:
+                st.warning("'Ship - Date' column not found in the data.")
 
 
 # --- Display Interactive "todo" List ---
