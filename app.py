@@ -64,7 +64,7 @@ def load_google_sheet(creds_dict, spreadsheet_id, worksheet_name):
         df = pd.DataFrame(data)
         critical_cols = ['Next Sched. - Activity', 'Next Sched. - Date', 'Next Sched. - Status', 
                          'Install - Date', 'Supplied By', 'Production #', 'Salesperson', 'Ship - Date',
-                         'Template - Status', 'Ready to Fab - Status', 'Cutlist - Status', 'Total Job SqFT'] 
+                         'Template - Status', 'Ready to Fab - Status', 'Cutlist - Status', 'Total Job SqFT', 'Total Job Price $'] 
         for col in critical_cols:
             if col not in df.columns:
                 df[col] = "" 
@@ -116,9 +116,13 @@ def preprocess_data(df):
                 df_processed[col_name] = df_processed[col_name].replace(placeholder, None, regex=False) 
             df_processed[col_name] = pd.to_datetime(df_processed[col_name], errors='coerce')
     
-    # Preprocess SqFt column as well
-    if 'Total Job SqFT' in df_processed.columns:
-        df_processed['Total Job SqFT'] = pd.to_numeric(df_processed['Total Job SqFT'], errors='coerce').fillna(0)
+    # Preprocess numeric columns
+    numeric_cols = {'Total Job SqFT': 0, 'Total Job Price $': 0}
+    for col, default_val in numeric_cols.items():
+        if col in df_processed.columns:
+            df_processed[col] = df_processed[col].astype(str).str.replace('$', '', regex=False).str.replace(',', '', regex=False)
+            df_processed[col] = pd.to_numeric(df_processed[col], errors='coerce').fillna(default_val)
+
 
     return df_processed
 
@@ -759,4 +763,4 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
             # ... (pagination and write_to_google_sheet button logic) ...
         # ... (rest of visible_priority_jobs_df is empty logic) ...
 
-    # ... (rest of the display logic for no priority jobs, expanders, etc.) ...
+    # ... (rest of the display logic for no priority jobs, expanders, etc.) 
