@@ -117,10 +117,14 @@ def preprocess_data(df):
             df_processed[col_name] = pd.to_datetime(df_processed[col_name], errors='coerce')
     
     # Preprocess numeric columns
-    numeric_cols = {'Total Job SqFT': 0, 'Total Job Price $': 0}
+    numeric_cols = {'Total Job SqFT': 0.0, 'Total Job Price $': 0.0}
     for col, default_val in numeric_cols.items():
         if col in df_processed.columns:
-            df_processed[col] = df_processed[col].astype(str).str.replace('$', '', regex=False).str.replace(',', '', regex=False)
+            # First, convert column to string type to use .str accessor
+            df_processed[col] = df_processed[col].astype(str)
+            # Remove currency symbols and commas
+            df_processed[col] = df_processed[col].str.replace('$', '', regex=False).str.replace(',', '', regex=False)
+            # Convert to numeric, coercing errors to NaN, then fill NaN with the default value
             df_processed[col] = pd.to_numeric(df_processed[col], errors='coerce').fillna(default_val)
 
 
@@ -547,7 +551,7 @@ elif not creds_from_secrets :
      st.sidebar.info("Please upload your Google Service Account JSON key to begin.")
 
 
-# --- Filters, Sorters, and Truck Weight Calculator ---
+# --- Filters, Sorters, and Calculators ---
 if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed.empty:
     df_for_ui_elements = st.session_state.df_analyzed
     if 'Flag_Overall_Needs_Attention' in df_for_ui_elements.columns:
@@ -558,7 +562,7 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
     with st.expander("Show Filters & Sorters", expanded=True):
         if not df_for_filters.empty:
             issues_and_days_series_filter = df_for_filters.apply(lambda row: determine_primary_issue_and_days(row, current_calc_date_ts), axis=1)
-            df_for_filters['Primary Issue'] = [item[0] for item in issues_and_days_series_filter]
+            df_for_filters.loc[:, 'Primary Issue'] = [item[0] for item in issues_and_days_series_filter]
 
             filter_cols = st.columns(3)
             with filter_cols[0]:
@@ -593,8 +597,11 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
             )
         else:
             st.info("No jobs currently require attention to apply filters.")
+    
+    # --- Calculators Section ---
+    calc_tab1, calc_tab2 = st.tabs(["🚚 Truck Weight Calculator", "🗓️ Upcoming Template Forecast"])
 
-    with st.expander("🚚 Truck Weight Calculator"):
+    with calc_tab1:
         selected_date_for_week = st.date_input("Select any date within the desired ship week:")
         if selected_date_for_week:
             start_of_week = selected_date_for_week - timedelta(days=selected_date_for_week.weekday())
@@ -638,6 +645,44 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
                     st.info(f"No jobs found for the selected week.")
             else:
                 st.warning("'Ship - Date' column not found in the data.")
+
+    with calc_tab2:
+        if 'Template - Date' in df_for_ui_elements.columns:
+            # Filter for jobs with a future template date
+            future_templates_df = df_for_ui_elements[df_for_ui_elements['Template - Date'] > current_calc_date_ts].copy()
+            
+            if not future_templates_df.empty:
+                # Weekly Forecast
+                st.subheader("Weekly Template Forecast")
+                future_templates_df['Week Start'] = future_templates_df['Template - Date'].dt.to_period('W').apply(lambda p: p.start_time).dt.date
+                weekly_summary = future_templates_df.groupby('Week Start').agg(
+                    Total_Jobs=('Job Name', 'count'),
+                    Total_SqFt=('Total Job SqFT', 'sum'),
+                    Total_Value=('Total Job Price $', 'sum')
+                ).reset_index()
+                
+                weekly_summary['Total_SqFt'] = weekly_summary['Total_SqFt'].map('{:,.2f}'.format)
+                weekly_summary['Total_Value'] = weekly_summary['Total_Value'].map('${:,.2f}'.format)
+                st.dataframe(weekly_summary)
+                
+                # Monthly Forecast
+                st.subheader("Monthly Template Forecast")
+                future_templates_df['Month'] = future_templates_df['Template - Date'].dt.to_period('M')
+                monthly_summary = future_templates_df.groupby('Month').agg(
+                    Total_Jobs=('Job Name', 'count'),
+                    Total_SqFt=('Total Job SqFT', 'sum'),
+                    Total_Value=('Total Job Price $', 'sum')
+                ).reset_index()
+
+                monthly_summary['Month'] = monthly_summary['Month'].astype(str)
+                monthly_summary['Total_SqFt'] = monthly_summary['Total_SqFt'].map('{:,.2f}'.format)
+                monthly_summary['Total_Value'] = monthly_summary['Total_Value'].map('${:,.2f}'.format)
+                st.dataframe(monthly_summary)
+            else:
+                st.info("No upcoming templates found in the data.")
+        else:
+            st.warning("'Template - Date' column not found, cannot generate forecast.")
+
 
 
 # --- Display Interactive "todo" List ---
