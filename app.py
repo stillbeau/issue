@@ -24,6 +24,7 @@ ITEMS_PER_PAGE = 10 # For pagination
 MORAWARE_SEARCH_URL = "https://floformcountertops.moraware.net/sys/search?&search="
 SNOOZE_DAYS = 1
 RESOLVE_EXPIRY_DAYS = 5
+LBS_PER_SQFT = 20.0
 
 # Define completion and cancellation terms globally for helper functions
 COMPLETION_TERMS = ['complete', 'completed', 'done', 'installed', 'invoiced', 'paid', 'sent', 'received', 'closed', 'fabricated']
@@ -63,7 +64,7 @@ def load_google_sheet(creds_dict, spreadsheet_id, worksheet_name):
         df = pd.DataFrame(data)
         critical_cols = ['Next Sched. - Activity', 'Next Sched. - Date', 'Next Sched. - Status', 
                          'Install - Date', 'Supplied By', 'Production #', 'Salesperson',
-                         'Template - Status', 'Ready to Fab - Status', 'Cutlist - Status'] 
+                         'Template - Status', 'Ready to Fab - Status', 'Cutlist - Status', 'Total Job SqFT'] 
         for col in critical_cols:
             if col not in df.columns:
                 df[col] = "" 
@@ -111,6 +112,11 @@ def preprocess_data(df):
             for placeholder in common_non_date_placeholders:
                 df_processed[col_name] = df_processed[col_name].replace(placeholder, None, regex=False) 
             df_processed[col_name] = pd.to_datetime(df_processed[col_name], errors='coerce')
+    
+    # Preprocess SqFt column as well
+    if 'Total Job SqFT' in df_processed.columns:
+        df_processed['Total Job SqFT'] = pd.to_numeric(df_processed['Total Job SqFT'], errors='coerce').fillna(0)
+
     return df_processed
 
 def flag_threshold_delays(df, current_date_str):
@@ -534,48 +540,71 @@ elif not creds_from_secrets :
      st.sidebar.info("Please upload your Google Service Account JSON key to begin.")
 
 
-# --- Filters and Sort Options ---
+# --- Filters, Sorters, and Truck Weight Calculator ---
 if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed.empty:
-    if 'Flag_Overall_Needs_Attention' in st.session_state.df_analyzed.columns:
-        df_for_filters = st.session_state.df_analyzed[st.session_state.df_analyzed['Flag_Overall_Needs_Attention']].copy()
+    df_for_ui_elements = st.session_state.df_analyzed
+    if 'Flag_Overall_Needs_Attention' in df_for_ui_elements.columns:
+        df_for_filters = df_for_ui_elements[df_for_ui_elements['Flag_Overall_Needs_Attention']].copy()
     else:
         df_for_filters = pd.DataFrame() 
 
-    if not df_for_filters.empty:
-        filter_cols = st.columns(3)
-        with filter_cols[0]:
-            if 'Next Sched. - Activity' in df_for_filters.columns:
-                unique_next_activities = sorted(df_for_filters['Next Sched. - Activity'].dropna().astype(str).unique())
-                if unique_next_activities:
-                    st.session_state.selected_next_activities = st.multiselect(
-                        "Filter by Next Sched. Activity:", options=unique_next_activities,
-                        default=st.session_state.selected_next_activities, key="next_activity_filter"
+    with st.expander("Show Filters & Sorters", expanded=True):
+        if not df_for_filters.empty:
+            issues_and_days_series_filter = df_for_filters.apply(lambda row: determine_primary_issue_and_days(row, current_calc_date_ts), axis=1)
+            df_for_filters['Primary Issue'] = [item[0] for item in issues_and_days_series_filter]
+
+            filter_cols = st.columns(3)
+            with filter_cols[0]:
+                unique_primary_issues = sorted(df_for_filters['Primary Issue'].dropna().unique())
+                if unique_primary_issues:
+                     st.session_state.selected_primary_issues = st.multiselect(
+                        "Filter by Primary Issue:", options=unique_primary_issues,
+                        default=st.session_state.get('selected_primary_issues', []), key="primary_issue_filter"
                     )
-        with filter_cols[1]:
-            if 'Salesperson' in df_for_filters.columns:
-                unique_salespersons = sorted(df_for_filters['Salesperson'].dropna().astype(str).unique())
-                if unique_salespersons:
-                    st.session_state.selected_salespersons = st.multiselect(
-                        "Filter by Salesperson:", options=unique_salespersons,
-                        default=st.session_state.selected_salespersons, key="salesperson_filter"
-                    )
-        with filter_cols[2]:
-            if 'Supplied By' in df_for_filters.columns:
-                unique_supplied_by = sorted(df_for_filters['Supplied By'].dropna().astype(str).unique())
-                if unique_supplied_by:
-                    st.session_state.selected_supplied_by = st.multiselect(
-                        "Filter by Supplied By:", options=unique_supplied_by,
-                        default=st.session_state.selected_supplied_by, key="supplied_by_filter"
-                    )
+            with filter_cols[1]:
+                if 'Salesperson' in df_for_filters.columns:
+                    unique_salespersons = sorted(df_for_filters['Salesperson'].dropna().astype(str).unique())
+                    if unique_salespersons:
+                        st.session_state.selected_salespersons = st.multiselect(
+                            "Filter by Salesperson:", options=unique_salespersons,
+                            default=st.session_state.selected_salespersons, key="salesperson_filter"
+                        )
+            with filter_cols[2]:
+                if 'Supplied By' in df_for_filters.columns:
+                    unique_supplied_by = sorted(df_for_filters['Supplied By'].dropna().astype(str).unique())
+                    if unique_supplied_by:
+                        st.session_state.selected_supplied_by = st.multiselect(
+                            "Filter by Supplied By:", options=unique_supplied_by,
+                            default=st.session_state.selected_supplied_by, key="supplied_by_filter"
+                        )
+            
+            st.session_state.sort_by_column = st.selectbox(
+                "Sort jobs by:",
+                options=["Install - Date", "Days Behind"],
+                index=0 if st.session_state.sort_by_column == "Install - Date" else 1,
+                key="sort_by_select"
+            )
+        else:
+            st.info("No jobs currently require attention to apply filters.")
+
+    with st.expander("🚚 Truck Weight Calculator"):
+        # Create a list of jobs to select from, combining Job Name and Production #
+        # Use the full analyzed dataframe so any job can be selected
+        df_for_ui_elements['display_name'] = df_for_ui_elements['Job Name'].astype(str) + " (PO: " + df_for_ui_elements['Production #'].astype(str) + ")"
+        job_options = df_for_ui_elements['display_name'].tolist()
+        selected_jobs_display_names = st.multiselect("Select jobs for this truckload:", options=job_options)
         
-        st.session_state.sort_by_column = st.selectbox(
-            "Sort jobs by:",
-            options=["Install - Date", "Days Behind"],
-            index=0 if st.session_state.sort_by_column == "Install - Date" else 1,
-            key="sort_by_select"
-        )
-    else:
-        st.info("No jobs currently require attention to apply filters.")
+        if selected_jobs_display_names:
+            # Get the data for the selected jobs
+            selected_jobs_df = df_for_ui_elements[df_for_ui_elements['display_name'].isin(selected_jobs_display_names)]
+            total_sqft = selected_jobs_df['Total Job SqFT'].sum()
+            total_weight = total_sqft * LBS_PER_SQFT
+
+            # Display the results
+            calc_cols = st.columns(3)
+            calc_cols[0].metric("Jobs Selected", len(selected_jobs_df))
+            calc_cols[1].metric("Total Square Footage", f"{total_sqft:,.2f} sqft")
+            calc_cols[2].metric("Estimated Weight", f"{total_weight:,.2f} lbs")
 
 
 # --- Display Interactive "todo" List ---
@@ -593,9 +622,9 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
         
         # Apply Filters
         priority_jobs_df_filtered = priority_jobs_df_all_original.copy()
-        if st.session_state.selected_next_activities and 'Next Sched. - Activity' in priority_jobs_df_filtered.columns:
+        if st.session_state.get('selected_primary_issues'):
             priority_jobs_df_filtered = priority_jobs_df_filtered[
-                priority_jobs_df_filtered['Next Sched. - Activity'].isin(st.session_state.selected_next_activities)
+                priority_jobs_df_filtered['Primary Issue'].isin(st.session_state.selected_primary_issues)
             ]
         if st.session_state.selected_salespersons and 'Salesperson' in priority_jobs_df_filtered.columns:
             priority_jobs_df_filtered = priority_jobs_df_filtered[
