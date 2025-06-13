@@ -6,7 +6,7 @@ import re
 from io import StringIO
 import json # For parsing JSON from secrets or uploaded file
 import math # For pagination
-from datetime import datetime # For timestamping notes
+from datetime import datetime, timedelta # For timestamping notes and week calculation
 
 # --- Page Configuration ---
 st.set_page_config(layout="wide", page_title="Job Issue Detector", page_icon="⚙️")
@@ -495,7 +495,7 @@ if 'resolved_job_indices' not in st.session_state: st.session_state.resolved_job
 if 'snoozed_job_indices' not in st.session_state: st.session_state.snoozed_job_indices = set()
 if 'assignments' not in st.session_state: st.session_state.assignments = {} 
 if 'current_page' not in st.session_state: st.session_state.current_page = 0
-if 'selected_next_activities' not in st.session_state: st.session_state.selected_next_activities = []
+if 'selected_primary_issues' not in st.session_state: st.session_state.selected_primary_issues = []
 if 'selected_salespersons' not in st.session_state: st.session_state.selected_salespersons = []
 if 'selected_supplied_by' not in st.session_state: st.session_state.selected_supplied_by = []
 if 'sort_by_column' not in st.session_state: st.session_state.sort_by_column = "Install - Date"
@@ -588,26 +588,31 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
             st.info("No jobs currently require attention to apply filters.")
 
     with st.expander("🚚 Truck Weight Calculator"):
-        selected_ship_date = st.date_input("Select a Ship Date to calculate weight:")
-        if selected_ship_date:
-            # Normalize selected date to match the format in the DataFrame
-            selected_ship_date_ts = pd.to_datetime(selected_ship_date)
-            # Filter the main DataFrame for jobs on the selected ship date
+        selected_date_for_week = st.date_input("Select any date within the desired ship week:")
+        if selected_date_for_week:
+            # Calculate Monday (start) and Sunday (end) of the selected week
+            start_of_week = selected_date_for_week - timedelta(days=selected_date_for_week.weekday())
+            end_of_week = start_of_week + timedelta(days=6)
+            st.info(f"Calculating weight for week: {start_of_week.strftime('%Y-%m-%d')} to {end_of_week.strftime('%Y-%m-%d')}")
+
             if 'Ship - Date' in df_for_ui_elements.columns:
                 # Ensure the 'Ship - Date' column is in datetime format before comparison
-                jobs_for_date = df_for_ui_elements[df_for_ui_elements['Ship - Date'].dt.date == selected_ship_date]
+                jobs_for_week = df_for_ui_elements[
+                    (df_for_ui_elements['Ship - Date'].dt.date >= start_of_week) &
+                    (df_for_ui_elements['Ship - Date'].dt.date <= end_of_week)
+                ]
                 
-                if not jobs_for_date.empty:
-                    total_sqft = jobs_for_date['Total Job SqFT'].sum()
+                if not jobs_for_week.empty:
+                    total_sqft = jobs_for_week['Total Job SqFT'].sum()
                     total_weight = total_sqft * LBS_PER_SQFT
                     
                     calc_cols = st.columns(3)
-                    calc_cols[0].metric("Jobs on this Ship Date", len(jobs_for_date))
+                    calc_cols[0].metric("Jobs in Selected Week", len(jobs_for_week))
                     calc_cols[1].metric("Total Square Footage", f"{total_sqft:,.2f} sqft")
                     calc_cols[2].metric("Estimated Weight", f"{total_weight:,.2f} lbs")
-                    st.dataframe(jobs_for_date[['Job Name', 'Production #', 'Total Job SqFT']])
+                    st.dataframe(jobs_for_week[['Job Name', 'Production #', 'Total Job SqFT', 'Ship - Date']].sort_values(by='Ship - Date'))
                 else:
-                    st.info(f"No jobs found for ship date: {selected_ship_date.strftime('%Y-%m-%d')}")
+                    st.info(f"No jobs found for the selected week.")
             else:
                 st.warning("'Ship - Date' column not found in the data.")
 
