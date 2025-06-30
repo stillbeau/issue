@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timedelta
 
 # --- Page Configuration ---
-st.set_page_config(layout="wide", page_title="Job Profitability Calculator", page_icon="�")
+st.set_page_config(layout="wide", page_title="Job Profitability Calculator", page_icon="💰")
 
 # --- App Title ---
 st.title("💰 Job Profitability Calculator")
@@ -54,10 +54,10 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
         # --- Preprocessing Step ---
         # Define columns to convert to numeric, using the correct column names from the sheet
         numeric_cols = {
-            'Total Job Price $': 'Revenue', # CORRECTED: Using this for revenue
+            'Total Job Price $': 'Revenue',
             'Job Throughput - Total COGS': 'Cost_From_Plant',
             'Job Throughput - Total Job Labor': 'Labor_Cost_From_Plant',
-            'Job Throughput - Job SqFt': 'Total_Job_SqFt'
+            'Total Job SqFT': 'Total_Job_SqFt' # CORRECTED: Using the correct SqFt column
         }
         
         for col_original, col_new in numeric_cols.items():
