@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timedelta
 
 # --- Page Configuration ---
-st.set_page_config(layout="wide", page_title="Job Profitability Calculator", page_icon="�")
+st.set_page_config(layout="wide", page_title="Job Profitability Calculator", page_icon="💰")
 
 # --- App Title ---
 st.title("💰 Job Profitability Calculator")
@@ -55,7 +55,7 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
         # Define columns to convert to numeric, using the correct column names from the sheet
         numeric_cols = {
             'Total Job Price $': 'Revenue',
-            'Job Throughput - Job Plant Invoice': 'Cost_From_Plant', # CORRECTED: Using Job Plant Invoice for cost
+            'Job Throughput - Job Plant Invoice': 'Cost_From_Plant',
             'Total Job SqFT': 'Total_Job_SqFt'
         }
         
@@ -92,15 +92,16 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
             axis=1
         )
         
-        # Total Cost for the Branch is the cost from plant (Job Plant Invoice) plus external install cost
         df_completed['Total Branch Cost'] = df_completed['Cost_From_Plant'] + df_completed['Install Cost']
-        
         df_completed['Branch Profit'] = df_completed['Revenue'] - df_completed['Total Branch Cost']
         
         df_completed['Branch Profit Margin %'] = df_completed.apply(
             lambda row: (row['Branch Profit'] / row['Revenue']) * 100 if row['Revenue'] != 0 else 0,
             axis=1
         )
+
+        # --- Add Link Column ---
+        df_completed['Job Link'] = MORAWARE_SEARCH_URL + df_completed['Production #'].astype(str)
         
         return df_completed
 
@@ -166,7 +167,7 @@ if st.session_state.df_profit is not None and not st.session_state.df_profit.emp
     
     # Define columns to show in the main table
     display_cols = [
-        'Job Name', 'Production #', 'Revenue', 'Total Branch Cost', 'Branch Profit', 'Branch Profit Margin %',
+        'Production #', 'Job Link', 'Job Name', 'Revenue', 'Total Branch Cost', 'Branch Profit', 'Branch Profit Margin %',
         'Cost_From_Plant', 'Install Cost', 'Total_Job_SqFt', 'Order Type'
     ]
     display_cols_exist = [col for col in display_cols if col in df_display.columns]
@@ -178,15 +179,21 @@ if st.session_state.df_profit is not None and not st.session_state.df_profit.emp
     })
     
     st.dataframe(
-        display_df.style.format({
-            'Revenue': '${:,.2f}',
-            'Total Branch Cost': '${:,.2f}',
-            'Branch Profit': '${:,.2f}',
-            'Profit Margin %': '{:.2f}%',
-            'Cost from Plant': '${:,.2f}',
-            'Install Cost': '${:,.2f}',
-            'Total Job SqFt': '{:,.2f}'
-        }),
+        display_df,
+        column_config={
+            "Job Link": st.column_config.LinkColumn(
+                "Job Link",
+                help="Click to search job in Moraware",
+                display_text="Open ↗"
+            ),
+            'Revenue': st.column_config.NumberColumn(format='$%.2f'),
+            'Total Branch Cost': st.column_config.NumberColumn(format='$%.2f'),
+            'Branch Profit': st.column_config.NumberColumn(format='$%.2f'),
+            'Profit Margin %': st.column_config.NumberColumn(format='%.2f%%'),
+            'Cost from Plant': st.column_config.NumberColumn(format='$%.2f'),
+            'Install Cost': st.column_config.NumberColumn(format='$%.2f'),
+            'Total Job SqFt': st.column_config.NumberColumn(format='%.2f')
+        },
         height=600,
         use_container_width=True
     )
