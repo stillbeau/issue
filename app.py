@@ -209,4 +209,3 @@ if st.session_state.df_profit is not None and not st.session_state.df_profit.emp
 
     with calc_tab2:
         st.info("The Truck Weight Calculator can be re-enabled and updated here if needed.")
-�
