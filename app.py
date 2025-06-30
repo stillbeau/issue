@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timedelta
 
 # --- Page Configuration ---
-st.set_page_config(layout="wide", page_title="Job Profitability Calculator", page_icon="💰")
+st.set_page_config(layout="wide", page_title="Job Profitability Calculator", page_icon="�")
 
 # --- App Title ---
 st.title("💰 Job Profitability Calculator")
@@ -52,9 +52,9 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
         df = pd.DataFrame(data)
 
         # --- Preprocessing Step ---
-        # Define columns to convert to numeric, using the "Job Throughput" and "Orders" names
+        # Define columns to convert to numeric, using the correct column names from the sheet
         numeric_cols = {
-            'Orders - Total Price': 'Revenue',
+            'Total Job Price $': 'Revenue', # CORRECTED: Using this for revenue
             'Job Throughput - Total COGS': 'Cost_From_Plant',
             'Job Throughput - Total Job Labor': 'Labor_Cost_From_Plant',
             'Job Throughput - Job SqFt': 'Total_Job_SqFt'
@@ -183,7 +183,7 @@ if st.session_state.df_profit is not None and not st.session_state.df_profit.emp
             'Revenue': '${:,.2f}',
             'Total Branch Cost': '${:,.2f}',
             'Branch Profit': '${:,.2f}',
-            'Branch Profit Margin %': '{:.2f}%',
+            'Profit Margin %': '{:.2f}%',
             'Cost from Plant (COGS)': '${:,.2f}',
             'Install Cost': '${:,.2f}',
             'Total Job SqFt': '{:,.2f}'
@@ -210,3 +210,4 @@ if st.session_state.df_profit is not None and not st.session_state.df_profit.emp
 
     with calc_tab2:
         st.info("The Truck Weight Calculator can be re-enabled and updated here if needed.")
+�
