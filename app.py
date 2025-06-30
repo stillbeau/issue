@@ -34,7 +34,7 @@ def get_google_creds():
 
 @st.cache_data(ttl=300)
 def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
-    """Loads and preprocesses the full job data, then calculates profitability for completed jobs."""
+    """Loads, preprocesses, and calculates profitability for the job data."""
     if creds_dict is None:
         st.error("Google credentials not provided or invalid.")
         return None, None
@@ -80,21 +80,24 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
 
         df['Job Link'] = MORAWARE_SEARCH_URL + df['Production #'].astype(str)
         
-        # --- Profitability Calculation on a SUBSET of data ---
+        # --- Profitability Calculation on ALL data for forecasting ---
+        df['Install Cost'] = df.apply(
+            lambda row: row['Total_Job_SqFt'] * INSTALL_COST_PER_SQFT 
+            if 'pickup' not in str(row.get('Order Type', '')).lower().replace('-', '').replace(' ', '') else 0,
+            axis=1
+        )
+        df['Total Branch Cost'] = df['Cost_From_Plant'] + df['Install Cost'] + df['Rework_Cost']
+        df['Branch Profit'] = df['Revenue'] - df['Total Branch Cost']
+        df['Branch Profit Margin %'] = df.apply(
+            lambda row: (row['Branch Profit'] / row['Revenue']) * 100 if row['Revenue'] != 0 else 0,
+            axis=1
+        )
+
+        # --- Create a separate DataFrame for completed jobs for the main dashboard ---
         df_completed = df[df['Invoice - Status'].astype(str).str.lower().str.strip() == 'complete'].copy()
 
-        if not df_completed.empty:
-            df_completed['Install Cost'] = df_completed.apply(
-                lambda row: row['Total_Job_SqFt'] * INSTALL_COST_PER_SQFT 
-                if 'pickup' not in str(row.get('Order Type', '')).lower().replace('-', '').replace(' ', '') else 0,
-                axis=1
-            )
-            df_completed['Total Branch Cost'] = df_completed['Cost_From_Plant'] + df_completed['Install Cost'] + df_completed['Rework_Cost']
-            df_completed['Branch Profit'] = df_completed['Revenue'] - df_completed['Total Branch Cost']
-            df_completed['Branch Profit Margin %'] = df_completed.apply(
-                lambda row: (row['Branch Profit'] / row['Revenue']) * 100 if row['Revenue'] != 0 else 0,
-                axis=1
-            )
+        if df_completed.empty:
+            st.info("No jobs with 'Invoice - Status' as 'Complete' were found. Profitability dashboard will be based on 0 completed jobs.")
         
         return df, df_completed # Return BOTH full df and completed df
 
@@ -223,8 +226,14 @@ if st.session_state.df_profit is not None and st.session_state.df_full is not No
                 if not future_templates_df.empty:
                     st.write("**Weekly Template Forecast**")
                     future_templates_df['Week Start'] = future_templates_df['Template - Date'].dt.to_period('W').apply(lambda p: p.start_time).dt.date
-                    weekly_summary = future_templates_df.groupby('Week Start').agg(Jobs=('Job Name', 'count'), SqFt=('Total_Job_SqFt', 'sum'), Value=('Revenue', 'sum')).reset_index()
-                    st.dataframe(weekly_summary.style.format({'SqFt': '{:,.2f}', 'Value': '${:,.2f}'}), use_container_width=True)
+                    weekly_summary = future_templates_df.groupby('Week Start').agg(
+                        Jobs=('Job Name', 'count'),
+                        SqFt=('Total_Job_SqFt', 'sum'),
+                        Value=('Revenue', 'sum'),
+                        Profit=('Branch Profit', 'sum')
+                    ).reset_index()
+                    weekly_summary['Margin %'] = weekly_summary.apply(lambda row: (row['Profit'] / row['Value']) * 100 if row['Value'] != 0 else 0, axis=1)
+                    st.dataframe(weekly_summary.style.format({'SqFt': '{:,.2f}', 'Value': '${:,.2f}', 'Profit': '${:,.2f}', 'Margin %': '{:.2f}%'}), use_container_width=True)
                 else:
                     st.info("No upcoming templates found in the data.")
             else:
@@ -239,8 +248,14 @@ if st.session_state.df_profit is not None and st.session_state.df_full is not No
                 st.subheader("Weekly Production Forecast (by RTF Date)")
                 rtf_df = df_full_display[df_full_display['Ready to Fab - Date'].notna()].copy()
                 rtf_df['Week Start'] = rtf_df['Ready to Fab - Date'].dt.to_period('W').apply(lambda p: p.start_time).dt.date
-                weekly_rtf_summary = rtf_df.groupby('Week Start').agg(Jobs=('Job Name', 'count'), SqFt=('Total_Job_SqFt', 'sum'), Value=('Revenue', 'sum')).reset_index().sort_values(by='Week Start', ascending=False)
-                st.dataframe(weekly_rtf_summary.style.format({'SqFt': '{:,.2f}', 'Value': '${:,.2f}'}), use_container_width=True)
+                weekly_rtf_summary = rtf_df.groupby('Week Start').agg(
+                    Jobs=('Job Name', 'count'),
+                    SqFt=('Total_Job_SqFt', 'sum'),
+                    Value=('Revenue', 'sum'),
+                    Profit=('Branch Profit', 'sum')
+                ).reset_index().sort_values(by='Week Start', ascending=False)
+                weekly_rtf_summary['Margin %'] = weekly_rtf_summary.apply(lambda row: (row['Profit'] / row['Value']) * 100 if row['Value'] != 0 else 0, axis=1)
+                st.dataframe(weekly_rtf_summary.style.format({'SqFt': '{:,.2f}', 'Value': '${:,.2f}', 'Profit': '${:,.2f}', 'Margin %': '{:.2f}%'}), use_container_width=True)
             else:
                 st.warning("'Ready to Fab - Date' column not found.")
 
