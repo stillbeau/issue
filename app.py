@@ -25,6 +25,7 @@ MORAWARE_SEARCH_URL = "https://floformcountertops.moraware.net/sys/search?&searc
 SNOOZE_DAYS = 1
 RESOLVE_EXPIRY_DAYS = 5
 LBS_PER_SQFT = 20.0
+INSTALL_COST_PER_SQFT = 15.0 # New constant for install cost
 
 # Define completion and cancellation terms globally for helper functions
 COMPLETION_TERMS = ['complete', 'completed', 'done', 'installed', 'invoiced', 'paid', 'sent', 'received', 'closed', 'fabricated']
@@ -622,16 +623,19 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
                     # Calculate Stone metrics
                     stone_sqft = stone_jobs['Total Job SqFT'].sum()
                     stone_weight = stone_sqft * LBS_PER_SQFT
+                    stone_install_cost = stone_sqft * INSTALL_COST_PER_SQFT
                     
                     # Calculate Laminate metrics
                     laminate_sqft = laminate_jobs['Total Job SqFT'].sum()
+                    laminate_install_cost = laminate_sqft * INSTALL_COST_PER_SQFT
 
                     st.markdown("---")
                     st.subheader("Stone Jobs on Truck")
-                    calc_cols_stone = st.columns(3)
+                    calc_cols_stone = st.columns(4)
                     calc_cols_stone[0].metric("Stone Jobs", len(stone_jobs))
                     calc_cols_stone[1].metric("Stone SqFt", f"{stone_sqft:,.2f} sqft")
                     calc_cols_stone[2].metric("Estimated Stone Weight", f"{stone_weight:,.2f} lbs")
+                    calc_cols_stone[3].metric("Estimated Install Cost", f"${stone_install_cost:,.2f}")
                     st.dataframe(stone_jobs[['Job Name', 'Production #', 'Total Job SqFT', 'Ship - Date']].sort_values(by='Ship - Date'))
                     
                     st.markdown("---")
@@ -639,6 +643,7 @@ if st.session_state.df_analyzed is not None and not st.session_state.df_analyzed
                     calc_cols_lam = st.columns(3)
                     calc_cols_lam[0].metric("Laminate Jobs", len(laminate_jobs))
                     calc_cols_lam[1].metric("Laminate SqFt", f"{laminate_sqft:,.2f} sqft")
+                    calc_cols_lam[2].metric("Estimated Install Cost", f"${laminate_install_cost:,.2f}")
                     st.dataframe(laminate_jobs[['Job Name', 'Production #', 'Total Job SqFT', 'Ship - Date']].sort_values(by='Ship - Date'))
 
                 else:
