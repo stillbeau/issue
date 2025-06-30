@@ -88,7 +88,7 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
         # --- Profitability Calculation Step (on completed jobs only) ---
         df_completed['Install Cost'] = df_completed.apply(
             lambda row: row['Total_Job_SqFt'] * INSTALL_COST_PER_SQFT 
-            if 'pick up' not in str(row.get('Order Type', '')).lower() else 0,
+            if 'pickup' not in str(row.get('Order Type', '')).lower().replace('-', '').replace(' ', '') else 0,
             axis=1
         )
         
