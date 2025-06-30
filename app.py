@@ -11,7 +11,7 @@ st.set_page_config(layout="wide", page_title="Job Profitability Calculator", pag
 
 # --- App Title ---
 st.title("💰 Job Profitability Calculator")
-st.markdown("Analyzes job data from Google Sheets to calculate profitability metrics.")
+st.markdown("Analyzes job data from Google Sheets to calculate profitability metrics for the branch.")
 
 # --- Constants & Configuration ---
 SPREADSHEET_ID = "1iToy3C-Bfn06bjuEM_flHNHwr2k1zMCV1wX9MNKzj38"
@@ -52,16 +52,16 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
         df = pd.DataFrame(data)
 
         # --- Preprocessing Step ---
-        # Define columns to convert to numeric, using the new "Job Throughput" names
+        # Define columns to convert to numeric, using the new "Job Throughput" and "Orders" names
         numeric_cols = {
-            'Orders - Total Price': 'Total_Price',
-            'Job Throughput - Total COGS': 'Total_COGS',
-            'Job Throughput - Total Job Labor': 'Total_Job_Labor',
+            'Orders - Total Price': 'Revenue',
+            'Job Throughput - Total COGS': 'Cost_From_Plant',
             'Job Throughput - Job SqFt': 'Total_Job_SqFt'
         }
         
         for col_original, col_new in numeric_cols.items():
             if col_original in df.columns:
+                # Convert column to string to handle various formats before cleaning
                 df[col_new] = df[col_original].astype(str).str.replace('$', '', regex=False).str.replace(',', '', regex=False)
                 df[col_new] = pd.to_numeric(df[col_new], errors='coerce').fillna(0)
             else:
@@ -74,24 +74,28 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
         if 'Job Name' not in df.columns: df['Job Name'] = 'Unknown'
         
         # Convert date columns
-        # Assuming these names are still correct or will be updated by user in sheet
         for col in ['Orders - Sale Date', 'Template - Date', 'Ship - Date']:
              if col in df.columns:
                  df[col] = pd.to_datetime(df[col], errors='coerce')
 
 
         # --- Profitability Calculation Step ---
+        # Calculate Install Cost based on Order Type
         df['Install Cost'] = df.apply(
             lambda row: row['Total_Job_SqFt'] * INSTALL_COST_PER_SQFT 
             if 'pick up' not in str(row.get('Order Type', '')).lower() else 0,
             axis=1
         )
         
-        df['Total Cost'] = df['Total_COGS'] + df['Total_Job_Labor'] + df['Install Cost']
-        df['Profit'] = df['Total_Price'] - df['Total Cost']
+        # Calculate Total Cost for the Branch
+        df['Total Branch Cost'] = df['Cost_From_Plant'] + df['Install Cost']
         
-        df['Profit Margin %'] = df.apply(
-            lambda row: (row['Profit'] / row['Total_Price']) * 100 if row['Total_Price'] != 0 else 0,
+        # Calculate Branch Profit
+        df['Branch Profit'] = df['Revenue'] - df['Total Branch Cost']
+        
+        # Calculate Branch Profit Margin %
+        df['Branch Profit Margin %'] = df.apply(
+            lambda row: (row['Branch Profit'] / row['Revenue']) * 100 if row['Revenue'] != 0 else 0,
             axis=1
         )
         
@@ -140,47 +144,43 @@ else:
 if st.session_state.df_profit is not None and not st.session_state.df_profit.empty:
     df_display = st.session_state.df_profit
 
-    st.header("📊 Profitability Summary")
+    st.header("📊 Branch Profitability Summary")
     
     # Summary Metrics
-    total_revenue = df_display['Total_Price'].sum()
-    total_profit = df_display['Profit'].sum()
+    total_revenue = df_display['Revenue'].sum()
+    total_profit = df_display['Branch Profit'].sum()
     avg_margin = (total_profit / total_revenue) * 100 if total_revenue != 0 else 0
     
     summary_cols = st.columns(3)
     summary_cols[0].metric("Total Revenue", f"${total_revenue:,.2f}")
-    summary_cols[1].metric("Total Profit", f"${total_profit:,.2f}")
-    summary_cols[2].metric("Average Profit Margin", f"{avg_margin:.2f}%")
+    summary_cols[1].metric("Total Branch Profit", f"${total_profit:,.2f}")
+    summary_cols[2].metric("Average Branch Profit Margin", f"{avg_margin:.2f}%")
 
     st.markdown("---")
     
     # Display the detailed profitability table
     st.subheader("Detailed Job Profitability")
     
-    # Define columns to show in the main table, using the new internal names
+    # Define columns to show in the main table
     display_cols = [
-        'Job Name', 'Production #', 'Total_Price', 'Total Cost', 'Profit', 'Profit Margin %',
-        'Total_COGS', 'Total_Job_Labor', 'Install Cost', 'Total_Job_SqFt', 'Order Type'
+        'Job Name', 'Production #', 'Revenue', 'Total Branch Cost', 'Branch Profit', 'Branch Profit Margin %',
+        'Cost_From_Plant', 'Install Cost', 'Total_Job_SqFt', 'Order Type'
     ]
-    # Filter to only include columns that actually exist in the dataframe
     display_cols_exist = [col for col in display_cols if col in df_display.columns]
 
-    # Rename columns for display
+    # Rename columns for a more user-friendly display
     display_df = df_display[display_cols_exist].rename(columns={
-        'Total_Price': 'Total Price',
-        'Total_COGS': 'Total COGS',
-        'Total_Job_Labor': 'Total Job Labor',
+        'Cost_From_Plant': 'Cost from Plant (COGS)',
         'Total_Job_SqFt': 'Total Job SqFt'
     })
     
     st.dataframe(
         display_df.style.format({
-            'Total Price': '${:,.2f}',
-            'Total Cost': '${:,.2f}',
-            'Profit': '${:,.2f}',
-            'Profit Margin %': '{:.2f}%',
-            'Total COGS': '${:,.2f}',
-            'Total Job Labor': '${:,.2f}',
+            'Revenue': '${:,.2f}',
+            'Total Branch Cost': '${:,.2f}',
+            'Branch Profit': '${:,.2f}',
+            'Branch Profit Margin %': '{:.2f}%',
+            'Cost from Plant (COGS)': '${:,.2f}',
             'Install Cost': '${:,.2f}',
             'Total Job SqFt': '{:,.2f}'
         }),
@@ -191,7 +191,6 @@ if st.session_state.df_profit is not None and not st.session_state.df_profit.emp
     # --- Calculators Section ---
     st.markdown("---")
     st.header("🛠️ Forecasts & Calculators")
-    # Using tabs for a cleaner layout
     calc_tab1, calc_tab2 = st.tabs(["🗓️ Upcoming Template Forecast", "🚚 Truck Weight Calculator"])
 
     with calc_tab1:
@@ -204,7 +203,7 @@ if st.session_state.df_profit is not None and not st.session_state.df_profit.emp
                 weekly_summary = future_templates_df.groupby('Week Start').agg(
                     Total_Jobs=('Job Name', 'count'),
                     Total_SqFt=('Total_Job_SqFt', 'sum'),
-                    Total_Value=('Total_Price', 'sum')
+                    Total_Value=('Revenue', 'sum')
                 ).reset_index()
                 st.dataframe(weekly_summary.style.format({'Total_SqFt': '{:,.2f}', 'Total_Value': '${:,.2f}'}))
                 
@@ -213,7 +212,7 @@ if st.session_state.df_profit is not None and not st.session_state.df_profit.emp
                 monthly_summary = future_templates_df.groupby('Month').agg(
                     Total_Jobs=('Job Name', 'count'),
                     Total_SqFt=('Total_Job_SqFt', 'sum'),
-                    Total_Value=('Total_Price', 'sum')
+                    Total_Value=('Revenue', 'sum')
                 ).reset_index()
                 monthly_summary['Month'] = monthly_summary['Month'].astype(str)
                 st.dataframe(monthly_summary.style.format({'Total_SqFt': '{:,.2f}', 'Total_Value': '${:,.2f}'}))
