@@ -74,7 +74,8 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
         if 'Job Name' not in df.columns: df['Job Name'] = 'Unknown'
         
         # Convert date columns
-        for col in ['Orders - Sale Date', 'Next Sched. - Date', 'Invoice - Date']:
+        # Assuming these names are still correct or will be updated by user in sheet
+        for col in ['Orders - Sale Date', 'Template - Date', 'Ship - Date']:
              if col in df.columns:
                  df[col] = pd.to_datetime(df[col], errors='coerce')
 
@@ -161,8 +162,11 @@ if st.session_state.df_profit is not None and not st.session_state.df_profit.emp
         'Job Name', 'Production #', 'Total_Price', 'Total Cost', 'Profit', 'Profit Margin %',
         'Total_COGS', 'Total_Job_Labor', 'Install Cost', 'Total_Job_SqFt', 'Order Type'
     ]
+    # Filter to only include columns that actually exist in the dataframe
+    display_cols_exist = [col for col in display_cols if col in df_display.columns]
+
     # Rename columns for display
-    display_df = df_display[display_cols].rename(columns={
+    display_df = df_display[display_cols_exist].rename(columns={
         'Total_Price': 'Total Price',
         'Total_COGS': 'Total COGS',
         'Total_Job_Labor': 'Total Job Labor',
@@ -186,9 +190,9 @@ if st.session_state.df_profit is not None and not st.session_state.df_profit.emp
 
     # --- Calculators Section ---
     st.markdown("---")
-    st.header("🛠️ Forecasts")
+    st.header("🛠️ Forecasts & Calculators")
     # Using tabs for a cleaner layout
-    calc_tab1, calc_tab2 = st.tabs(["🗓️ Upcoming Template Forecast", "🚚 Truck Weight Calculator (Future)"])
+    calc_tab1, calc_tab2 = st.tabs(["🗓️ Upcoming Template Forecast", "🚚 Truck Weight Calculator"])
 
     with calc_tab1:
         if 'Template - Date' in df_display.columns:
