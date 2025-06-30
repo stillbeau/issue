@@ -7,11 +7,11 @@ import json
 from datetime import datetime, timedelta
 
 # --- Page Configuration ---
-st.set_page_config(layout="wide", page_title="Job Profitability Calculator", page_icon="💰")
+st.set_page_config(layout="wide", page_title="Profitability Dashboard", page_icon="💰")
 
 # --- App Title ---
-st.title("💰 Job Profitability Calculator")
-st.markdown("Analyzes job data from Google Sheets to calculate profitability metrics for completed jobs.")
+st.title("💰 Job Profitability Dashboard")
+st.markdown("Analyzes job data from Google Sheets to provide profitability insights.")
 
 # --- Constants & Configuration ---
 SPREADSHEET_ID = "1iToy3C-Bfn06bjuEM_flHNHwr2k1zMCV1wX9MNKzj38"
@@ -52,11 +52,12 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
         df = pd.DataFrame(data)
 
         # --- Preprocessing Step ---
-        # Define columns to convert to numeric, using the correct column names from the sheet
+        # Define columns to convert to numeric
         numeric_cols = {
             'Total Job Price $': 'Revenue',
             'Job Throughput - Job Plant Invoice': 'Cost_From_Plant',
-            'Total Job SqFT': 'Total_Job_SqFt'
+            'Total Job SqFT': 'Total_Job_SqFt',
+            'Rework - Stone Shop - Rework Price': 'Rework_Cost' # New Rework Cost column
         }
         
         for col_original, col_new in numeric_cols.items():
@@ -68,10 +69,11 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
                 df[col_new] = 0.0
 
         # Ensure other critical columns exist
-        if 'Order Type' not in df.columns: df['Order Type'] = ''
-        if 'Production #' not in df.columns: df['Production #'] = ''
-        if 'Job Name' not in df.columns: df['Job Name'] = 'Unknown'
-        if 'Invoice - Status' not in df.columns: df['Invoice - Status'] = ''
+        critical_cols = ['Order Type', 'Production #', 'Job Name', 'Invoice - Status', 
+                         'Salesperson', 'Customer Category', 'Rework - Stone Shop - Reason']
+        for col in critical_cols:
+            if col not in df.columns:
+                df[col] = ''
         
         # Convert date columns
         for col in ['Orders - Sale Date', 'Template - Date', 'Ship - Date', 'Invoice - Date']:
@@ -85,14 +87,14 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
             st.info("No jobs with 'Invoice - Status' as 'Complete' were found. Profitability is based on completed jobs only.")
             return pd.DataFrame()
 
-        # --- Profitability Calculation Step (on completed jobs only) ---
+        # --- Profitability Calculation Step ---
         df_completed['Install Cost'] = df_completed.apply(
             lambda row: row['Total_Job_SqFt'] * INSTALL_COST_PER_SQFT 
             if 'pickup' not in str(row.get('Order Type', '')).lower().replace('-', '').replace(' ', '') else 0,
             axis=1
         )
         
-        df_completed['Total Branch Cost'] = df_completed['Cost_From_Plant'] + df_completed['Install Cost']
+        df_completed['Total Branch Cost'] = df_completed['Cost_From_Plant'] + df_completed['Install Cost'] + df_completed['Rework_Cost']
         df_completed['Branch Profit'] = df_completed['Revenue'] - df_completed['Total Branch Cost']
         
         df_completed['Branch Profit Margin %'] = df_completed.apply(
@@ -100,7 +102,6 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
             axis=1
         )
 
-        # --- Add Link Column ---
         df_completed['Job Link'] = MORAWARE_SEARCH_URL + df_completed['Production #'].astype(str)
         
         return df_completed
@@ -144,75 +145,109 @@ if final_creds:
 else:
     st.info("Please configure your Google credentials in Streamlit Secrets or upload your JSON key file to begin.")
 
-# --- Display Profitability Data ---
+# --- Main Display Area ---
 if st.session_state.df_profit is not None and not st.session_state.df_profit.empty:
-    df_display = st.session_state.df_profit
+    df_full = st.session_state.df_profit
 
-    st.header("📊 Branch Profitability Summary (for Completed Jobs)")
+    # --- Sidebar Filters ---
+    st.sidebar.header("Filters")
     
-    # Summary Metrics
-    total_revenue = df_display['Revenue'].sum()
-    total_profit = df_display['Branch Profit'].sum()
-    avg_margin = (total_profit / total_revenue) * 100 if total_revenue != 0 else 0
-    
-    summary_cols = st.columns(3)
-    summary_cols[0].metric("Total Revenue", f"${total_revenue:,.2f}")
-    summary_cols[1].metric("Total Branch Profit", f"${total_profit:,.2f}")
-    summary_cols[2].metric("Average Branch Profit Margin", f"{avg_margin:.2f}%")
+    # Salesperson Filter
+    salesperson_options = sorted(df_full['Salesperson'].dropna().unique())
+    selected_salespersons = st.sidebar.multiselect("Filter by Salesperson:", salesperson_options, default=salesperson_options)
 
-    st.markdown("---")
-    
-    # Display the detailed profitability table
-    st.subheader("Detailed Job Profitability")
-    
-    # Define columns to show in the main table
-    display_cols = [
-        'Production #', 'Job Link', 'Job Name', 'Revenue', 'Total Branch Cost', 'Branch Profit', 'Branch Profit Margin %',
-        'Cost_From_Plant', 'Install Cost', 'Total_Job_SqFt', 'Order Type'
+    # Customer Category Filter
+    category_options = sorted(df_full['Customer Category'].dropna().unique())
+    selected_categories = st.sidebar.multiselect("Filter by Customer Category:", category_options, default=category_options)
+
+    # Apply filters
+    df_filtered = df_full[
+        df_full['Salesperson'].isin(selected_salespersons) &
+        df_full['Customer Category'].isin(selected_categories)
     ]
-    display_cols_exist = [col for col in display_cols if col in df_display.columns]
 
-    # Rename columns for a more user-friendly display
-    display_df = df_display[display_cols_exist].rename(columns={
-        'Cost_From_Plant': 'Cost from Plant',
-        'Total_Job_SqFt': 'Total Job SqFt'
-    })
-    
-    st.dataframe(
-        display_df,
-        column_config={
-            "Job Link": st.column_config.LinkColumn(
-                "Job Link",
-                help="Click to search job in Moraware",
-                display_text="Open ↗"
-            ),
-            'Revenue': st.column_config.NumberColumn(format='$%.2f'),
-            'Total Branch Cost': st.column_config.NumberColumn(format='$%.2f'),
-            'Branch Profit': st.column_config.NumberColumn(format='$%.2f'),
-            'Profit Margin %': st.column_config.NumberColumn(format='%.2f%%'),
-            'Cost from Plant': st.column_config.NumberColumn(format='$%.2f'),
-            'Install Cost': st.column_config.NumberColumn(format='$%.2f'),
-            'Total Job SqFt': st.column_config.NumberColumn(format='%.2f')
-        },
-        height=600,
-        use_container_width=True
-    )
+    # --- Main Dashboard Tabs ---
+    tab1, tab2, tab3 = st.tabs(["📊 Overall Dashboard", "📋 Detailed Profitability Data", "🛠️ Forecasts & Tools"])
 
-    # --- Other Tools Section ---
-    st.markdown("---")
-    st.header("🛠️ Other Tools")
-    # Using tabs for a cleaner layout
-    calc_tab1, calc_tab2 = st.tabs(["🗓️ Upcoming Template Forecast", "🚚 Truck Weight Calculator"])
+    with tab1:
+        st.header("📈 Overall Performance Dashboard")
+        if not df_filtered.empty:
+            # Summary Metrics
+            total_revenue = df_filtered['Revenue'].sum()
+            total_profit = df_filtered['Branch Profit'].sum()
+            avg_margin = (total_profit / total_revenue) * 100 if total_revenue != 0 else 0
+            
+            summary_cols = st.columns(3)
+            summary_cols[0].metric("Total Revenue", f"${total_revenue:,.2f}")
+            summary_cols[1].metric("Total Branch Profit", f"${total_profit:,.2f}")
+            summary_cols[2].metric("Average Profit Margin", f"{avg_margin:.2f}%")
 
-    with calc_tab1:
-        # Note: This forecast uses the full dataset, not just completed jobs.
-        # A separate, non-cached load might be needed if the main df is pre-filtered.
-        # For simplicity, we re-use the loaded df but it might be filtered. A better implementation
-        # would be to pass around the full df and the completed_df separately.
-        # Let's use the full session state dataframe for this.
-        full_df = st.session_state.df_profit # This now only contains completed jobs. We need to reload for forecasts.
-        # For now, let's just make it clear this is based on the completed jobs, which isn't ideal.
-        st.warning("Forecasts are currently based on the loaded set of completed jobs. To see a full forecast, the app logic needs to be extended.")
+            st.markdown("---")
 
-    with calc_tab2:
-        st.info("The Truck Weight Calculator can be re-enabled and updated here if needed.")
+            # Charts
+            chart_cols = st.columns(2)
+            
+            with chart_cols[0]:
+                st.subheader("Profit by Salesperson")
+                profit_by_salesperson = df_filtered.groupby('Salesperson')['Branch Profit'].sum().sort_values(ascending=False)
+                st.bar_chart(profit_by_salesperson)
+
+            with chart_cols[1]:
+                st.subheader("Revenue by Customer Category")
+                revenue_by_category = df_filtered.groupby('Customer Category')['Revenue'].sum().sort_values(ascending=False)
+                st.bar_chart(revenue_by_category)
+            
+            st.markdown("---")
+            
+            st.subheader("Rework Cost Analysis")
+            rework_df = df_filtered[df_filtered['Rework_Cost'] > 0]
+            if not rework_df.empty:
+                rework_summary = rework_df.groupby('Rework - Stone Shop - Reason')['Rework_Cost'].agg(['sum', 'count']).reset_index()
+                rework_summary = rework_summary.rename(columns={'sum': 'Total Rework Cost', 'count': 'Number of Jobs'})
+                st.dataframe(rework_summary.style.format({'Total Rework Cost': '${:,.2f}'}), use_container_width=True)
+            else:
+                st.info("No rework costs recorded for the selected jobs.")
+
+        else:
+            st.warning("No data matches the current filter selection.")
+
+    with tab2:
+        st.header("📋 Detailed Job Profitability")
+        display_cols = [
+            'Production #', 'Job Link', 'Job Name', 'Revenue', 'Total Branch Cost', 'Branch Profit', 'Branch Profit Margin %',
+            'Cost_From_Plant', 'Install Cost', 'Rework_Cost', 'Total_Job_SqFt', 'Order Type', 'Salesperson', 'Customer Category'
+        ]
+        display_cols_exist = [col for col in display_cols if col in df_filtered.columns]
+        display_df = df_filtered[display_cols_exist].rename(columns={
+            'Cost_From_Plant': 'Cost from Plant', 'Total_Job_SqFt': 'Total Job SqFt', 'Rework_Cost': 'Rework Cost'
+        })
+        st.dataframe(display_df, column_config={"Job Link": st.column_config.LinkColumn("Job Link", display_text="Open ↗")}, use_container_width=True)
+
+
+    with tab3:
+        st.header("🛠️ Forecasts & Tools")
+        
+        st.subheader("🗓️ Upcoming Template Forecast")
+        if 'Template - Date' in df_full.columns:
+            future_templates_df = df_full[df_full['Template - Date'] > datetime.now()].copy()
+            if not future_templates_df.empty:
+                st.write("**Weekly Forecast**")
+                future_templates_df['Week Start'] = future_templates_df['Template - Date'].dt.to_period('W').apply(lambda p: p.start_time).dt.date
+                weekly_summary = future_templates_df.groupby('Week Start').agg(Jobs=('Job Name', 'count'), SqFt=('Total_Job_SqFt', 'sum'), Value=('Revenue', 'sum')).reset_index()
+                st.dataframe(weekly_summary.style.format({'SqFt': '{:,.2f}', 'Value': '${:,.2f}'}), use_container_width=True)
+                
+                st.write("**Monthly Forecast**")
+                future_templates_df['Month'] = future_templates_df['Template - Date'].dt.to_period('M')
+                monthly_summary = future_templates_df.groupby('Month').agg(Jobs=('Job Name', 'count'), SqFt=('Total_Job_SqFt', 'sum'), Value=('Revenue', 'sum')).reset_index()
+                monthly_summary['Month'] = monthly_summary['Month'].astype(str)
+                st.dataframe(monthly_summary.style.format({'SqFt': '{:,.2f}', 'Value': '${:,.2f}'}), use_container_width=True)
+            else:
+                st.info("No upcoming templates found in the data.")
+        else:
+            st.warning("'Template - Date' column not found, cannot generate forecast.")
+
+        st.markdown("---")
+
+        st.subheader("🚚 Truck Weight Calculator")
+        st.info("The Truck Weight Calculator can be re-enabled and updated here if needed based on the new data structure.")
+
