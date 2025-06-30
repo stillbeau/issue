@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timedelta
 
 # --- Page Configuration ---
-st.set_page_config(layout="wide", page_title="Job Profitability Calculator", page_icon="💰")
+st.set_page_config(layout="wide", page_title="Job Profitability Calculator", page_icon="�")
 
 # --- App Title ---
 st.title("💰 Job Profitability Calculator")
@@ -55,9 +55,8 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
         # Define columns to convert to numeric, using the correct column names from the sheet
         numeric_cols = {
             'Total Job Price $': 'Revenue',
-            'Job Throughput - Total COGS': 'Cost_From_Plant',
-            'Job Throughput - Total Job Labor': 'Labor_Cost_From_Plant',
-            'Total Job SqFT': 'Total_Job_SqFt' # CORRECTED: Using the correct SqFt column
+            'Job Throughput - Job Plant Invoice': 'Cost_From_Plant', # CORRECTED: Using Job Plant Invoice for cost
+            'Total Job SqFT': 'Total_Job_SqFt'
         }
         
         for col_original, col_new in numeric_cols.items():
@@ -93,7 +92,7 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
             axis=1
         )
         
-        # Total Cost for the Branch is the cost from plant (COGS includes labor) plus external install cost
+        # Total Cost for the Branch is the cost from plant (Job Plant Invoice) plus external install cost
         df_completed['Total Branch Cost'] = df_completed['Cost_From_Plant'] + df_completed['Install Cost']
         
         df_completed['Branch Profit'] = df_completed['Revenue'] - df_completed['Total Branch Cost']
@@ -174,7 +173,7 @@ if st.session_state.df_profit is not None and not st.session_state.df_profit.emp
 
     # Rename columns for a more user-friendly display
     display_df = df_display[display_cols_exist].rename(columns={
-        'Cost_From_Plant': 'Cost from Plant (COGS)',
+        'Cost_From_Plant': 'Cost from Plant',
         'Total_Job_SqFt': 'Total Job SqFt'
     })
     
@@ -184,7 +183,7 @@ if st.session_state.df_profit is not None and not st.session_state.df_profit.emp
             'Total Branch Cost': '${:,.2f}',
             'Branch Profit': '${:,.2f}',
             'Profit Margin %': '{:.2f}%',
-            'Cost from Plant (COGS)': '${:,.2f}',
+            'Cost from Plant': '${:,.2f}',
             'Install Cost': '${:,.2f}',
             'Total Job SqFt': '{:,.2f}'
         }),
@@ -210,3 +209,4 @@ if st.session_state.df_profit is not None and not st.session_state.df_profit.emp
 
     with calc_tab2:
         st.info("The Truck Weight Calculator can be re-enabled and updated here if needed.")
+�
