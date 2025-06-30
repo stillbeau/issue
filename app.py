@@ -73,10 +73,29 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
             if col not in df.columns:
                 df[col] = ''
         
-        date_cols = ['Orders - Sale Date', 'Template - Date', 'Ship - Date', 'Invoice - Date', 'Ready to Fab - Date']
-        for col in date_cols:
-             if col in df.columns:
-                 df[col] = pd.to_datetime(df[col], errors='coerce')
+        # Comprehensive list of date columns to convert
+        date_columns_to_convert = [
+            'Next Sched. - Date', 'Job Creation', 'Template - Date', 'Photo Layout - Date',
+            'Ready to Fab - Date', 'Rework - Date', 'Cutlist - Date', 'Program - Date',
+            'Material Pull - Date', 'Saw - Date', 'CNC - Date', 
+            'Polish/Fab Completion - Date', 'Hone Splash - Date', 'QC - Date',
+            'Ship - Date', 'Product Rcvd - Date', 'Repair - Date', 
+            'Delivery - Date', 'Install - Date', 'Pick Up - Date', 
+            'Service - Date', 'Callback - Date', 'Invoice - Date', 
+            'Build Up - Date', 'Tearout - Date', 'Lift Help - Date', 'Courier - Date',
+            'Tile Order - Date', 'Tile Install - Date',
+            'Collect Final - Date', 'Follow Up Call - Date', 'Orders - Sale Date'
+        ]
+        unique_date_columns = list(dict.fromkeys(date_columns_to_convert))
+
+        common_non_date_placeholders = ['', 'None', 'none', 'NAN', 'NaN', 'nan', 'NA', 'NaT', 'nat', 'Pending', 'TBD', 'No Date', '#N/A', 'NULL', 'null']
+
+        for col_name in unique_date_columns:
+             if col_name in df.columns:
+                df[col_name] = df[col_name].astype(str).str.strip()
+                for placeholder in common_non_date_placeholders:
+                    df[col_name] = df[col_name].replace(placeholder, None, regex=False)
+                df[col_name] = pd.to_datetime(df[col_name], errors='coerce')
 
         df['Job Link'] = MORAWARE_SEARCH_URL + df['Production #'].astype(str)
         
@@ -211,10 +230,55 @@ if st.session_state.df_profit is not None and st.session_state.df_full is not No
 
     with tab2:
         st.header("📋 Detailed Job Profitability")
-        display_cols = ['Production #', 'Job Link', 'Job Name', 'Revenue', 'Total Branch Cost', 'Branch Profit', 'Branch Profit Margin %', 'Cost_From_Plant', 'Install Cost', 'Rework_Cost', 'Total_Job_SqFt', 'Order Type', 'Salesperson', 'Customer Category']
+        
+        # Add sorting options
+        sort_options = ['Job Name', 'Install - Date', 'Ready to Fab - Date', 'Template - Date', 'Branch Profit']
+        available_sort_options = [opt for opt in sort_options if opt in df_filtered.columns or opt == 'Job Name' or opt == 'Branch Profit']
+        
+        sort_by = st.selectbox("Sort detailed table by:", available_sort_options)
+
+        display_cols = [
+            'Production #', 'Job Link', 'Job Name', 'Revenue', 'Total Branch Cost', 'Branch Profit', 'Branch Profit Margin %',
+            'Cost_From_Plant', 'Install Cost', 'Rework_Cost', 'Total_Job_SqFt', 'Order Type', 'Salesperson', 'Customer Category',
+            'Install - Date', 'Ready to Fab - Date', 'Template - Date' # Add dates for sorting
+        ]
         display_cols_exist = [col for col in display_cols if col in df_filtered.columns]
-        display_df = df_filtered[display_cols_exist].rename(columns={'Cost_From_Plant': 'Cost from Plant', 'Total_Job_SqFt': 'Total Job SqFt', 'Rework_Cost': 'Rework Cost'})
-        st.dataframe(display_df, column_config={"Job Link": st.column_config.LinkColumn("Job Link", display_text="Open ↗")}, use_container_width=True)
+        display_df = df_filtered[display_cols_exist].rename(columns={
+            'Cost_From_Plant': 'Cost from Plant', 
+            'Total_Job_SqFt': 'Total Job SqFt', 
+            'Rework_Cost': 'Rework Cost'
+        })
+
+        # Apply sorting
+        if sort_by in ['Install - Date', 'Ready to Fab - Date', 'Template - Date']:
+            if sort_by in display_df.columns:
+                display_df = display_df.sort_values(by=sort_by, ascending=True, na_position='last')
+        elif sort_by == 'Branch Profit':
+            if 'Branch Profit' in display_df.columns:
+                display_df = display_df.sort_values(by='Branch Profit', ascending=False)
+        else: # Default sort by Job Name
+            if 'Job Name' in display_df.columns:
+                display_df = display_df.sort_values(by='Job Name', ascending=True)
+
+        st.dataframe(
+            display_df, 
+            column_config={
+                "Job Link": st.column_config.LinkColumn("Job Link", display_text="Open ↗"),
+                "Install - Date": st.column_config.DateColumn("Install - Date", format="YYYY-MM-DD"),
+                "Ready to Fab - Date": st.column_config.DateColumn("Ready to Fab - Date", format="YYYY-MM-DD"),
+                "Template - Date": st.column_config.DateColumn("Template - Date", format="YYYY-MM-DD"),
+                "Revenue": st.column_config.NumberColumn(format='$%.2f'),
+                "Total Branch Cost": st.column_config.NumberColumn(format='$%.2f'),
+                "Branch Profit": st.column_config.NumberColumn(format='$%.2f'),
+                "Profit Margin %": st.column_config.NumberColumn(format='%.2f%%'),
+                "Cost from Plant": st.column_config.NumberColumn(format='$%.2f'),
+                "Install Cost": st.column_config.NumberColumn(format='$%.2f'),
+                "Rework Cost": st.column_config.NumberColumn(format='$%.2f'),
+                "Total Job SqFt": st.column_config.NumberColumn(format='%.2f')
+            }, 
+            use_container_width=True
+        )
+
 
     with tab3:
         st.header("🛠️ Forecasts & Tools")
@@ -226,12 +290,7 @@ if st.session_state.df_profit is not None and st.session_state.df_full is not No
                 if not future_templates_df.empty:
                     st.write("**Weekly Template Forecast**")
                     future_templates_df['Week Start'] = future_templates_df['Template - Date'].dt.to_period('W').apply(lambda p: p.start_time).dt.date
-                    weekly_summary = future_templates_df.groupby('Week Start').agg(
-                        Jobs=('Job Name', 'count'),
-                        SqFt=('Total_Job_SqFt', 'sum'),
-                        Value=('Revenue', 'sum'),
-                        Profit=('Branch Profit', 'sum')
-                    ).reset_index()
+                    weekly_summary = future_templates_df.groupby('Week Start').agg(Jobs=('Job Name', 'count'), SqFt=('Total_Job_SqFt', 'sum'), Value=('Revenue', 'sum'), Profit=('Branch Profit', 'sum')).reset_index()
                     weekly_summary['Margin %'] = weekly_summary.apply(lambda row: (row['Profit'] / row['Value']) * 100 if row['Value'] != 0 else 0, axis=1)
                     st.dataframe(weekly_summary.style.format({'SqFt': '{:,.2f}', 'Value': '${:,.2f}', 'Profit': '${:,.2f}', 'Margin %': '{:.2f}%'}), use_container_width=True)
                 else:
@@ -248,12 +307,7 @@ if st.session_state.df_profit is not None and st.session_state.df_full is not No
                 st.subheader("Weekly Production Forecast (by RTF Date)")
                 rtf_df = df_full_display[df_full_display['Ready to Fab - Date'].notna()].copy()
                 rtf_df['Week Start'] = rtf_df['Ready to Fab - Date'].dt.to_period('W').apply(lambda p: p.start_time).dt.date
-                weekly_rtf_summary = rtf_df.groupby('Week Start').agg(
-                    Jobs=('Job Name', 'count'),
-                    SqFt=('Total_Job_SqFt', 'sum'),
-                    Value=('Revenue', 'sum'),
-                    Profit=('Branch Profit', 'sum')
-                ).reset_index().sort_values(by='Week Start', ascending=False)
+                weekly_rtf_summary = rtf_df.groupby('Week Start').agg(Jobs=('Job Name', 'count'), SqFt=('Total_Job_SqFt', 'sum'), Value=('Revenue', 'sum'), Profit=('Branch Profit', 'sum')).reset_index().sort_values(by='Week Start', ascending=False)
                 weekly_rtf_summary['Margin %'] = weekly_rtf_summary.apply(lambda row: (row['Profit'] / row['Value']) * 100 if row['Value'] != 0 else 0, axis=1)
                 st.dataframe(weekly_rtf_summary.style.format({'SqFt': '{:,.2f}', 'Value': '${:,.2f}', 'Profit': '${:,.2f}', 'Margin %': '{:.2f}%'}), use_container_width=True)
             else:
