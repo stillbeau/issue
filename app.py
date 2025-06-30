@@ -37,7 +37,7 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
     """Loads, preprocesses, and calculates profitability for the job data."""
     if creds_dict is None:
         st.error("Google credentials not provided or invalid.")
-        return None, None
+        return None, None, None
 
     try:
         creds = Credentials.from_service_account_info(creds_dict, scopes=['https://www.googleapis.com/auth/spreadsheets'])
@@ -47,7 +47,7 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
         data = worksheet.get_all_records()
         if not data:
             st.info(f"Worksheet '{worksheet_name}' is empty.")
-            return pd.DataFrame(), pd.DataFrame()
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
         
         df = pd.DataFrame(data)
 
@@ -73,29 +73,10 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
             if col not in df.columns:
                 df[col] = ''
         
-        # Comprehensive list of date columns to convert
-        date_columns_to_convert = [
-            'Next Sched. - Date', 'Job Creation', 'Template - Date', 'Photo Layout - Date',
-            'Ready to Fab - Date', 'Rework - Date', 'Cutlist - Date', 'Program - Date',
-            'Material Pull - Date', 'Saw - Date', 'CNC - Date', 
-            'Polish/Fab Completion - Date', 'Hone Splash - Date', 'QC - Date',
-            'Ship - Date', 'Product Rcvd - Date', 'Repair - Date', 
-            'Delivery - Date', 'Install - Date', 'Pick Up - Date', 
-            'Service - Date', 'Callback - Date', 'Invoice - Date', 
-            'Build Up - Date', 'Tearout - Date', 'Lift Help - Date', 'Courier - Date',
-            'Tile Order - Date', 'Tile Install - Date',
-            'Collect Final - Date', 'Follow Up Call - Date', 'Orders - Sale Date'
-        ]
-        unique_date_columns = list(dict.fromkeys(date_columns_to_convert))
-
-        common_non_date_placeholders = ['', 'None', 'none', 'NAN', 'NaN', 'nan', 'NA', 'NaT', 'nat', 'Pending', 'TBD', 'No Date', '#N/A', 'NULL', 'null']
-
-        for col_name in unique_date_columns:
-             if col_name in df.columns:
-                df[col_name] = df[col_name].astype(str).str.strip()
-                for placeholder in common_non_date_placeholders:
-                    df[col_name] = df[col_name].replace(placeholder, None, regex=False)
-                df[col_name] = pd.to_datetime(df[col_name], errors='coerce')
+        date_cols = ['Orders - Sale Date', 'Template - Date', 'Ship - Date', 'Invoice - Date']
+        for col in date_cols:
+             if col in df.columns:
+                 df[col] = pd.to_datetime(df[col], errors='coerce')
 
         df['Job Link'] = MORAWARE_SEARCH_URL + df['Production #'].astype(str)
         
@@ -112,23 +93,27 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
             axis=1
         )
 
-        # --- Create a separate DataFrame for completed jobs for the main dashboard ---
-        df_completed = df[df['Invoice - Status'].astype(str).str.lower().str.strip() == 'complete'].copy()
+        # --- Separate Completed vs. Incomplete Jobs ---
+        completed_mask = df['Invoice - Status'].astype(str).str.lower().str.strip() == 'complete'
+        df_completed = df[completed_mask].copy()
+        df_incomplete = df[~completed_mask].copy()
+        
+        df_incomplete['Exclusion Reason'] = "Invoice Status is not 'Complete'"
 
         if df_completed.empty:
             st.info("No jobs with 'Invoice - Status' as 'Complete' were found. Profitability dashboard will be based on 0 completed jobs.")
         
-        return df, df_completed # Return BOTH full df and completed df
+        return df, df_completed, df_incomplete
 
     except gspread.exceptions.GSpreadException as e:
         if "duplicate" in str(e).lower():
             st.error(f"Error: The header row in '{worksheet_name}' contains duplicate column names. Please ensure all headers are unique.")
         else:
             st.error(f"Error loading Google Sheet: {e}")
-        return None, None
+        return None, None, None
     except Exception as e:
         st.error(f"An unexpected error occurred: {e}")
-        return None, None
+        return None, None, None
 
 # --- Main App UI ---
 
@@ -145,18 +130,20 @@ if not final_creds:
         except Exception as e:
             st.sidebar.error(f"Error reading uploaded file: {e}")
 
-if 'df_full' not in st.session_state:
-    st.session_state.df_full = None
-if 'df_profit' not in st.session_state:
-    st.session_state.df_profit = None
+if 'df_full' not in st.session_state: st.session_state.df_full = None
+if 'df_profit' not in st.session_state: st.session_state.df_profit = None
+if 'df_incomplete' not in st.session_state: st.session_state.df_incomplete = None
+
 
 if final_creds:
     if st.sidebar.button("🔄 Load and Calculate Profitability"):
         with st.spinner("Loading and analyzing job data..."):
-            st.session_state.df_full, st.session_state.df_profit = load_and_process_data(final_creds, SPREADSHEET_ID, DATA_WORKSHEET_NAME)
+            st.session_state.df_full, st.session_state.df_profit, st.session_state.df_incomplete = load_and_process_data(final_creds, SPREADSHEET_ID, DATA_WORKSHEET_NAME)
         
         if st.session_state.df_profit is not None:
             st.success(f"Successfully processed profitability for {len(st.session_state.df_profit)} completed jobs.")
+            if st.session_state.df_incomplete is not None and not st.session_state.df_incomplete.empty:
+                st.warning(f"Found {len(st.session_state.df_incomplete)} jobs that were excluded from profit calculations. See the 'Data Quality Issues' tab for details.")
         else:
             st.error("Failed to load or process data.")
 else:
@@ -166,6 +153,7 @@ else:
 if st.session_state.df_profit is not None and st.session_state.df_full is not None:
     df_profit_display = st.session_state.df_profit
     df_full_display = st.session_state.df_full
+    df_incomplete_display = st.session_state.df_incomplete
 
     # --- Sidebar Filters ---
     st.sidebar.header("Filters")
@@ -191,7 +179,7 @@ if st.session_state.df_profit is not None and st.session_state.df_full is not No
         df_filtered = df_filtered[df_filtered['Customer Category'].isin(selected_categories)]
 
     # --- Main Dashboard Tabs ---
-    tab1, tab2, tab3 = st.tabs(["📊 Overall Dashboard", "📋 Detailed Profitability Data", "🛠️ Forecasts & Tools"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Overall Dashboard", "📋 Detailed Profitability Data", "⚠️ Data Quality Issues", "🛠️ Forecasts & Tools"])
 
     with tab1:
         st.header("📈 Overall Performance Dashboard")
@@ -230,59 +218,24 @@ if st.session_state.df_profit is not None and st.session_state.df_full is not No
 
     with tab2:
         st.header("📋 Detailed Job Profitability")
-        
-        # Add sorting options
-        sort_options = ['Job Name', 'Install - Date', 'Ready to Fab - Date', 'Template - Date', 'Branch Profit']
-        available_sort_options = [opt for opt in sort_options if opt in df_filtered.columns or opt == 'Job Name' or opt == 'Branch Profit']
-        
-        sort_by = st.selectbox("Sort detailed table by:", available_sort_options)
-
-        display_cols = [
-            'Production #', 'Job Link', 'Job Name', 'Revenue', 'Total Branch Cost', 'Branch Profit', 'Branch Profit Margin %',
-            'Cost_From_Plant', 'Install Cost', 'Rework_Cost', 'Total_Job_SqFt', 'Order Type', 'Salesperson', 'Customer Category',
-            'Install - Date', 'Ready to Fab - Date', 'Template - Date' # Add dates for sorting
-        ]
+        display_cols = ['Production #', 'Job Link', 'Job Name', 'Revenue', 'Total Branch Cost', 'Branch Profit', 'Branch Profit Margin %', 'Cost_From_Plant', 'Install Cost', 'Rework_Cost', 'Total_Job_SqFt', 'Order Type', 'Salesperson', 'Customer Category']
         display_cols_exist = [col for col in display_cols if col in df_filtered.columns]
-        display_df = df_filtered[display_cols_exist].rename(columns={
-            'Cost_From_Plant': 'Cost from Plant', 
-            'Total_Job_SqFt': 'Total Job SqFt', 
-            'Rework_Cost': 'Rework Cost'
-        })
-
-        # Apply sorting
-        if sort_by in ['Install - Date', 'Ready to Fab - Date', 'Template - Date']:
-            if sort_by in display_df.columns:
-                display_df = display_df.sort_values(by=sort_by, ascending=True, na_position='last')
-        elif sort_by == 'Branch Profit':
-            if 'Branch Profit' in display_df.columns:
-                display_df = display_df.sort_values(by='Branch Profit', ascending=False)
-        else: # Default sort by Job Name
-            if 'Job Name' in display_df.columns:
-                display_df = display_df.sort_values(by='Job Name', ascending=True)
-
-        st.dataframe(
-            display_df, 
-            column_config={
-                "Job Link": st.column_config.LinkColumn("Job Link", display_text="Open ↗"),
-                "Install - Date": st.column_config.DateColumn("Install - Date", format="YYYY-MM-DD"),
-                "Ready to Fab - Date": st.column_config.DateColumn("Ready to Fab - Date", format="YYYY-MM-DD"),
-                "Template - Date": st.column_config.DateColumn("Template - Date", format="YYYY-MM-DD"),
-                "Revenue": st.column_config.NumberColumn(format='$%.2f'),
-                "Total Branch Cost": st.column_config.NumberColumn(format='$%.2f'),
-                "Branch Profit": st.column_config.NumberColumn(format='$%.2f'),
-                "Profit Margin %": st.column_config.NumberColumn(format='%.2f%%'),
-                "Cost from Plant": st.column_config.NumberColumn(format='$%.2f'),
-                "Install Cost": st.column_config.NumberColumn(format='$%.2f'),
-                "Rework Cost": st.column_config.NumberColumn(format='$%.2f'),
-                "Total Job SqFt": st.column_config.NumberColumn(format='%.2f')
-            }, 
-            use_container_width=True
-        )
-
+        display_df = df_filtered[display_cols_exist].rename(columns={'Cost_From_Plant': 'Cost from Plant', 'Total_Job_SqFt': 'Total Job SqFt', 'Rework_Cost': 'Rework Cost'})
+        st.dataframe(display_df, column_config={"Job Link": st.column_config.LinkColumn("Job Link", display_text="Open ↗")}, use_container_width=True)
 
     with tab3:
+        st.header("⚠️ Data Quality Issues")
+        st.markdown("This table shows jobs that were excluded from the main profitability dashboard because their `Invoice - Status` is not 'Complete'.")
+        if df_incomplete_display is not None and not df_incomplete_display.empty:
+            incomplete_cols = ['Job Name', 'Production #', 'Invoice - Status', 'Exclusion Reason', 'Revenue', 'Cost_From_Plant']
+            incomplete_cols_exist = [col for col in incomplete_cols if col in df_incomplete_display.columns]
+            st.dataframe(df_incomplete_display[incomplete_cols_exist], use_container_width=True)
+        else:
+            st.success("No data quality issues found! All jobs are either complete or have no status conflicts.")
+
+    with tab4:
         st.header("🛠️ Forecasts & Tools")
-        forecast_tab1, forecast_tab2, forecast_tab3 = st.tabs(["🗓️ Template Forecast", "🏭 Production Forecast", "🚚 Truck Weight Calculator"])
+        forecast_tab1, forecast_tab2, forecast_tab3 = st.tabs(["🗓️ Upcoming Template Forecast", "🏭 Production Forecast", "🚚 Truck Weight Calculator"])
 
         with forecast_tab1:
             if 'Template - Date' in df_full_display.columns:
