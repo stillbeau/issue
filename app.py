@@ -180,14 +180,40 @@ with tabs[0]:
         Avg_Margin=('Branch Profit Margin %', 'mean')
     ).sort_values('Total_Profit', ascending=False)
     st.dataframe(mat_lb.style.format({'Total_Profit': '${:,.2f}', 'Avg_Margin': '{:.2f}%'}))
-    st.subheader("Low Profit Alerts")
-    thresh = st.number_input("Margin below (%)", min_value=-100.0, max_value=100.0, value=10.0, step=1.0, key="lp_thresh")
-    low = df[df['Branch Profit Margin %'] < thresh]
-    if not low.empty:
-        st.markdown(f"Jobs with margin below {thresh}%:")
-        st.dataframe(low[['Production #', 'Job Name', 'Branch Profit Margin %', 'Branch Profit']])
-    else:
-        st.write("No low-profit jobs in this selection.")
+    
+    st.markdown("---")
+    st.header("🔍 Profitability Watchlist (Pre-Production Jobs)")
+    
+    pre_production_df = df[df['Ready to Fab - Date'].isna()].copy()
+    
+    watchlist_cols = st.columns(2)
+    with watchlist_cols[0]:
+        st.subheader("Top 10 Highest Profit Jobs")
+        top_10_profit = pre_production_df.sort_values(by='Branch Profit', ascending=False).head(10)
+        st.dataframe(
+            top_10_profit[['Production #', 'Job Link', 'Job Name', 'Branch Profit', 'Revenue', 'Total Branch Cost']],
+            column_config={
+                "Job Link": st.column_config.LinkColumn("Job Link", display_text="Open ↗"),
+                "Branch Profit": st.column_config.NumberColumn(format='$%.2f'),
+                "Revenue": st.column_config.NumberColumn(format='$%.2f'),
+                "Total Branch Cost": st.column_config.NumberColumn(format='$%.2f'),
+            },
+            use_container_width=True
+        )
+
+    with watchlist_cols[1]:
+        st.subheader("Top 10 Lowest Profit Jobs")
+        bottom_10_profit = pre_production_df.sort_values(by='Branch Profit', ascending=True).head(10)
+        st.dataframe(
+            bottom_10_profit[['Production #', 'Job Link', 'Job Name', 'Branch Profit', 'Revenue', 'Total Branch Cost']],
+            column_config={
+                "Job Link": st.column_config.LinkColumn("Job Link", display_text="Open ↗"),
+                "Branch Profit": st.column_config.NumberColumn(format='$%.2f'),
+                "Revenue": st.column_config.NumberColumn(format='$%.2f'),
+                "Total Branch Cost": st.column_config.NumberColumn(format='$%.2f'),
+            },
+            use_container_width=True
+        )
 
 # Tab2: Detailed
 with tabs[1]:
