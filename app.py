@@ -66,7 +66,7 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
                 df[col_new] = df[col_original].astype(str).str.replace('$', '', regex=False).str.replace(',', '', regex=False)
                 df[col_new] = pd.to_numeric(df[col_new], errors='coerce').fillna(0)
             else:
-                st.warning(f"Required column '{col_original}' not found. Calculations may be inaccurate.")
+                # Don't show a warning here, as it can be noisy. The app will handle missing cols gracefully.
                 df[col_new] = 0.0
 
         critical_cols = ['Order Type', 'Production #', 'Job Name', 'Invoice - Status', 
@@ -163,28 +163,28 @@ if st.session_state.df_full is not None and not st.session_state.df_full.empty:
         salesperson_options = sorted(df_for_filters['Salesperson'].dropna().unique())
         selected_salespersons = st.sidebar.multiselect("Filter by Salesperson:", salesperson_options, default=salesperson_options)
     else:
-        st.sidebar.warning("'Salesperson' column not found.")
+        st.sidebar.warning("'Salesperson' column not found in your sheet.")
 
     # Customer Category Filter - Only show if the column exists
     if 'Customer Category' in df_for_filters.columns:
         category_options = sorted(df_for_filters['Customer Category'].dropna().unique())
         selected_categories = st.sidebar.multiselect("Filter by Customer Category:", category_options, default=category_options)
     else:
-        st.sidebar.warning("'Customer Category' column not found.")
+        st.sidebar.warning("'Customer Category' column not found in your sheet.")
 
     # Job Material Filter
     if 'Job Material' in df_for_filters.columns:
         material_options = sorted(df_for_filters['Job Material'].dropna().unique())
         selected_materials = st.sidebar.multiselect("Filter by Job Material:", material_options, default=material_options)
     else:
-        st.sidebar.warning("'Job Material' column not found.")
+        st.sidebar.warning("'Job Material' column not found in your sheet.")
 
     # City Filter
     if 'City' in df_for_filters.columns:
         city_options = sorted(df_for_filters['City'].dropna().unique())
         selected_cities = st.sidebar.multiselect("Filter by City:", city_options, default=city_options)
     else:
-        st.sidebar.warning("'City' column not found.")
+        st.sidebar.warning("'City' column not found in your sheet.")
 
 
     # Apply filters
