@@ -69,7 +69,7 @@ def load_and_process_data(creds_dict):
             df[new] = 0.0
     
     # --- Dates parse ---
-    date_cols = ['Template - Date', 'Ready to Fab - Date', 'Ship - Date', 'Install - Date']
+    date_cols = ['Template - Date', 'Ready to Fab - Date', 'Ship-Blank - Date', 'Install - Date']
     for c in date_cols:
         if c in df:
             df[c] = pd.to_datetime(df[c], errors='coerce')
@@ -95,10 +95,15 @@ def load_and_process_data(creds_dict):
     # --- Stage durations ---
     if 'Ready to Fab - Date' in df.columns and 'Template - Date' in df.columns:
         df['Days_Template_to_RTF'] = (df['Ready to Fab - Date'] - df['Template - Date']).dt.days
-    if 'Ship - Date' in df.columns and 'Ready to Fab - Date' in df.columns:
-        df['Days_RTF_to_Ship'] = (df['Ship - Date'] - df['Ready to Fab - Date']).dt.days
-    if 'Install - Date' in df.columns and 'Ship - Date' in df.columns:
-        df['Days_Ship_to_Install'] = (df['Install - Date'] - df['Ship - Date']).dt.days
+    if 'Ship-Blank - Date' in df.columns and 'Ready to Fab - Date' in df.columns:
+        df['Days_RTF_to_Ship'] = (df['Ship-Blank - Date'] - df['Ready to Fab - Date']).dt.days
+    if 'Install - Date' in df.columns and 'Ship-Blank - Date' in df.columns:
+        df['Days_Ship_to_Install'] = (df['Install - Date'] - df['Ship-Blank - Date']).dt.days
+    
+    # Handle illogical negative durations by converting them to NaN so they are ignored in calculations
+    for col in ['Days_Template_to_RTF', 'Days_RTF_to_Ship', 'Days_Ship_to_Install']:
+        if col in df.columns:
+            df.loc[df[col] < 0, col] = pd.NA
 
     # --- Job link ---
     if 'Production #' in df.columns:
@@ -197,7 +202,7 @@ with tabs[0]:
 # Tab2: Detailed
 with tabs[1]:
     st.header("📋 Detailed Data")
-    cols = ['Production #', 'Job Link', 'Job Name', 'Revenue', 'Branch Profit', 'Branch Profit Margin %', 'Profit Variance']
+    cols = ['Production #', 'Job Link', 'Job Name', 'Revenue', 'Branch Profit', 'Branch Profit Margin %']
     df_disp = df[[c for c in cols if c in df]]
     st.dataframe(
         df_disp, 
@@ -206,7 +211,6 @@ with tabs[1]:
             "Job Link": st.column_config.LinkColumn("Job Link", display_text="Open ↗"),
             "Revenue": st.column_config.NumberColumn(format='$%.2f'),
             "Branch Profit": st.column_config.NumberColumn(format='$%.2f'),
-            "Profit Variance": st.column_config.NumberColumn(format='$%.2f'),
             "Branch Profit Margin %": st.column_config.NumberColumn(format='%.2f%%')
         }
     )
@@ -252,6 +256,17 @@ with tabs[4]:
 # Tab6: Durations
 with tabs[5]:
     st.header("⏱️ Stage Durations")
+    
+    st.subheader("Jobs with Illogical Date Sequences")
+    if 'Ready to Fab - Date' in df.columns and 'Template - Date' in df.columns:
+        illogical_rtf = df[(df['Ready to Fab - Date'].notna()) & (df['Template - Date'].notna()) & (df['Ready to Fab - Date'] < df['Template - Date'])]
+        if not illogical_rtf.empty:
+            st.warning("Found jobs where 'Ready to Fab' date is BEFORE 'Template' date:")
+            st.dataframe(illogical_rtf[['Job Name', 'Production #', 'Template - Date', 'Ready to Fab - Date']])
+        else:
+            st.success("No illogical RTF dates found.")
+    st.markdown("---")
+
     duration_cols_map = {
         'Temp→RTF': 'Days_Template_to_RTF',
         'RTF→Ship': 'Days_RTF_to_Ship',
