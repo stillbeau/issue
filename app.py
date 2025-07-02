@@ -23,7 +23,7 @@ except ImportError:
 
 
 # --- Page Configuration ---
-st.set_page_config(layout="wide", page_title="Profitability Dashboard", page_icon="�")
+st.set_page_config(layout="wide", page_title="Profitability Dashboard", page_icon="💰")
 
 # --- App Title ---
 st.title("💰 Job Profitability Dashboard")
@@ -172,29 +172,21 @@ with tabs[0]:
     c2.metric("Total Profit", f"${total_prof:,.0f}")
     c3.metric("Avg Profit Margin", f"{avg_marg:.1f}%")
     st.markdown("---")
-    st.subheader("Profit by Salesperson")
-    if 'Salesperson' in df.columns:
-        st.bar_chart(df.groupby('Salesperson')['Branch Profit'].sum())
-    st.subheader("Material Brand Leaderboard")
-    if 'Material Brand' in df.columns:
-        mat_lb = df.groupby('Material Brand').agg(
-            Total_Profit=('Branch Profit', 'sum'),
-            Avg_Margin=('Branch Profit Margin %', 'mean')
-        ).sort_values('Total_Profit', ascending=False)
-        st.dataframe(mat_lb.style.format({'Total_Profit': '${:,.2f}', 'Avg_Margin': '{:.2f}%'}))
-    st.subheader("Low Profit Alerts")
-    thresh = st.number_input("Margin below (%)", min_value=-100.0, max_value=100.0, value=10.0, step=1.0, key="lp_thresh")
-    low = df[df['Branch Profit Margin %'] < thresh]
-    if not low.empty:
-        st.markdown(f"Jobs with margin below {thresh}%:")
-        st.dataframe(low[['Production #', 'Job Name', 'Branch Profit Margin %', 'Branch Profit']])
-    else:
-        st.write("No low-profit jobs in this selection.")
+    
+    chart_cols = st.columns(2)
+    with chart_cols[0]:
+        st.subheader("Profit by Salesperson")
+        if 'Salesperson' in df.columns:
+            st.bar_chart(df.groupby('Salesperson')['Branch Profit'].sum())
+    with chart_cols[1]:
+        st.subheader("Profit by Job Material")
+        if 'Material Brand' in df.columns:
+            st.bar_chart(df.groupby('Material Brand')['Branch Profit'].sum())
 
 # Tab2: Detailed
 with tabs[1]:
     st.header("📋 Detailed Data")
-    cols = ['Production #', 'Job Link', 'Job Name', 'Revenue', 'Branch Profit', 'Branch Profit Margin %']
+    cols = ['Production #', 'Job Link', 'Job Name', 'Revenue', 'Branch Profit', 'Branch Profit Margin %', 'Profit Variance']
     df_disp = df[[c for c in cols if c in df]]
     st.dataframe(
         df_disp, 
@@ -203,27 +195,37 @@ with tabs[1]:
             "Job Link": st.column_config.LinkColumn("Job Link", display_text="Open ↗"),
             "Revenue": st.column_config.NumberColumn(format='$%.2f'),
             "Branch Profit": st.column_config.NumberColumn(format='$%.2f'),
+            "Profit Variance": st.column_config.NumberColumn(format='$%.2f'),
             "Branch Profit Margin %": st.column_config.NumberColumn(format='%.2f%%')
         }
     )
 
 # Tab3: Rework
 with tabs[2]:
-    st.header("🔬 Rework Insights")
-    if 'Rework_COGS' in df:
+    st.header("🔬 Rework & Variance Analysis")
+    st.subheader("Rework Cost Breakdown by Reason")
+    if 'Total Rework Cost' in df and 'Rework - Stone Shop - Reason' in df:
         rw = df[df['Total Rework Cost'] > 0]
-        if not rw.empty and 'Rework - Stone Shop - Reason' in rw.columns:
-            agg = rw.groupby('Rework - Stone Shop - Reason')['Total Rework Cost'].agg(['sum', 'count'])
-            agg.columns = ['Total Rework Cost', 'Num Jobs']
-            st.dataframe(agg.style.format({'Total Rework Cost': '${:,.2f}'}))
+        if not rw.empty:
+            agg = rw.groupby('Rework - Stone Shop - Reason').agg(
+                Total_Rework_Cost=('Total Rework Cost', 'sum'),
+                Material_Cost=('Rework_COGS', 'sum'),
+                Labor_Cost=('Rework_Labor', 'sum'),
+                Number_of_Jobs=('Job Name', 'count')
+            ).reset_index()
+            st.dataframe(agg.style.format({'Total_Rework_Cost': '${:,.2f}', 'Material_Cost': '${:,.2f}', 'Labor_Cost': '${:,.2f}'}))
         else:
             st.info("No rework costs recorded in this selection.")
     else:
         st.info("Rework columns not found.")
-    st.subheader("Low Profit in Rework")
-    low_r = df[df['Branch Profit'] < 0]
-    if not low_r.empty:
-        st.dataframe(low_r[['Production #', 'Job Name', 'Branch Profit']])
+
+    st.markdown("---")
+    st.subheader("Profit Variance Analysis")
+    var = df.sort_values('Profit Variance')
+    st.write("**Top 10 Jobs with Negative Variance (Underperformed Estimate)**")
+    st.dataframe(var[['Job Name', 'Production #', 'Original_GM', 'Branch Profit', 'Profit Variance']].head(10))
+    st.write("**Top 10 Jobs with Positive Variance (Overperformed Estimate)**")
+    st.dataframe(var[['Job Name', 'Production #', 'Original_GM', 'Branch Profit', 'Profit Variance']].tail(10))
 
 # Tab4: Phase
 with tabs[3]:
@@ -277,30 +279,24 @@ with tabs[5]:
 with tabs[6]:
     st.header("📅 Forecasts & Trends")
     if 'Template - Date' in df.columns and not df['Template - Date'].dropna().empty:
-        # Ensure the column is datetime before resampling
-        df_trends = df.copy()
-        df_trends['Template - Date'] = pd.to_datetime(df_trends['Template - Date'], errors='coerce')
-        df_trends = df_trends.dropna(subset=['Template - Date'])
+        ts = df.set_index('Template - Date').resample('M').agg(
+            Rev=('Revenue', 'sum'), Jobs=('Production #', 'count')
+        )
+        st.subheader("Monthly Trend: Revenue & Jobs")
+        st.line_chart(ts)
         
-        if not df_trends.empty:
-            ts = df_trends.set_index('Template - Date').resample('M').agg(
-                Rev=('Revenue', 'sum'), Jobs=('Production #', 'count')
-            )
-            st.subheader("Monthly Trend: Revenue & Jobs")
-            st.line_chart(ts)
-            
-            st.subheader("Linear Forecast (Next 3 Months)")
-            if SKLEARN_AVAILABLE:
-                last = ts.tail(6)['Rev'].reset_index(drop=True)
-                if len(last) > 1:
-                    model = LinearRegression().fit(last.index.values.reshape(-1, 1), last.values)
-                    future_idx = pd.DataFrame({'x': range(len(last), len(last) + 3)})
-                    preds = model.predict(future_idx[['x']])
-                    fc = pd.Series(preds, index=pd.date_range(start=ts.index[-1] + relativedelta(months=1), periods=3, freq='M'))
-                    st.line_chart(fc, height=200)
-                else:
-                    st.info("Not enough data for a forecast.")
+        st.subheader("Linear Forecast (Next 3 Months)")
+        if SKLEARN_AVAILABLE:
+            last = ts.tail(6)['Rev'].reset_index(drop=True)
+            if len(last) > 1:
+                model = LinearRegression().fit(last.index.values.reshape(-1, 1), last.values)
+                future_idx = pd.DataFrame({'x': range(len(last), len(last) + 3)})
+                preds = model.predict(future_idx[['x']])
+                fc = pd.Series(preds, index=pd.date_range(start=ts.index[-1] + relativedelta(months=1), periods=3, freq='M'))
+                st.line_chart(fc, height=200)
             else:
-                st.warning("Forecasting requires the 'scikit-learn' library. Please add it to your requirements.txt file.")
+                st.info("Not enough data for a forecast.")
+        else:
+            st.warning("Forecasting requires the 'scikit-learn' library. Please add it to your requirements.txt file.")
     else:
         st.info("Not enough date data for trend analysis.")
