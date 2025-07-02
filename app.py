@@ -68,7 +68,7 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
                 df[col_new] = 0.0
 
         critical_cols = ['Order Type', 'Production #', 'Job Name', 'Invoice - Status', 
-                         'Salesperson', 'Customer Category', 'Rework - Stone Shop - Reason']
+                         'Salesperson', 'Customer Category', 'Rework - Stone Shop - Reason', 'Job Material', 'City']
         for col in critical_cols:
             if col not in df.columns:
                 df[col] = ''
@@ -166,15 +166,29 @@ if st.session_state.df_profit is not None and st.session_state.df_full is not No
         category_options = sorted(df_for_filters['Customer Category'].dropna().unique())
         selected_categories = st.sidebar.multiselect("Filter by Customer Category:", category_options, default=category_options)
 
+    selected_materials = []
+    if 'Job Material' in df_for_filters.columns:
+        material_options = sorted(df_for_filters['Job Material'].dropna().unique())
+        selected_materials = st.sidebar.multiselect("Filter by Job Material:", material_options, default=material_options)
+
+    selected_cities = []
+    if 'City' in df_for_filters.columns:
+        city_options = sorted(df_for_filters['City'].dropna().unique())
+        selected_cities = st.sidebar.multiselect("Filter by City:", city_options, default=city_options)
+
     # Apply filters
     df_filtered = df_profit_display.copy()
     if selected_salespersons:
         df_filtered = df_filtered[df_filtered['Salesperson'].isin(selected_salespersons)]
     if selected_categories:
         df_filtered = df_filtered[df_filtered['Customer Category'].isin(selected_categories)]
+    if selected_materials:
+        df_filtered = df_filtered[df_filtered['Job Material'].isin(selected_materials)]
+    if selected_cities:
+        df_filtered = df_filtered[df_filtered['City'].isin(selected_cities)]
 
     # --- Main Dashboard Tabs ---
-    tab1, tab2, tab3 = st.tabs(["📊 Overall Dashboard", "📋 Detailed Profitability Data", "🛠️ Forecasts & Tools"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Overall Dashboard", "📋 Detailed Profitability Data", "🔬 Phase Analysis", "🛠️ Forecasts & Tools"])
 
     with tab1:
         st.header("📈 Overall Performance Dashboard")
@@ -208,109 +222,37 @@ if st.session_state.df_profit is not None and st.session_state.df_full is not No
                     st.dataframe(rework_summary.style.format({'Total Rework Cost': '${:,.2f}'}), use_container_width=True)
                 else:
                     st.info("No rework costs recorded for the selected jobs.")
-            
-            st.markdown("---")
-            st.header("🔍 Profitability Watchlist (Jobs Sent to Production)")
-            
-            # MODIFIED: Filter for jobs that have a "Ready to Fab - Date"
-            rtf_jobs_df = df_full_display[df_full_display['Ready to Fab - Date'].notna()].copy()
-            
-            watchlist_cols = st.columns(2)
-            with watchlist_cols[0]:
-                st.subheader("Top 10 Highest Profit Jobs")
-                top_10_profit = rtf_jobs_df.sort_values(by='Branch Profit', ascending=False).head(10)
-                st.dataframe(
-                    top_10_profit[['Production #', 'Job Link', 'Job Name', 'Branch Profit', 'Revenue', 'Total Branch Cost']],
-                    column_config={
-                        "Job Link": st.column_config.LinkColumn("Job Link", display_text="Open ↗"),
-                        "Branch Profit": st.column_config.NumberColumn(format='$%.2f'),
-                        "Revenue": st.column_config.NumberColumn(format='$%.2f'),
-                        "Total Branch Cost": st.column_config.NumberColumn(format='$%.2f'),
-                    },
-                    use_container_width=True
-                )
-
-            with watchlist_cols[1]:
-                st.subheader("Top 10 Lowest Profit Jobs")
-                bottom_10_profit = rtf_jobs_df.sort_values(by='Branch Profit', ascending=True).head(10)
-                st.dataframe(
-                    bottom_10_profit[['Production #', 'Job Link', 'Job Name', 'Branch Profit', 'Revenue', 'Total Branch Cost']],
-                    column_config={
-                        "Job Link": st.column_config.LinkColumn("Job Link", display_text="Open ↗"),
-                        "Branch Profit": st.column_config.NumberColumn(format='$%.2f'),
-                        "Revenue": st.column_config.NumberColumn(format='$%.2f'),
-                        "Total Branch Cost": st.column_config.NumberColumn(format='$%.2f'),
-                    },
-                    use_container_width=True
-                )
-
         else:
             st.warning("No data matches the current filter selection.")
 
     with tab2:
         st.header("📋 Detailed Job Profitability")
-        
-        # Add sorting options
-        sort_options = ['Job Name', 'Install - Date', 'Ready to Fab - Date', 'Template - Date', 'Branch Profit', 'Next Sched. - Activity']
-        available_sort_options = [opt for opt in sort_options if opt in df_filtered.columns or opt in ['Job Name', 'Branch Profit']]
-        
-        sort_by = st.selectbox("Sort detailed table by:", available_sort_options)
-
-        display_df = df_filtered.copy()
-
-        # Apply sorting
-        if sort_by == 'Next Sched. - Activity':
-            # Define the custom workflow order
-            activity_order = [
-                'Contact Customer', 'Collect Deposit', 'Template', 'Ready to Fab', 'Cutlist', 
-                'Program', 'Material Pull', 'Saw', 'CNC', 'Polish/Fab Completion', 'QC', 
-                'Plant INV', 'Ship', 'Product Rcvd', 'Pick Up', 'Invoice', 'Collect Final'
-            ]
-            display_df['Next Sched. - Activity'] = pd.Categorical(display_df['Next Sched. - Activity'], categories=activity_order, ordered=True)
-            display_df = display_df.sort_values(by=['Next Sched. - Activity', 'Job Name'])
-        elif sort_by in ['Install - Date', 'Ready to Fab - Date', 'Template - Date']:
-            if sort_by in display_df.columns:
-                display_df = display_df.sort_values(by=sort_by, ascending=True, na_position='last')
-        elif sort_by == 'Branch Profit':
-            if 'Branch Profit' in display_df.columns:
-                display_df = display_df.sort_values(by='Branch Profit', ascending=False)
-        else: # Default sort by Job Name
-            if 'Job Name' in display_df.columns:
-                display_df = display_df.sort_values(by='Job Name', ascending=True)
-
         display_cols = [
             'Production #', 'Job Link', 'Job Name', 'Revenue', 'Total Branch Cost', 'Branch Profit', 'Branch Profit Margin %',
-            'Cost_From_Plant', 'Install Cost', 'Rework_Cost', 'Total_Job_SqFt', 'Order Type', 'Salesperson', 'Customer Category'
+            'Cost_From_Plant', 'Install Cost', 'Rework_Cost', 'Total_Job_SqFt', 'Order Type', 'Salesperson', 'Customer Category', 'Job Material'
         ]
-        display_cols_exist = [col for col in display_cols if col in display_df.columns]
-        display_df_final = display_df[display_cols_exist].rename(columns={
+        display_cols_exist = [col for col in display_cols if col in df_filtered.columns]
+        display_df = df_filtered[display_cols_exist].rename(columns={
             'Cost_From_Plant': 'Cost from Plant', 'Total_Job_SqFt': 'Total Job SqFt', 'Rework_Cost': 'Rework Cost'
         })
-        
-        st.dataframe(
-            display_df_final, 
-            column_config={
-                "Job Link": st.column_config.LinkColumn("Job Link", display_text="Open ↗"),
-                "Revenue": st.column_config.NumberColumn(format='$%.2f'),
-                "Total Branch Cost": st.column_config.NumberColumn(format='$%.2f'),
-                "Branch Profit": st.column_config.NumberColumn(format='$%.2f'),
-                "Profit Margin %": st.column_config.NumberColumn(format='%.2f%%'),
-                "Cost from Plant": st.column_config.NumberColumn(format='$%.2f'),
-                "Install Cost": st.column_config.NumberColumn(format='$%.2f'),
-                "Rework Cost": st.column_config.NumberColumn(format='$%.2f'),
-                "Total Job SqFt": st.column_config.NumberColumn(format='%.2f')
-            }, 
-            use_container_width=True
-        )
-
+        st.dataframe(display_df, column_config={"Job Link": st.column_config.LinkColumn("Job Link", display_text="Open ↗")}, use_container_width=True)
 
     with tab3:
+        st.header("🔬 Phase Profitability Analysis")
+        phase_cols = [col for col in df_filtered.columns if col.startswith('Phase Throughput - ')]
+        if phase_cols:
+            st.dataframe(df_filtered[['Job Name', 'Production #'] + phase_cols], use_container_width=True)
+        else:
+            st.info("No 'Phase Throughput' columns found in the data.")
+
+
+    with tab4:
         st.header("🛠️ Forecasts & Tools")
         forecast_tab1, forecast_tab2 = st.tabs(["🗓️ Upcoming Template Forecast", "🏭 Production Forecast"])
 
         with forecast_tab1:
-            if 'Template - Date' in df_full.columns:
-                future_templates_df = df_full[df_full['Template - Date'] > datetime.now()].copy()
+            if 'Template - Date' in df_full_display.columns:
+                future_templates_df = df_full_display[df_full_display['Template - Date'] > datetime.now()].copy()
                 if not future_templates_df.empty:
                     st.write("**Weekly Template Forecast**")
                     future_templates_df['Week Start'] = future_templates_df['Template - Date'].dt.to_period('W').apply(lambda p: p.start_time).dt.date
@@ -323,13 +265,13 @@ if st.session_state.df_profit is not None and st.session_state.df_full is not No
                 st.warning("'Template - Date' column not found.")
 
         with forecast_tab2:
-            if 'Ready to Fab - Date' in df_full.columns:
+            if 'Ready to Fab - Date' in df_full_display.columns:
                 st.subheader("Recent Jobs Sent to Production")
-                recent_rtf_df = df_full[df_full['Ready to Fab - Date'].notna()].sort_values(by='Ready to Fab - Date', ascending=False)
+                recent_rtf_df = df_full_display[df_full_display['Ready to Fab - Date'].notna()].sort_values(by='Ready to Fab - Date', ascending=False)
                 st.dataframe(recent_rtf_df[['Job Name', 'Production #', 'Ready to Fab - Date', 'Total_Job_SqFt', 'Revenue']].head(15).style.format({'Total_Job_SqFt': '{:,.2f}', 'Revenue': '${:,.2f}'}), use_container_width=True)
 
                 st.subheader("Weekly Production Forecast (by RTF Date)")
-                rtf_df = df_full[df_full['Ready to Fab - Date'].notna()].copy()
+                rtf_df = df_full_display[df_full_display['Ready to Fab - Date'].notna()].copy()
                 rtf_df['Week Start'] = rtf_df['Ready to Fab - Date'].dt.to_period('W').apply(lambda p: p.start_time).dt.date
                 weekly_rtf_summary = rtf_df.groupby('Week Start').agg(Jobs=('Job Name', 'count'), SqFt=('Total_Job_SqFt', 'sum'), Value=('Revenue', 'sum'), Profit=('Branch Profit', 'sum')).reset_index().sort_values(by='Week Start', ascending=False)
                 weekly_rtf_summary['Margin %'] = weekly_rtf_summary.apply(lambda row: (row['Profit'] / row['Value']) * 100 if row['Value'] != 0 else 0, axis=1)
