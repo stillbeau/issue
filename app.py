@@ -69,7 +69,7 @@ def load_and_process_data(creds_dict):
             df[new] = 0.0
     
     # --- Dates parse ---
-    date_cols = ['Template - Date', 'Ready to Fab - Date', 'Ship-Blank - Date', 'Install - Date']
+    date_cols = ['Template - Date', 'Ready to Fab - Date', 'Ship - Date', 'Install - Date']
     for c in date_cols:
         if c in df:
             df[c] = pd.to_datetime(df[c], errors='coerce')
@@ -93,9 +93,12 @@ def load_and_process_data(creds_dict):
         df['Material Color'] = ""
 
     # --- Stage durations ---
-    df['Days_Template_to_RTF'] = (df['Ready to Fab - Date'] - df['Template - Date']).dt.days
-    df['Days_RTF_to_Ship'] = (df['Ship-Blank - Date'] - df['Ready to Fab - Date']).dt.days
-    df['Days_Ship_to_Install'] = (df['Install - Date'] - df['Ship-Blank - Date']).dt.days
+    if 'Ready to Fab - Date' in df.columns and 'Template - Date' in df.columns:
+        df['Days_Template_to_RTF'] = (df['Ready to Fab - Date'] - df['Template - Date']).dt.days
+    if 'Ship - Date' in df.columns and 'Ready to Fab - Date' in df.columns:
+        df['Days_RTF_to_Ship'] = (df['Ship - Date'] - df['Ready to Fab - Date']).dt.days
+    if 'Install - Date' in df.columns and 'Ship - Date' in df.columns:
+        df['Days_Ship_to_Install'] = (df['Install - Date'] - df['Ship - Date']).dt.days
 
     # --- Job link ---
     if 'Production #' in df.columns:
