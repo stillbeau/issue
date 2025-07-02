@@ -16,6 +16,7 @@ import json
 import re
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
+import urllib.parse
 
 # --- Attempt to import optional libraries for advanced features ---
 try:
@@ -31,7 +32,7 @@ except ImportError:
     MATPLOTLIB_AVAILABLE = False
 
 # --- Page & App Configuration ---
-st.set_page_config(layout="wide", page_title="Profitability Dashboard", page_icon="💰")
+st.set_page_config(layout="wide", page_title="Profitability Dashboard", page_icon="�")
 
 # --- Constants & Global Configuration ---
 SPREADSHEET_ID = "1iToy3C-Bfn06bjuEM_flHNHwr2k1zMCV1wX9MNKzj38"
@@ -107,12 +108,30 @@ def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
     # Create a mapping from new to original names for later use if needed
     col_map = dict(zip(new_cols, original_cols))
 
-    # 3. Clean the Production_ column and create a dedicated Job_Link column
+    # 3. Clean key columns and create a dedicated Job_Link column
     if 'Production_' in df.columns:
         # This sequence is important: fill NA, then convert to string, then strip.
         df['Production_'] = df['Production_'].fillna('').astype(str).str.strip()
-        # Create a full URL in a new column for reliable linking.
-        df['Job_Link'] = df['Production_'].apply(lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None)
+    if 'Job_Name' in df.columns:
+        df['Job_Name'] = df['Job_Name'].fillna('').astype(str).str.strip()
+
+    # Create a full URL in a new column for reliable linking.
+    # Prioritize PO number (Production_), fall back to Job Name.
+    def create_job_link(row):
+        # Use Production_ number if it's not an empty string
+        if row.get('Production_'):
+            search_term = row['Production_']
+        # Otherwise, fall back to Job_Name if it exists and is not empty
+        elif row.get('Job_Name'):
+            search_term = urllib.parse.quote_plus(row['Job_Name'])
+        else:
+            search_term = None
+        
+        if search_term:
+            return f"{MORAWARE_SEARCH_URL}{search_term}"
+        return None # Return None if no identifier is found
+
+    df['Job_Link'] = df.apply(create_job_link, axis=1)
 
     # 4. Rename and clean remaining numeric columns
     numeric_column_map = {
@@ -581,3 +600,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+�
