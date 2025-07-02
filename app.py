@@ -94,12 +94,13 @@ def load_and_process_data(creds_dict):
 
     # --- Stage durations ---
     df['Days_Template_to_RTF'] = (df['Ready to Fab - Date'] - df['Template - Date']).dt.days
-    df['Days_RTF_to_Install'] = (df['Install - Date'] - df['Ready to Fab - Date']).dt.days
-    df['Days_Template_to_Install'] = (df['Install - Date'] - df['Template - Date']).dt.days
+    df['Days_RTF_to_Ship'] = (df['Ship-Blank - Date'] - df['Ready to Fab - Date']).dt.days
+    df['Days_Ship_to_Install'] = (df['Install - Date'] - df['Ship-Blank - Date']).dt.days
     df['Days_RTF_to_Rcvd'] = (df['Product Rcvd - Date'] - df['Ready to Fab - Date']).dt.days
+    df['Days_Template_to_Install'] = (df['Install - Date'] - df['Template - Date']).dt.days
     
     # Handle illogical negative durations by converting them to NaN so they are ignored in calculations
-    for col in ['Days_Template_to_RTF', 'Days_RTF_to_Install', 'Days_Template_to_Install', 'Days_RTF_to_Rcvd']:
+    for col in ['Days_Template_to_RTF', 'Days_RTF_to_Ship', 'Days_Ship_to_Install', 'Days_RTF_to_Rcvd', 'Days_Template_to_Install']:
         if col in df.columns:
             df.loc[df[col] < 0, col] = pd.NA
 
