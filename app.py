@@ -4,7 +4,11 @@ import gspread
 from google.oauth2.service_account import Credentials
 from io import StringIO
 import json
-from datetime import datetime, timedelta
+import re
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
+from sklearn.linear_model import LinearRegression
+import matplotlib.pyplot as plt
 
 # --- Page Configuration ---
 st.set_page_config(layout="wide", page_title="Profitability Dashboard", page_icon="💰")
@@ -15,246 +19,247 @@ st.markdown("Analyzes job data from Google Sheets to calculate profitability met
 
 # --- Constants & Configuration ---
 SPREADSHEET_ID = "1iToy3C-Bfn06bjuEM_flHNHwr2k1zMCV1wX9MNKzj38"
-DATA_WORKSHEET_NAME = "jobs"
+WORKSHEET_NAME = "jobs"
 MORAWARE_SEARCH_URL = "https://floformcountertops.moraware.net/sys/search?&search="
 INSTALL_COST_PER_SQFT = 15.0
-LBS_PER_SQFT = 20.0
 
-# --- Helper Functions ---
+# --- Material Parsing Helper ---
+def parse_material(s: str):
+    brand_match = re.search(r'-\s*,\d+\s*-\s*([A-Za-z0-9 ]+?)\s*\(', s)
+    color_match = re.search(r'\)\s*([^()]+?)\s*\(', s)
+    brand = brand_match.group(1).strip() if brand_match else ""
+    color = color_match.group(1).strip() if color_match else ""
+    return brand, color
 
-def get_google_creds():
-    """Loads Google credentials from Streamlit secrets or file uploader."""
-    if "google_creds_json" in st.secrets:
-        try:
-            return json.loads(st.secrets["google_creds_json"])
-        except json.JSONDecodeError:
-            st.sidebar.error("Error parsing Google credentials from Streamlit Secrets.")
-            return None
-    return None
-
+# --- Load & Process Data ---
 @st.cache_data(ttl=300)
-def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
-    """Loads, preprocesses, and calculates profitability for all job data."""
-    if creds_dict is None:
-        st.error("Google credentials not provided or invalid.")
-        return None
+def load_and_process_data(creds_dict):
+    creds = Credentials.from_service_account_info(creds_dict, scopes=['https://www.googleapis.com/auth/spreadsheets'])
+    gc = gspread.authorize(creds)
+    ws = gc.open_by_key(SPREADSHEET_ID).worksheet(WORKSHEET_NAME)
+    df = pd.DataFrame(ws.get_all_records())
 
-    try:
-        creds = Credentials.from_service_account_info(creds_dict, scopes=['https://www.googleapis.com/auth/spreadsheets'])
-        gc = gspread.authorize(creds)
-        spreadsheet = gc.open_by_key(spreadsheet_id)
-        worksheet = spreadsheet.worksheet(worksheet_name)
-        data = worksheet.get_all_records()
-        if not data:
-            st.info(f"Worksheet '{worksheet_name}' is empty.")
-            return pd.DataFrame()
-        
-        df = pd.DataFrame(data)
-
-        # --- Preprocessing Step ---
-        numeric_cols = {
-            'Total Job Price $': 'Revenue',
-            'Job Throughput - Job Plant Invoice': 'Cost_From_Plant',
-            'Total Job SqFT': 'Total_Job_SqFt',
-            'Job Throughput - Rework COGS': 'Rework_COGS',
-            'Job Throughput - Rework Job Labor': 'Rework_Labor',
-            'Job Throughput - Job GM (original)': 'Original_GM'
-        }
-        
-        for col_original, col_new in numeric_cols.items():
-            if col_original in df.columns:
-                df[col_new] = df[col_original].astype(str).str.replace('$', '', regex=False).str.replace(',', '', regex=False)
-                df[col_new] = pd.to_numeric(df[col_new], errors='coerce').fillna(0)
-            else:
-                st.warning(f"Required column '{col_original}' not found. Calculations may be inaccurate.")
-                df[col_new] = 0.0
-
-        critical_cols = ['Order Type', 'Production #', 'Job Name', 'Invoice - Status', 
-                         'Salesperson', 'Customer Category', 'Rework - Stone Shop - Reason', 
-                         'Job Material', 'City']
-        for col in critical_cols:
-            if col not in df.columns:
-                df[col] = ''
-        
-        date_cols = ['Orders - Sale Date', 'Template - Date', 'Ship - Date', 'Invoice - Date', 'Ready to Fab - Date']
-        for col in date_cols:
-             if col in df.columns:
-                 df[col] = pd.to_datetime(df[col], errors='coerce')
-
-        df['Job Link'] = MORAWARE_SEARCH_URL + df['Production #'].astype(str)
-        
-        # --- Profitability Calculation on ALL jobs ---
-        df['Install Cost'] = df.apply(
-            lambda row: row['Total_Job_SqFt'] * INSTALL_COST_PER_SQFT 
-            if 'pickup' not in str(row.get('Order Type', '')).lower().replace('-', '').replace(' ', '') else 0,
-            axis=1
-        )
-        
-        df['Total Rework Cost'] = df['Rework_COGS'] + df['Rework_Labor']
-        df['Total Branch Cost'] = df['Cost_From_Plant'] + df['Install Cost'] + df['Total Rework Cost']
-        df['Branch Profit'] = df['Revenue'] - df['Total Branch Cost']
-        
-        df['Branch Profit Margin %'] = df.apply(
-            lambda row: (row['Branch Profit'] / row['Revenue']) * 100 if row['Revenue'] != 0 else 0,
-            axis=1
-        )
-        
-        df['Profit Variance'] = df['Branch Profit'] - df['Original_GM']
-        
-        return df
-
-    except gspread.exceptions.GSpreadException as e:
-        if "duplicate" in str(e).lower():
-            st.error(f"Error: The header row in '{worksheet_name}' contains duplicate column names. Please ensure all headers are unique.")
+    # --- Numeric cols cleaning ---
+    num_map = {
+        'Total Job Price $': 'Revenue',
+        'Job Throughput - Job Plant Invoice': 'Cost_From_Plant',
+        'Job Throughput - Rework COGS': 'Rework_COGS',
+        'Job Throughput - Rework Job Labor': 'Rework_Labor',
+        'Job Throughput - Job GM (original)': 'Original_GM',
+        'Job Throughput - Job SqFt': 'Total_Job_SqFt'
+    }
+    for o, n in num_map.items():
+        if o in df:
+            df[n] = (df[o].astype(str)
+                     .str.replace(r'[\$,]', '', regex=True)
+                     .astype(float).fillna(0))
         else:
-            st.error(f"Error loading Google Sheet: {e}")
-        return None
-    except Exception as e:
-        st.error(f"An unexpected error occurred: {e}")
-        return None
+            df[n] = 0.0
+    
+    # --- Dates parse ---
+    date_cols = ['Template - Date', 'Ready to Fab - Date', 'Ship-Blank - Date', 'Install - Date']
+    for c in date_cols:
+        if c in df:
+            df[c] = pd.to_datetime(df[c], errors='coerce')
+    
+    # --- Profitability ---
+    df['Install Cost'] = df['Total_Job_SqFt'] * INSTALL_COST_PER_SQFT
+    df['Total Rework Cost'] = df['Rework_COGS'] + df['Rework_Labor']
+    df['Total Branch Cost'] = df['Cost_From_Plant'] + df['Install Cost'] + df['Total Rework Cost']
+    df['Branch Profit'] = df['Revenue'] - df['Total Branch Cost']
+    df['Branch Profit Margin %'] = df.apply(
+        lambda r: (r['Branch Profit'] / r['Revenue'] * 100) if r['Revenue'] else 0, axis=1
+    )
+    df['Profit Variance'] = df['Branch Profit'] - df['Original_GM']
 
-# --- Main App UI ---
+    # --- Material parse ---
+    if 'Job Material' in df.columns:
+        df[['Material Brand', 'Material Color']] = df['Job Material']\
+            .apply(lambda x: pd.Series(parse_material(str(x))))
+    else:
+        df['Material Brand'] = ""
+        df['Material Color'] = ""
 
+    # --- Stage durations ---
+    df['Days_Template_to_RTF'] = (df['Ready to Fab - Date'] - df['Template - Date']).dt.days
+    df['Days_RTF_to_Ship'] = (df['Ship-Blank - Date'] - df['Ready to Fab - Date']).dt.days
+    df['Days_Ship_to_Install'] = (df['Install - Date'] - df['Ship-Blank - Date']).dt.days
+
+    # --- Job link ---
+    df['Job Link'] = MORAWARE_SEARCH_URL + df['Production #'].astype(str)
+    
+    return df
+
+# --- Credentials & Initial Load ---
 st.sidebar.header("⚙️ Configuration")
-final_creds = get_google_creds()
-
-if not final_creds:
-    st.sidebar.subheader("Google Sheets Credentials")
-    st.sidebar.markdown("Upload your Google Cloud Service Account JSON key file.")
-    uploaded_file = st.sidebar.file_uploader("Upload Service Account JSON", type="json")
-    if uploaded_file:
-        try:
-            final_creds = json.load(StringIO(uploaded_file.getvalue().decode("utf-8")))
-        except Exception as e:
-            st.sidebar.error(f"Error reading uploaded file: {e}")
-
-if 'df_full' not in st.session_state:
-    st.session_state.df_full = None
-
-if final_creds:
-    if st.sidebar.button("🔄 Load and Calculate Profitability"):
-        with st.spinner("Loading and analyzing job data..."):
-            st.session_state.df_full = load_and_process_data(final_creds, SPREADSHEET_ID, DATA_WORKSHEET_NAME)
-        
-        if st.session_state.df_full is not None:
-            st.success(f"Successfully processed profitability for {len(st.session_state.df_full)} jobs.")
-        else:
-            st.error("Failed to load or process data.")
+creds = None
+if "google_creds_json" in st.secrets:
+    creds = json.loads(st.secrets["google_creds_json"])
 else:
-    st.info("Please configure your Google credentials in Streamlit Secrets or upload your JSON key file to begin.")
+    up = st.sidebar.file_uploader("Upload Service Account JSON", type="json")
+    if up:
+        creds = json.load(up)
+if not creds:
+    st.sidebar.info("Please provide Google credentials.")
+    st.stop()
 
-# --- Main Display Area ---
-if st.session_state.df_full is not None and not st.session_state.df_full.empty:
-    df_full = st.session_state.df_full
+df_full = load_and_process_data(creds)
 
-    # --- Main Dashboard Tabs ---
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Overall Dashboard", "📋 Detailed Profitability Data", "� Rework & Variance Analysis", "🛠️ Forecasts"])
+# Date-range filter
+if 'Template - Date' in df_full.columns and not df_full['Template - Date'].dropna().empty:
+    min_d = df_full['Template - Date'].min().date()
+    max_d = df_full['Template - Date'].max().date()
+    start_date, end_date = st.sidebar.date_input("Template Date Range", [min_d, max_d])
+    df = df_full[(df_full['Template - Date'].dt.date >= start_date) & (df_full['Template - Date'].dt.date <= end_date)].copy()
+else:
+    st.sidebar.warning("'Template - Date' column not found or is empty. Cannot apply date filter.")
+    df = df_full.copy()
 
-    with tab1:
-        st.header("📈 Overall Performance Dashboard")
-        
-        # Filter for completed jobs for summary metrics
-        df_completed = df_full[df_full['Invoice - Status'].astype(str).str.lower().str.strip() == 'complete'].copy()
 
-        if not df_completed.empty:
-            total_revenue = df_completed['Revenue'].sum()
-            total_profit = df_completed['Branch Profit'].sum()
-            avg_margin = (total_profit / total_revenue) * 100 if total_revenue != 0 else 0
-            
-            st.subheader("Summary for Completed Jobs")
-            summary_cols = st.columns(3)
-            summary_cols[0].metric("Total Revenue", f"${total_revenue:,.2f}")
-            summary_cols[1].metric("Total Branch Profit", f"${total_profit:,.2f}")
-            summary_cols[2].metric("Average Profit Margin", f"{avg_margin:.2f}%")
-            st.markdown("---")
+# --- Sidebar Filters ---
+st.sidebar.header("Filters")
+def get_opts(col): return sorted(df[col].dropna().unique()) if col in df else []
 
-            chart_cols = st.columns(2)
-            with chart_cols[0]:
-                st.subheader("Profit by Salesperson")
-                if 'Salesperson' in df_completed.columns:
-                    st.bar_chart(df_completed.groupby('Salesperson')['Branch Profit'].sum().sort_values(ascending=False))
-            with chart_cols[1]:
-                st.subheader("Profit by Job Material")
-                if 'Job Material' in df_completed.columns:
-                    st.bar_chart(df_completed.groupby('Job Material')['Branch Profit'].sum().sort_values(ascending=False))
-        else:
-            st.warning("No completed jobs found to display summary statistics.")
+sales_opts = get_opts('Salesperson')
+cat_opts = get_opts('Customer Category')
+mat_opts = get_opts('Material Brand')
+city_opts = get_opts('City')
 
-    with tab2:
-        st.header("📋 Detailed Job Profitability")
-        display_cols = [
-            'Production #', 'Job Link', 'Job Name', 'Revenue', 'Total Branch Cost', 'Branch Profit', 'Branch Profit Margin %', 'Profit Variance',
-            'Cost_From_Plant', 'Install Cost', 'Total Rework Cost', 'Total_Job_SqFt', 'Order Type', 'Salesperson', 'Customer Category'
-        ]
-        display_cols_exist = [col for col in display_cols if col in df_full.columns]
-        display_df = df_full[display_cols_exist].rename(columns={
-            'Cost_From_Plant': 'Cost from Plant', 'Total_Job_SqFt': 'Total Job SqFt'
-        })
-        st.dataframe(display_df, column_config={"Job Link": st.column_config.LinkColumn("Job Link", display_text="Open ↗")}, use_container_width=True)
+sel_sales = st.sidebar.multiselect("Salesperson", sales_opts, default=sales_opts)
+sel_cat = st.sidebar.multiselect("Customer Category", cat_opts, default=cat_opts)
+sel_mat = st.sidebar.multiselect("Material Brand", mat_opts, default=mat_opts)
+sel_city = st.sidebar.multiselect("City", city_opts, default=city_opts)
 
-    with tab3:
-        st.header("🔬 Rework & Variance Analysis")
-        
-        st.subheader("Rework Cost Breakdown by Reason")
-        if 'Rework_Cost' in df_full.columns and 'Rework - Stone Shop - Reason' in df_full.columns:
-            rework_df = df_full[df_full['Rework_Cost'] > 0]
-            if not rework_df.empty:
-                rework_summary = rework_df.groupby('Rework - Stone Shop - Reason')['Rework_Cost'].agg(['sum', 'count']).reset_index().rename(columns={'sum': 'Total Rework Cost', 'count': 'Number of Jobs'})
-                st.dataframe(rework_summary.style.format({'Total Rework Cost': '${:,.2f}'}), use_container_width=True)
-            else:
-                st.info("No rework costs recorded for the selected jobs.")
-        else:
-            st.info("Rework data not available for analysis.")
+# Apply filters safely
+if sel_sales and 'Salesperson' in df.columns: df = df[df['Salesperson'].isin(sel_sales)]
+if sel_cat and 'Customer Category' in df.columns: df = df[df['Customer Category'].isin(sel_cat)]
+if sel_mat and 'Material Brand' in df.columns: df = df[df['Material Brand'].isin(sel_mat)]
+if sel_city and 'City' in df.columns: df = df[df['City'].isin(sel_city)]
 
-        st.markdown("---")
-        st.subheader("Profit Variance Analysis")
-        variance_df = df_full.copy()
-        if 'Profit Variance' in variance_df.columns:
-            variance_df['Abs_Variance'] = variance_df['Profit Variance'].abs()
-            
-            st.write("**Top 10 Jobs with Negative Variance (Underperformed Estimate)**")
-            st.dataframe(
-                variance_df.sort_values(by='Profit Variance', ascending=True).head(10)[['Job Name', 'Production #', 'Original_GM', 'Branch Profit', 'Profit Variance']],
-                column_config={'Original_GM': st.column_config.NumberColumn(format='$%.2f'), 'Branch Profit': st.column_config.NumberColumn(format='$%.2f'), 'Profit Variance': st.column_config.NumberColumn(format='$%.2f')}
-            )
 
-            st.write("**Top 10 Jobs with Positive Variance (Overperformed Estimate)**")
-            st.dataframe(
-                variance_df.sort_values(by='Profit Variance', ascending=False).head(10)[['Job Name', 'Production #', 'Original_GM', 'Branch Profit', 'Profit Variance']],
-                column_config={'Original_GM': st.column_config.NumberColumn(format='$%.2f'), 'Branch Profit': st.column_config.NumberColumn(format='$%.2f'), 'Profit Variance': st.column_config.NumberColumn(format='$%.2f')}
-            )
-        else:
-            st.info("Profit Variance data not available for analysis.")
+# --- Tabs ---
+tabs = st.tabs([
+    "📈 Overall",
+    "📋 Detailed Data",
+    "🔬 Rework & Variance",
+    "🔍 Phase Drilldown",
+    "🌐 Geo & Clusters",
+    "⏱️ Stage Durations",
+    "📅 Forecasts & Trends"
+])
 
-    with tab4:
-        st.header("🛠️ Forecasts & Tools")
-        forecast_tab1, forecast_tab2 = st.tabs(["🗓️ Upcoming Template Forecast", "🏭 Production Forecast"])
+# Helper to apply in-tab filters
+def apply_filters(df_tab, key_prefix):
+    with st.expander("Filter This Tab"):
+        sel_sales = st.multiselect("Salesperson", sales_opts, default=sales_opts, key=f"{key_prefix}_sales")
+        sel_cat = st.multiselect("Customer Category", cat_opts, default=cat_opts, key=f"{key_prefix}_cat")
+        sel_mat = st.multiselect("Material Brand", mat_opts, default=mat_opts, key=f"{key_prefix}_mat")
+        sel_city = st.multiselect("City", city_opts, default=city_opts, key=f"{key_prefix}_city")
+    
+    if sel_sales: df_tab = df_tab[df_tab['Salesperson'].isin(sel_sales)]
+    if sel_cat: df_tab = df_tab[df_tab['Customer Category'].isin(sel_cat)]
+    if sel_mat: df_tab = df_tab[df_tab['Material Brand'].isin(sel_mat)]
+    if sel_city: df_tab = df_tab[df_tab['City'].isin(sel_city)]
+    return df_tab
 
-        with forecast_tab1:
-            if 'Template - Date' in df_full.columns:
-                future_templates_df = df_full[df_full['Template - Date'] > datetime.now()].copy()
-                if not future_templates_df.empty:
-                    st.write("**Weekly Template Forecast**")
-                    future_templates_df['Week Start'] = future_templates_df['Template - Date'].dt.to_period('W').apply(lambda p: p.start_time).dt.date
-                    weekly_summary = future_templates_df.groupby('Week Start').agg(Jobs=('Job Name', 'count'), SqFt=('Total_Job_SqFt', 'sum'), Value=('Revenue', 'sum'), Profit=('Branch Profit', 'sum')).reset_index()
-                    weekly_summary['Margin %'] = weekly_summary.apply(lambda row: (row['Profit'] / row['Value']) * 100 if row['Value'] != 0 else 0, axis=1)
-                    st.dataframe(weekly_summary.style.format({'SqFt': '{:,.2f}', 'Value': '${:,.2f}', 'Profit': '${:,.2f}', 'Margin %': '{:.2f}%'}), use_container_width=True)
-                else:
-                    st.info("No upcoming templates found in the data.")
-            else:
-                st.warning("'Template - Date' column not found.")
+# Tab1: Overall
+with tabs[0]:
+    st.header("📈 Overall Performance")
+    df_tab = apply_filters(df, "tab1")
+    total_rev = df_tab['Revenue'].sum()
+    total_prof = df_tab['Branch Profit'].sum()
+    avg_marg = (total_prof / total_rev * 100) if total_rev else 0
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total Revenue", f"${total_rev:,.0f}")
+    c2.metric("Total Profit", f"${total_prof:,.0f}")
+    c3.metric("Avg Profit Margin", f"{avg_marg:.1f}%")
+    st.markdown("---")
+    st.subheader("Profit by Salesperson")
+    st.bar_chart(df_tab.groupby('Salesperson')['Branch Profit'].sum())
+    st.subheader("Material Brand Leaderboard")
+    mat_lb = df_tab.groupby('Material Brand').agg(
+        Total_Profit=('Branch Profit', 'sum'),
+        Avg_Margin=('Branch Profit Margin %', 'mean')
+    ).sort_values('Total_Profit', ascending=False)
+    st.dataframe(mat_lb)
+    st.subheader("Low Profit Alerts")
+    thresh = st.number_input("Margin below (%)", min_value=0.0, max_value=100.0, value=10.0, key="lp_thresh")
+    low = df_tab[df_tab['Branch Profit Margin %'] < thresh]
+    if not low.empty:
+        st.markdown(f"Jobs with margin below {thresh}%:")
+        st.dataframe(low[['Production #', 'Job Name', 'Branch Profit Margin %', 'Branch Profit']])
+    else:
+        st.write("No low-profit jobs.")
 
-        with forecast_tab2:
-            if 'Ready to Fab - Date' in df_full.columns:
-                st.subheader("Recent Jobs Sent to Production")
-                recent_rtf_df = df_full[df_full['Ready to Fab - Date'].notna()].sort_values(by='Ready to Fab - Date', ascending=False)
-                st.dataframe(recent_rtf_df[['Job Name', 'Production #', 'Ready to Fab - Date', 'Total_Job_SqFt', 'Revenue']].head(15).style.format({'Total_Job_SqFt': '{:,.2f}', 'Revenue': '${:,.2f}'}), use_container_width=True)
+# Tab2: Detailed
+with tabs[1]:
+    st.header("📋 Detailed Data")
+    df_tab = apply_filters(df, "tab2")
+    cols = ['Production #', 'Job Link', 'Job Name', 'Revenue', 'Branch Profit', 'Branch Profit Margin %']
+    df_disp = df_tab[[c for c in cols if c in df_tab]]
+    st.dataframe(df_disp, use_container_width=True, column_config={"Job Link": st.column_config.LinkColumn("Job Link", "Open ↗")})
 
-                st.subheader("Weekly Production Forecast (by RTF Date)")
-                rtf_df = df_full[df_full['Ready to Fab - Date'].notna()].copy()
-                rtf_df['Week Start'] = rtf_df['Ready to Fab - Date'].dt.to_period('W').apply(lambda p: p.start_time).dt.date
-                weekly_rtf_summary = rtf_df.groupby('Week Start').agg(Jobs=('Job Name', 'count'), SqFt=('Total_Job_SqFt', 'sum'), Value=('Revenue', 'sum'), Profit=('Branch Profit', 'sum')).reset_index().sort_values(by='Week Start', ascending=False)
-                weekly_rtf_summary['Margin %'] = weekly_rtf_summary.apply(lambda row: (row['Profit'] / row['Value']) * 100 if row['Value'] != 0 else 0, axis=1)
-                st.dataframe(weekly_rtf_summary.style.format({'SqFt': '{:,.2f}', 'Value': '${:,.2f}', 'Profit': '${:,.2f}', 'Margin %': '{:.2f}%'}), use_container_width=True)
-            else:
-                st.warning("'Ready to Fab - Date' column not found.")
+# Tab3: Rework
+with tabs[2]:
+    st.header("🔬 Rework Insights")
+    df_tab = apply_filters(df, "tab3")
+    if 'Rework_COGS' in df_tab:
+        df_tab['Rework Cost'] = df_tab['Rework_COGS'] + df_tab['Rework_Labor']
+        agg = df_tab.groupby('Rework - Stone Shop - Reason')['Rework Cost'].agg(['sum', 'count'])
+        st.dataframe(agg)
+    st.subheader("Low Profit in Rework")
+    low_r = df_tab[df_tab['Branch Profit'] < 0]
+    if not low_r.empty:
+        st.dataframe(low_r[['Production #', 'Job Name', 'Branch Profit']])
+
+# Tab4: Phase
+with tabs[3]:
+    st.header("🔍 Phase Drilldown")
+    df_tab = apply_filters(df, "tab4")
+    if 'Phase Throughput - Name' in df_tab:
+        ph = st.selectbox("Phase", sorted(df_tab['Phase Throughput - Name'].unique()))
+        sub = df_tab[df_tab['Phase Throughput - Name'] == ph]
+        metrics = {
+            'Total Rev': sub['Phase Throughput - Phase Rev'].sum(),
+            'Avg Margin%': sub['Phase Throughput - Phase GM %'].mean()
+        }
+        st.json(metrics)
+
+# Tab5: Geo
+with tabs[4]:
+    st.header("🌐 Geo & Clusters")
+    df_tab = apply_filters(df, "tab5")
+    st.dataframe(df_tab.groupby('City')['Branch Profit'].sum())
+
+# Tab6: Durations
+with tabs[5]:
+    st.header("⏱️ Stage Durations")
+    df_tab = apply_filters(df, "tab6")
+    avg = {
+        'Temp→RTF': df_tab['Days_Template_to_RTF'].mean(),
+        'RTF→Ship': df_tab['Days_RTF_to_Ship'].mean(),
+        'Ship→Inst': df_tab['Days_Ship_to_Install'].mean()
+    }
+    st.json(avg)
+    st.subheader("Duration Distributions")
+    for col in avg.keys():
+        fig, ax = plt.subplots()
+        df_tab[col].dropna().hist(ax=ax)
+        ax.set_title(col)
+        st.pyplot(fig)
+
+# Tab7: Trends
+with tabs[6]:
+    st.header("📅 Forecasts & Trends")
+    df_tab = apply_filters(df, "tab7")
+    ts = df_tab.set_index('Template - Date').resample('M').agg(
+        Rev=('Revenue', 'sum'), Jobs=('Production #', 'count')
+    )
+    st.line_chart(ts)
+    st.subheader("Linear Forecast (Next 3 Months)")
+    last = ts.tail(6)['Rev'].reset_index(drop=True)
+    model = LinearRegression().fit(last.index.values.reshape(-1, 1), last.values)
+    future_idx = pd.DataFrame({'x': range(6, 9)})
+    preds = model.predict(future_idx[['x']])
+    fc = pd.Series(preds, index=pd.date_range(start=ts.index[-1] + relativedelta(months=1), periods=3, freq='M'))
+    st.line_chart(fc, height=200)
