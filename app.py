@@ -69,7 +69,7 @@ def load_and_process_data(creds_dict):
             df[new] = 0.0
     
     # --- Dates parse ---
-    date_cols = ['Template - Date', 'Ready to Fab - Date', 'Ship-Blank - Date', 'Install - Date']
+    date_cols = ['Template - Date', 'Ready to Fab - Date', 'Ship-Blank - Date', 'Install - Date', 'Product Rcvd - Date']
     for c in date_cols:
         if c in df:
             df[c] = pd.to_datetime(df[c], errors='coerce')
@@ -94,13 +94,14 @@ def load_and_process_data(creds_dict):
 
     # --- Stage durations ---
     df['Days_Template_to_RTF'] = (df['Ready to Fab - Date'] - df['Template - Date']).dt.days
-    df['Days_RTF_to_Ship'] = (df['Ship-Blank - Date'] - df['Ready to Fab - Date']).dt.days
-    df['Days_Ship_to_Install'] = (df['Install - Date'] - df['Ship-Blank - Date']).dt.days
+    df['Days_RTF_to_Install'] = (df['Install - Date'] - df['Ready to Fab - Date']).dt.days
+    df['Days_Template_to_Install'] = (df['Install - Date'] - df['Template - Date']).dt.days
+    df['Days_RTF_to_Rcvd'] = (df['Product Rcvd - Date'] - df['Ready to Fab - Date']).dt.days
     
     # Handle illogical negative durations by converting them to NaN so they are ignored in calculations
-    df.loc[df['Days_Template_to_RTF'] < 0, 'Days_Template_to_RTF'] = pd.NA
-    df.loc[df['Days_RTF_to_Ship'] < 0, 'Days_RTF_to_Ship'] = pd.NA
-    df.loc[df['Days_Ship_to_Install'] < 0, 'Days_Ship_to_Install'] = pd.NA
+    for col in ['Days_Template_to_RTF', 'Days_RTF_to_Install', 'Days_Template_to_Install', 'Days_RTF_to_Rcvd']:
+        if col in df.columns:
+            df.loc[df[col] < 0, col] = pd.NA
 
     # --- Job link ---
     if 'Production #' in df.columns:
@@ -138,46 +139,21 @@ else:
 
 def get_opts(col): return sorted(df[col].dropna().unique()) if col in df else []
 
-# Initialize empty lists for selections
-selected_salespersons = []
-selected_categories = []
-selected_materials = []
-selected_cities = []
+sales_opts = get_opts('Salesperson')
+cat_opts = get_opts('Customer Category')
+mat_opts = get_opts('Material Brand')
+city_opts = get_opts('City')
 
-# Salesperson Filter - Only show if the column exists
-if 'Salesperson' in df.columns:
-    salesperson_options = sorted(df['Salesperson'].dropna().unique())
-    selected_salespersons = st.sidebar.multiselect("Salesperson", salesperson_options, default=salesperson_options)
-else:
-    st.sidebar.warning("'Salesperson' column not found in sheet.")
-
-# Customer Category Filter - Only show if the column exists
-if 'Customer Category' in df.columns:
-    category_options = sorted(df['Customer Category'].dropna().unique())
-    selected_categories = st.sidebar.multiselect("Customer Category", category_options, default=category_options)
-else:
-    st.sidebar.warning("'Customer Category' column not found in sheet.")
-
-# Material Brand Filter
-if 'Material Brand' in df.columns:
-    material_options = sorted(df['Material Brand'].dropna().unique())
-    selected_materials = st.sidebar.multiselect("Material Brand", material_options, default=material_options)
-else:
-    st.sidebar.warning("'Material Brand' data could not be parsed.")
-
-# City Filter
-if 'City' in df.columns:
-    city_options = sorted(df['City'].dropna().unique())
-    selected_cities = st.sidebar.multiselect("City", city_options, default=city_options)
-else:
-    st.sidebar.warning("'City' column not found in sheet.")
-
+sel_sales = st.sidebar.multiselect("Salesperson", sales_opts, default=sales_opts)
+sel_cat = st.sidebar.multiselect("Customer Category", cat_opts, default=cat_opts)
+sel_mat = st.sidebar.multiselect("Material Brand", mat_opts, default=mat_opts)
+sel_city = st.sidebar.multiselect("City", city_opts, default=city_opts)
 
 # Apply filters safely
-if selected_salespersons and 'Salesperson' in df.columns: df = df[df['Salesperson'].isin(selected_salespersons)]
-if selected_categories and 'Customer Category' in df.columns: df = df[df['Customer Category'].isin(selected_categories)]
-if selected_materials and 'Material Brand' in df.columns: df = df[df['Material Brand'].isin(selected_materials)]
-if selected_cities and 'City' in df.columns: df = df[df['City'].isin(selected_cities)]
+if sel_sales and 'Salesperson' in df.columns: df = df[df['Salesperson'].isin(sel_sales)]
+if sel_cat and 'Customer Category' in df.columns: df = df[df['Customer Category'].isin(sel_cat)]
+if sel_mat and 'Material Brand' in df.columns: df = df[df['Material Brand'].isin(sel_mat)]
+if sel_city and 'City' in df.columns: df = df[df['City'].isin(sel_city)]
 
 
 # --- Tabs ---
@@ -290,9 +266,10 @@ with tabs[5]:
     st.markdown("---")
 
     duration_cols_map = {
-        'Temp→RTF': 'Days_Template_to_RTF',
-        'RTF→Ship': 'Days_RTF_to_Ship',
-        'Ship→Inst': 'Days_Ship_to_Install'
+        'Template → Install': 'Days_Template_to_Install',
+        'Template → RTF': 'Days_Template_to_RTF',
+        'RTF → Install': 'Days_RTF_to_Install',
+        'RTF → Product Received': 'Days_RTF_to_Rcvd'
     }
     
     avg_durations = {}
