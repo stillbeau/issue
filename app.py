@@ -69,7 +69,7 @@ def load_and_process_data(creds_dict):
             df[new] = 0.0
     
     # --- Dates parse ---
-    date_cols = ['Template - Date', 'Ready to Fab - Date', 'Ship - Date', 'Install - Date']
+    date_cols = ['Template - Date', 'Ready to Fab - Date', 'Ship-Blank - Date', 'Install - Date']
     for c in date_cols:
         if c in df:
             df[c] = pd.to_datetime(df[c], errors='coerce')
@@ -93,12 +93,9 @@ def load_and_process_data(creds_dict):
         df['Material Color'] = ""
 
     # --- Stage durations ---
-    if 'Ready to Fab - Date' in df.columns and 'Template - Date' in df.columns:
-        df['Days_Template_to_RTF'] = (df['Ready to Fab - Date'] - df['Template - Date']).dt.days
-    if 'Ship - Date' in df.columns and 'Ready to Fab - Date' in df.columns:
-        df['Days_RTF_to_Ship'] = (df['Ship - Date'] - df['Ready to Fab - Date']).dt.days
-    if 'Install - Date' in df.columns and 'Ship - Date' in df.columns:
-        df['Days_Ship_to_Install'] = (df['Install - Date'] - df['Ship - Date']).dt.days
+    df['Days_Template_to_RTF'] = (df['Ready to Fab - Date'] - df['Template - Date']).dt.days
+    df['Days_RTF_to_Ship'] = (df['Ship-Blank - Date'] - df['Ready to Fab - Date']).dt.days
+    df['Days_Ship_to_Install'] = (df['Install - Date'] - df['Ship-Blank - Date']).dt.days
 
     # --- Job link ---
     if 'Production #' in df.columns:
@@ -197,17 +194,21 @@ with tabs[0]:
 # Tab2: Detailed
 with tabs[1]:
     st.header("📋 Detailed Data")
-    cols = ['Production #', 'Job Link', 'Job Name', 'Revenue', 'Branch Profit', 'Branch Profit Margin %', 'Profit Variance']
-    df_disp = df[[c for c in cols if c in df]]
+    cols = ['Production #', 'Job Link', 'Job Name', 'Revenue', 'Total Branch Cost', 'Branch Profit', 'Branch Profit Margin %', 'Profit Variance', 'Total_Job_SqFt', 'Install Cost', 'Cost_From_Plant']
+    df_disp = df[[c for c in cols if c in df]].rename(columns={'Total_Job_SqFt': 'SqFt', 'Cost_From_Plant': 'Production Cost'})
     st.dataframe(
         df_disp, 
         use_container_width=True, 
         column_config={
             "Job Link": st.column_config.LinkColumn("Job Link", display_text="Open ↗"),
             "Revenue": st.column_config.NumberColumn(format='$%.2f'),
+            "Total Branch Cost": st.column_config.NumberColumn(format='$%.2f'),
             "Branch Profit": st.column_config.NumberColumn(format='$%.2f'),
             "Profit Variance": st.column_config.NumberColumn(format='$%.2f'),
-            "Branch Profit Margin %": st.column_config.NumberColumn(format='%.2f%%')
+            "Branch Profit Margin %": st.column_config.NumberColumn(format='%.2f%%'),
+            "Production Cost": st.column_config.NumberColumn(format='$%.2f'),
+            "Install Cost": st.column_config.NumberColumn(format='$%.2f'),
+            "SqFt": st.column_config.NumberColumn(format='%.2f')
         }
     )
 
@@ -280,14 +281,43 @@ with tabs[5]:
 # Tab7: Trends
 with tabs[6]:
     st.header("📅 Forecasts & Trends")
-    if 'Template - Date' in df.columns and not df['Template - Date'].dropna().empty:
-        # Ensure the column is datetime before resampling
-        df_trends = df.copy()
-        df_trends['Template - Date'] = pd.to_datetime(df_trends['Template - Date'], errors='coerce')
-        df_trends = df_trends.dropna(subset=['Template - Date'])
-        
-        if not df_trends.empty:
-            ts = df_trends.set_index('Template - Date').resample('M').agg(
+    forecast_tab1, forecast_tab2, forecast_tab3 = st.tabs(["🗓️ Template Forecast", "🚚 Install Forecast", "📈 Revenue Trend"])
+
+    with forecast_tab1:
+        if 'Template - Date' in df_full.columns:
+            future_df = df_full[df_full['Template - Date'] > datetime.now()].copy()
+            if not future_df.empty:
+                st.write("**Weekly Template Forecast**")
+                future_df['Week Start'] = future_df['Template - Date'].dt.to_period('W').apply(lambda p: p.start_time).dt.date
+                summary = future_df.groupby(['Week Start', 'Template - Assigned To']).agg(
+                    Jobs=('Job Name', 'count'),
+                    SqFt=('Total_Job_SqFt', 'sum')
+                ).reset_index()
+                st.dataframe(summary.style.format({'SqFt': '{:,.2f}'}), use_container_width=True)
+            else:
+                st.info("No upcoming templates found.")
+        else:
+            st.warning("'Template - Date' column not found.")
+            
+    with forecast_tab2:
+        if 'Install - Date' in df_full.columns:
+            future_df = df_full[df_full['Install - Date'] > datetime.now()].copy()
+            if not future_df.empty:
+                st.write("**Weekly Install Forecast**")
+                future_df['Week Start'] = future_df['Install - Date'].dt.to_period('W').apply(lambda p: p.start_time).dt.date
+                summary = future_df.groupby(['Week Start', 'Install - Assigned To']).agg(
+                    Jobs=('Job Name', 'count'),
+                    SqFt=('Total_Job_SqFt', 'sum')
+                ).reset_index()
+                st.dataframe(summary.style.format({'SqFt': '{:,.2f}'}), use_container_width=True)
+            else:
+                st.info("No upcoming installs found.")
+        else:
+            st.warning("'Install - Date' column not found.")
+
+    with forecast_tab3:
+        if 'Template - Date' in df.columns and not df['Template - Date'].dropna().empty:
+            ts = df.set_index('Template - Date').resample('M').agg(
                 Rev=('Revenue', 'sum'), Jobs=('Production #', 'count')
             )
             st.subheader("Monthly Trend: Revenue & Jobs")
@@ -306,5 +336,5 @@ with tabs[6]:
                     st.info("Not enough data for a forecast.")
             else:
                 st.warning("Forecasting requires the 'scikit-learn' library. Please add it to your requirements.txt file.")
-    else:
-        st.info("Not enough date data for trend analysis.")
+        else:
+            st.info("Not enough date data for trend analysis.")
