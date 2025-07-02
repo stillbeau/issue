@@ -68,7 +68,7 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
                 df[col_new] = 0.0
 
         critical_cols = ['Order Type', 'Production #', 'Job Name', 'Invoice - Status', 
-                         'Salesperson', 'Customer Category', 'Rework - Stone Shop - Reason', 'Job Material', 'City']
+                         'Salesperson', 'Customer Category', 'Rework - Stone Shop - Reason', 'Job Material', 'City', 'Next Sched. - Activity']
         for col in critical_cols:
             if col not in df.columns:
                 df[col] = ''
@@ -227,15 +227,60 @@ if st.session_state.df_profit is not None and st.session_state.df_full is not No
 
     with tab2:
         st.header("📋 Detailed Job Profitability")
+        
+        # Add sorting options
+        sort_options = ['Job Name', 'Install - Date', 'Ready to Fab - Date', 'Template - Date', 'Branch Profit', 'Next Sched. - Activity']
+        available_sort_options = [opt for opt in sort_options if opt in df_filtered.columns or opt in ['Job Name', 'Branch Profit']]
+        
+        sort_by = st.selectbox("Sort detailed table by:", available_sort_options)
+
+        display_df = df_filtered.copy()
+
+        # Apply sorting
+        if sort_by == 'Next Sched. - Activity':
+            # Define the custom workflow order
+            activity_order = [
+                'Contact Customer', 'Collect Deposit', 'Template', 'Ready to Fab', 'Cutlist', 
+                'Program', 'Material Pull', 'Saw', 'CNC', 'Polish/Fab Completion', 'QC', 
+                'Plant INV', 'Ship', 'Product Rcvd', 'Pick Up', 'Invoice', 'Collect Final'
+            ]
+            display_df['Next Sched. - Activity'] = pd.Categorical(display_df['Next Sched. - Activity'], categories=activity_order, ordered=True)
+            display_df = display_df.sort_values(by=['Next Sched. - Activity', 'Job Name'])
+        elif sort_by in ['Install - Date', 'Ready to Fab - Date', 'Template - Date']:
+            if sort_by in display_df.columns:
+                display_df = display_df.sort_values(by=sort_by, ascending=True, na_position='last')
+        elif sort_by == 'Branch Profit':
+            if 'Branch Profit' in display_df.columns:
+                display_df = display_df.sort_values(by='Branch Profit', ascending=False)
+        else: # Default sort by Job Name
+            if 'Job Name' in display_df.columns:
+                display_df = display_df.sort_values(by='Job Name', ascending=True)
+
         display_cols = [
-            'Production #', 'Job Link', 'Job Name', 'Revenue', 'Total Branch Cost', 'Branch Profit', 'Branch Profit Margin %',
+            'Next Sched. - Activity', 'Production #', 'Job Link', 'Job Name', 'Revenue', 'Total Branch Cost', 'Branch Profit', 'Branch Profit Margin %',
             'Cost_From_Plant', 'Install Cost', 'Rework_Cost', 'Total_Job_SqFt', 'Order Type', 'Salesperson', 'Customer Category', 'Job Material'
         ]
-        display_cols_exist = [col for col in display_cols if col in df_filtered.columns]
-        display_df = df_filtered[display_cols_exist].rename(columns={
+        display_cols_exist = [col for col in display_cols if col in display_df.columns]
+        display_df_final = display_df[display_cols_exist].rename(columns={
             'Cost_From_Plant': 'Cost from Plant', 'Total_Job_SqFt': 'Total Job SqFt', 'Rework_Cost': 'Rework Cost'
         })
-        st.dataframe(display_df, column_config={"Job Link": st.column_config.LinkColumn("Job Link", display_text="Open ↗")}, use_container_width=True)
+        
+        st.dataframe(
+            display_df_final, 
+            column_config={
+                "Job Link": st.column_config.LinkColumn("Job Link", display_text="Open ↗"),
+                "Revenue": st.column_config.NumberColumn(format='$%.2f'),
+                "Total Branch Cost": st.column_config.NumberColumn(format='$%.2f'),
+                "Branch Profit": st.column_config.NumberColumn(format='$%.2f'),
+                "Profit Margin %": st.column_config.NumberColumn(format='%.2f%%'),
+                "Cost from Plant": st.column_config.NumberColumn(format='$%.2f'),
+                "Install Cost": st.column_config.NumberColumn(format='$%.2f'),
+                "Rework Cost": st.column_config.NumberColumn(format='$%.2f'),
+                "Total Job SqFt": st.column_config.NumberColumn(format='%.2f')
+            }, 
+            use_container_width=True
+        )
+
 
     with tab3:
         st.header("🔬 Phase Profitability Analysis")
