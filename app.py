@@ -30,7 +30,7 @@ except ImportError:
     MATPLOTLIB_AVAILABLE = False
 
 # --- Page & App Configuration ---
-st.set_page_config(layout="wide", page_title="Profitability Dashboard", page_icon="💰")
+st.set_page_config(layout="wide", page_title="Profitability Dashboard", page_icon="�")
 
 # --- Constants & Global Configuration ---
 SPREADSHEET_ID = "1iToy3C-Bfn06bjuEM_flHNHwr2k1zMCV1wX9MNKzj38"
@@ -66,17 +66,16 @@ def calculate_production_cost(value: str) -> float:
     """
     total_cost = 0.0
     if isinstance(value, str):
-        # Split by newline and process each potential number
-        parts = value.split('\n')
-        for part in parts:
-            # Remove currency symbols and commas, then convert to numeric
-            cleaned_part = part.replace('$', '').replace(',', '').strip()
-            if cleaned_part:
-                try:
-                    total_cost += float(cleaned_part)
-                except (ValueError, TypeError):
-                    # Ignore parts that are not valid numbers
-                    continue
+        # Find all occurrences of numbers (including decimals)
+        # This regex handles currency symbols, commas, and negative values
+        numbers = re.findall(r'-?\$?[\d,]*\.?\d+', value)
+        for num_str in numbers:
+            try:
+                # Clean the string and convert to float
+                cleaned_num = num_str.replace('$', '').replace(',', '')
+                total_cost += float(cleaned_num)
+            except (ValueError, TypeError):
+                continue
     return total_cost
 
 
@@ -91,10 +90,22 @@ def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
     df = pd.DataFrame(worksheet.get_all_records())
 
     # --- Data Cleaning and Transformation ---
-    # 1. Standardize column names (e.g., remove spaces, special chars)
+    
+    # 1. Calculate Production Cost FIRST, using original column names for reliability
+    prod_cost_col = 'Phase Dollars - Plant Invoice $'
+    fallback_prod_cost_col = 'Job Throughput - Job Plant Invoice'
+    
+    if prod_cost_col in df.columns:
+        df['Cost_From_Plant'] = df[prod_cost_col].apply(calculate_production_cost)
+    elif fallback_prod_cost_col in df.columns:
+        df['Cost_From_Plant'] = df[fallback_prod_cost_col].apply(calculate_production_cost)
+    else:
+        df['Cost_From_Plant'] = 0.0
+
+    # 2. Standardize all column names for easier access later
     df.columns = df.columns.str.strip().str.replace(' ', '_').str.replace('[^A-Za-z0-9_]', '', regex=True)
 
-    # 2. Rename and clean numeric columns
+    # 3. Rename and clean remaining numeric columns
     numeric_column_map = {
         'Total_Job_Price_': 'Revenue',
         'Job_Throughput_Rework_COGS': 'Rework_COGS',
@@ -112,16 +123,6 @@ def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
             df[new_name] = numeric_series.fillna(0)
         else:
             df[new_name] = 0.0
-            
-    # 3. Calculate Production Cost from 'Phase_Dollars_Plant_Invoice_'
-    if 'Phase_Dollars_Plant_Invoice_' in df.columns:
-        df['Cost_From_Plant'] = df['Phase_Dollars_Plant_Invoice_'].apply(calculate_production_cost)
-    elif 'Job_Throughput_Job_Plant_Invoice' in df.columns:
-        # Fallback to the original column if the detailed one is missing
-        df['Cost_From_Plant'] = pd.to_numeric(df['Job_Throughput_Job_Plant_Invoice'].astype(str).str.replace(r'[$,%]', '', regex=True), errors='coerce').fillna(0)
-    else:
-        df['Cost_From_Plant'] = 0.0
-
 
     # 4. Parse date columns
     date_cols = ['Template_Date', 'Ready_to_Fab_Date', 'Ship_Date', 'Install_Date', 'Job_Creation']
@@ -129,11 +130,11 @@ def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors='coerce')
 
-    # 5. Calculate profitability metrics
-    df['Install_Cost'] = df['Total_Job_SqFt'] * INSTALL_COST_PER_SQFT
+    # 5. Calculate profitability metrics using the now-correct 'Cost_From_Plant'
+    df['Install_Cost'] = df.get('Total_Job_SqFt', 0) * INSTALL_COST_PER_SQFT
     df['Total_Rework_Cost'] = df.get('Rework_COGS', 0) + df.get('Rework_Labor', 0) + df.get('Rework_Price', 0)
     df['Total_Branch_Cost'] = df['Cost_From_Plant'] + df['Install_Cost'] + df['Total_Rework_Cost']
-    df['Branch_Profit'] = df['Revenue'] - df['Total_Branch_Cost']
+    df['Branch_Profit'] = df.get('Revenue', 0) - df['Total_Branch_Cost']
     df['Branch_Profit_Margin_%'] = df.apply(
         lambda row: (row['Branch_Profit'] / row['Revenue'] * 100) if row.get('Revenue') and row['Revenue'] != 0 else 0,
         axis=1
@@ -201,6 +202,7 @@ def render_detailed_data_tab(df: pd.DataFrame):
     st.dataframe(
         df_display, use_container_width=True,
         column_config={
+            "Production_": "Prod #",
             "Job_Link": st.column_config.LinkColumn("Job Link", display_text="Open ↗"),
             "Revenue": st.column_config.NumberColumn(format='$%.2f'),
             "Total_Job_SqFt": st.column_config.NumberColumn("SqFt", format='%.2f'),
@@ -350,14 +352,14 @@ def main():
         df_filtered = df_full
 
     # Multiselect filters
-    def get_unique_options(col_name):
-        return sorted(df_filtered[col_name].dropna().unique()) if col_name in df_filtered else []
+    def get_unique_options(df, col_name):
+        return sorted(df[col_name].dropna().unique()) if col_name in df else []
 
     filter_cols = {'Salesperson': 'Salesperson', 'Customer_Category': 'Customer Category', 
                    'Material_Brand': 'Material Brand', 'City': 'City'}
     for col, label in filter_cols.items():
         if col in df_filtered:
-            options = get_unique_options(col)
+            options = get_unique_options(df_filtered, col)
             selected = st.sidebar.multiselect(label, options, default=options)
             if selected:
                 df_filtered = df_filtered[df_filtered[col].isin(selected)]
@@ -381,3 +383,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+�
