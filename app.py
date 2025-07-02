@@ -7,14 +7,20 @@ import json
 import re
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
-import matplotlib.pyplot as plt
 
-# --- Attempt to import scikit-learn ---
+# --- Attempt to import optional libraries ---
 try:
     from sklearn.linear_model import LinearRegression
     SKLEARN_AVAILABLE = True
 except ImportError:
     SKLEARN_AVAILABLE = False
+
+try:
+    import matplotlib.pyplot as plt
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
+
 
 # --- Page Configuration ---
 st.set_page_config(layout="wide", page_title="Profitability Dashboard", page_icon="💰")
@@ -248,11 +254,15 @@ with tabs[5]:
     }
     st.json(avg)
     st.subheader("Duration Distributions")
-    for col in avg.keys():
-        fig, ax = plt.subplots()
-        df_tab[col].dropna().hist(ax=ax)
-        ax.set_title(col)
-        st.pyplot(fig)
+    if MATPLOTLIB_AVAILABLE:
+        for col in avg.keys():
+            fig, ax = plt.subplots()
+            df_tab[col].dropna().hist(ax=ax)
+            ax.set_title(col)
+            st.pyplot(fig)
+    else:
+        st.warning("Duration charts require the 'matplotlib' library. Please add it to your requirements.txt file.")
+
 
 # Tab7: Trends
 with tabs[6]:
