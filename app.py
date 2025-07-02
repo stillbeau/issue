@@ -18,6 +18,7 @@ SPREADSHEET_ID = "1iToy3C-Bfn06bjuEM_flHNHwr2k1zMCV1wX9MNKzj38"
 DATA_WORKSHEET_NAME = "jobs"
 MORAWARE_SEARCH_URL = "https://floformcountertops.moraware.net/sys/search?&search="
 INSTALL_COST_PER_SQFT = 15.0
+LBS_PER_SQFT = 20.0
 
 # --- Helper Functions ---
 
@@ -151,18 +152,52 @@ if st.session_state.df_full is not None and not st.session_state.df_full.empty:
     
     df_for_filters = df_full
     
-    selected_salespersons = st.sidebar.multiselect("Filter by Salesperson:", sorted(df_for_filters['Salesperson'].dropna().unique()), default=sorted(df_for_filters['Salesperson'].dropna().unique()))
-    selected_categories = st.sidebar.multiselect("Filter by Customer Category:", sorted(df_for_filters['Customer Category'].dropna().unique()), default=sorted(df_for_filters['Customer Category'].dropna().unique()))
-    selected_materials = st.sidebar.multiselect("Filter by Job Material:", sorted(df_for_filters['Job Material'].dropna().unique()), default=sorted(df_for_filters['Job Material'].dropna().unique()))
-    selected_cities = st.sidebar.multiselect("Filter by City:", sorted(df_for_filters['City'].dropna().unique()), default=sorted(df_for_filters['City'].dropna().unique()))
+    # Initialize empty lists for selections
+    selected_salespersons = []
+    selected_categories = []
+    selected_materials = []
+    selected_cities = []
+    
+    # Salesperson Filter - Only show if the column exists
+    if 'Salesperson' in df_for_filters.columns:
+        salesperson_options = sorted(df_for_filters['Salesperson'].dropna().unique())
+        selected_salespersons = st.sidebar.multiselect("Filter by Salesperson:", salesperson_options, default=salesperson_options)
+    else:
+        st.sidebar.warning("'Salesperson' column not found.")
+
+    # Customer Category Filter - Only show if the column exists
+    if 'Customer Category' in df_for_filters.columns:
+        category_options = sorted(df_for_filters['Customer Category'].dropna().unique())
+        selected_categories = st.sidebar.multiselect("Filter by Customer Category:", category_options, default=category_options)
+    else:
+        st.sidebar.warning("'Customer Category' column not found.")
+
+    # Job Material Filter
+    if 'Job Material' in df_for_filters.columns:
+        material_options = sorted(df_for_filters['Job Material'].dropna().unique())
+        selected_materials = st.sidebar.multiselect("Filter by Job Material:", material_options, default=material_options)
+    else:
+        st.sidebar.warning("'Job Material' column not found.")
+
+    # City Filter
+    if 'City' in df_for_filters.columns:
+        city_options = sorted(df_for_filters['City'].dropna().unique())
+        selected_cities = st.sidebar.multiselect("Filter by City:", city_options, default=city_options)
+    else:
+        st.sidebar.warning("'City' column not found.")
+
 
     # Apply filters
-    df_filtered = df_full[
-        df_full['Salesperson'].isin(selected_salespersons) &
-        df_full['Customer Category'].isin(selected_categories) &
-        df_full['Job Material'].isin(selected_materials) &
-        df_full['City'].isin(selected_cities)
-    ]
+    df_filtered = df_full.copy()
+    if selected_salespersons and 'Salesperson' in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered['Salesperson'].isin(selected_salespersons)]
+    if selected_categories and 'Customer Category' in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered['Customer Category'].isin(selected_categories)]
+    if selected_materials and 'Job Material' in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered['Job Material'].isin(selected_materials)]
+    if selected_cities and 'City' in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered['City'].isin(selected_cities)]
+
 
     # --- Main Dashboard Tabs ---
     tab1, tab2, tab3, tab4 = st.tabs(["📊 Overall Dashboard", "📋 Detailed Profitability Data", "🔬 Rework & Variance Analysis", "🛠️ Forecasts"])
@@ -183,10 +218,12 @@ if st.session_state.df_full is not None and not st.session_state.df_full.empty:
             chart_cols = st.columns(2)
             with chart_cols[0]:
                 st.subheader("Profit by Salesperson")
-                st.bar_chart(df_filtered.groupby('Salesperson')['Branch Profit'].sum().sort_values(ascending=False))
+                if 'Salesperson' in df_filtered.columns:
+                    st.bar_chart(df_filtered.groupby('Salesperson')['Branch Profit'].sum().sort_values(ascending=False))
             with chart_cols[1]:
                 st.subheader("Profit by Job Material")
-                st.bar_chart(df_filtered.groupby('Job Material')['Branch Profit'].sum().sort_values(ascending=False))
+                if 'Job Material' in df_filtered.columns:
+                    st.bar_chart(df_filtered.groupby('Job Material')['Branch Profit'].sum().sort_values(ascending=False))
         else:
             st.warning("No data matches the current filter selection.")
 
@@ -206,36 +243,35 @@ if st.session_state.df_full is not None and not st.session_state.df_full.empty:
         st.header("🔬 Rework & Variance Analysis")
         
         st.subheader("Rework Cost Breakdown by Reason")
-        rework_df = df_filtered[df_filtered['Rework_Cost'] > 0]
-        if not rework_df.empty:
-            rework_summary = rework_df.groupby('Rework - Stone Shop - Reason').agg(
-                Total_Rework_Cost=('Rework Cost', 'sum'),
-                Material_Cost=('Rework_COGS', 'sum'),
-                Labor_Cost=('Rework_Labor', 'sum'),
-                Number_of_Jobs=('Job Name', 'count')
-            ).reset_index()
-            st.dataframe(rework_summary.style.format({
-                'Total Rework Cost': '${:,.2f}', 'Material_Cost': '${:,.2f}', 'Labor_Cost': '${:,.2f}'
-            }), use_container_width=True)
+        if 'Rework_Cost' in df_filtered.columns and 'Rework - Stone Shop - Reason' in df_filtered.columns:
+            rework_df = df_filtered[df_filtered['Rework_Cost'] > 0]
+            if not rework_df.empty:
+                rework_summary = rework_df.groupby('Rework - Stone Shop - Reason')['Rework_Cost'].agg(['sum', 'count']).reset_index().rename(columns={'sum': 'Total Rework Cost', 'count': 'Number of Jobs'})
+                st.dataframe(rework_summary.style.format({'Total Rework Cost': '${:,.2f}'}), use_container_width=True)
+            else:
+                st.info("No rework costs recorded for the selected jobs.")
         else:
-            st.info("No rework costs recorded for the selected jobs.")
+            st.info("Rework data not available for analysis.")
 
         st.markdown("---")
         st.subheader("Profit Variance Analysis")
         variance_df = df_filtered.copy()
-        variance_df['Abs_Variance'] = variance_df['Profit Variance'].abs()
-        
-        st.write("**Top 10 Jobs with Negative Variance (Underperformed Estimate)**")
-        st.dataframe(
-            variance_df.sort_values(by='Profit Variance', ascending=True).head(10)[['Job Name', 'Production #', 'Original_GM', 'Branch Profit', 'Profit Variance']],
-            column_config={'Original_GM': st.column_config.NumberColumn(format='$%.2f'), 'Branch Profit': st.column_config.NumberColumn(format='$%.2f'), 'Profit Variance': st.column_config.NumberColumn(format='$%.2f')}
-        )
+        if 'Profit Variance' in variance_df.columns:
+            variance_df['Abs_Variance'] = variance_df['Profit Variance'].abs()
+            
+            st.write("**Top 10 Jobs with Negative Variance (Underperformed Estimate)**")
+            st.dataframe(
+                variance_df.sort_values(by='Profit Variance', ascending=True).head(10)[['Job Name', 'Production #', 'Original_GM', 'Branch Profit', 'Profit Variance']],
+                column_config={'Original_GM': st.column_config.NumberColumn(format='$%.2f'), 'Branch Profit': st.column_config.NumberColumn(format='$%.2f'), 'Profit Variance': st.column_config.NumberColumn(format='$%.2f')}
+            )
 
-        st.write("**Top 10 Jobs with Positive Variance (Overperformed Estimate)**")
-        st.dataframe(
-            variance_df.sort_values(by='Profit Variance', ascending=False).head(10)[['Job Name', 'Production #', 'Original_GM', 'Branch Profit', 'Profit Variance']],
-            column_config={'Original_GM': st.column_config.NumberColumn(format='$%.2f'), 'Branch Profit': st.column_config.NumberColumn(format='$%.2f'), 'Profit Variance': st.column_config.NumberColumn(format='$%.2f')}
-        )
+            st.write("**Top 10 Jobs with Positive Variance (Overperformed Estimate)**")
+            st.dataframe(
+                variance_df.sort_values(by='Profit Variance', ascending=False).head(10)[['Job Name', 'Production #', 'Original_GM', 'Branch Profit', 'Profit Variance']],
+                column_config={'Original_GM': st.column_config.NumberColumn(format='$%.2f'), 'Branch Profit': st.column_config.NumberColumn(format='$%.2f'), 'Profit Variance': st.column_config.NumberColumn(format='$%.2f')}
+            )
+        else:
+            st.info("Profit Variance data not available for analysis.")
 
     with tab4:
         st.header("🛠️ Forecasts & Tools")
