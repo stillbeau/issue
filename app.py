@@ -138,21 +138,46 @@ else:
 
 def get_opts(col): return sorted(df[col].dropna().unique()) if col in df else []
 
-sales_opts = get_opts('Salesperson')
-cat_opts = get_opts('Customer Category')
-mat_opts = get_opts('Material Brand')
-city_opts = get_opts('City')
+# Initialize empty lists for selections
+selected_salespersons = []
+selected_categories = []
+selected_materials = []
+selected_cities = []
 
-sel_sales = st.sidebar.multiselect("Salesperson", sales_opts, default=sales_opts)
-sel_cat = st.sidebar.multiselect("Customer Category", cat_opts, default=cat_opts)
-sel_mat = st.sidebar.multiselect("Material Brand", mat_opts, default=mat_opts)
-sel_city = st.sidebar.multiselect("City", city_opts, default=city_opts)
+# Salesperson Filter - Only show if the column exists
+if 'Salesperson' in df.columns:
+    salesperson_options = sorted(df['Salesperson'].dropna().unique())
+    selected_salespersons = st.sidebar.multiselect("Salesperson", salesperson_options, default=salesperson_options)
+else:
+    st.sidebar.warning("'Salesperson' column not found in sheet.")
+
+# Customer Category Filter - Only show if the column exists
+if 'Customer Category' in df.columns:
+    category_options = sorted(df['Customer Category'].dropna().unique())
+    selected_categories = st.sidebar.multiselect("Customer Category", category_options, default=category_options)
+else:
+    st.sidebar.warning("'Customer Category' column not found in sheet.")
+
+# Material Brand Filter
+if 'Material Brand' in df.columns:
+    material_options = sorted(df['Material Brand'].dropna().unique())
+    selected_materials = st.sidebar.multiselect("Material Brand", material_options, default=material_options)
+else:
+    st.sidebar.warning("'Material Brand' data could not be parsed.")
+
+# City Filter
+if 'City' in df.columns:
+    city_options = sorted(df['City'].dropna().unique())
+    selected_cities = st.sidebar.multiselect("City", city_options, default=city_options)
+else:
+    st.sidebar.warning("'City' column not found in sheet.")
+
 
 # Apply filters safely
-if sel_sales and 'Salesperson' in df.columns: df = df[df['Salesperson'].isin(sel_sales)]
-if sel_cat and 'Customer Category' in df.columns: df = df[df['Customer Category'].isin(sel_cat)]
-if sel_mat and 'Material Brand' in df.columns: df = df[df['Material Brand'].isin(sel_mat)]
-if sel_city and 'City' in df.columns: df = df[df['City'].isin(sel_city)]
+if selected_salespersons and 'Salesperson' in df.columns: df = df[df['Salesperson'].isin(selected_salespersons)]
+if selected_categories and 'Customer Category' in df.columns: df = df[df['Customer Category'].isin(selected_categories)]
+if selected_materials and 'Material Brand' in df.columns: df = df[df['Material Brand'].isin(selected_materials)]
+if selected_cities and 'City' in df.columns: df = df[df['City'].isin(selected_cities)]
 
 
 # --- Tabs ---
@@ -166,26 +191,11 @@ tabs = st.tabs([
     "📅 Forecasts & Trends"
 ])
 
-# Helper to apply in-tab filters
-def apply_filters(df_tab, key_prefix):
-    with st.expander("Filter This Tab"):
-        sel_sales = st.multiselect("Salesperson", sales_opts, default=sales_opts, key=f"{key_prefix}_sales")
-        sel_cat = st.multiselect("Customer Category", cat_opts, default=cat_opts, key=f"{key_prefix}_cat")
-        sel_mat = st.multiselect("Material Brand", mat_opts, default=mat_opts, key=f"{key_prefix}_mat")
-        sel_city = st.multiselect("City", city_opts, default=city_opts, key=f"{key_prefix}_city")
-    
-    if sel_sales: df_tab = df_tab[df_tab['Salesperson'].isin(sel_sales)]
-    if sel_cat: df_tab = df_tab[df_tab['Customer Category'].isin(sel_cat)]
-    if sel_mat: df_tab = df_tab[df_tab['Material Brand'].isin(sel_mat)]
-    if sel_city: df_tab = df_tab[df_tab['City'].isin(sel_city)]
-    return df_tab
-
 # Tab1: Overall
 with tabs[0]:
     st.header("📈 Overall Performance")
-    df_tab = apply_filters(df, "tab1")
-    total_rev = df_tab['Revenue'].sum()
-    total_prof = df_tab['Branch Profit'].sum()
+    total_rev = df['Revenue'].sum()
+    total_prof = df['Branch Profit'].sum()
     avg_marg = (total_prof / total_rev * 100) if total_rev else 0
     c1, c2, c3 = st.columns(3)
     c1.metric("Total Revenue", f"${total_rev:,.0f}")
@@ -193,16 +203,18 @@ with tabs[0]:
     c3.metric("Avg Profit Margin", f"{avg_marg:.1f}%")
     st.markdown("---")
     st.subheader("Profit by Salesperson")
-    st.bar_chart(df_tab.groupby('Salesperson')['Branch Profit'].sum())
+    if 'Salesperson' in df.columns:
+        st.bar_chart(df.groupby('Salesperson')['Branch Profit'].sum())
     st.subheader("Material Brand Leaderboard")
-    mat_lb = df_tab.groupby('Material Brand').agg(
-        Total_Profit=('Branch Profit', 'sum'),
-        Avg_Margin=('Branch Profit Margin %', 'mean')
-    ).sort_values('Total_Profit', ascending=False)
-    st.dataframe(mat_lb.style.format({'Total_Profit': '${:,.2f}', 'Avg_Margin': '{:.2f}%'}))
+    if 'Material Brand' in df.columns:
+        mat_lb = df.groupby('Material Brand').agg(
+            Total_Profit=('Branch Profit', 'sum'),
+            Avg_Margin=('Branch Profit Margin %', 'mean')
+        ).sort_values('Total_Profit', ascending=False)
+        st.dataframe(mat_lb.style.format({'Total_Profit': '${:,.2f}', 'Avg_Margin': '{:.2f}%'}))
     st.subheader("Low Profit Alerts")
     thresh = st.number_input("Margin below (%)", min_value=-100.0, max_value=100.0, value=10.0, step=1.0, key="lp_thresh")
-    low = df_tab[df_tab['Branch Profit Margin %'] < thresh]
+    low = df[df['Branch Profit Margin %'] < thresh]
     if not low.empty:
         st.markdown(f"Jobs with margin below {thresh}%:")
         st.dataframe(low[['Production #', 'Job Name', 'Branch Profit Margin %', 'Branch Profit']])
@@ -212,9 +224,8 @@ with tabs[0]:
 # Tab2: Detailed
 with tabs[1]:
     st.header("📋 Detailed Data")
-    df_tab = apply_filters(df, "tab2")
     cols = ['Production #', 'Job Link', 'Job Name', 'Revenue', 'Branch Profit', 'Branch Profit Margin %']
-    df_disp = df_tab[[c for c in cols if c in df_tab]]
+    df_disp = df[[c for c in cols if c in df]]
     st.dataframe(
         df_disp, 
         use_container_width=True, 
@@ -229,23 +240,27 @@ with tabs[1]:
 # Tab3: Rework
 with tabs[2]:
     st.header("🔬 Rework Insights")
-    df_tab = apply_filters(df, "tab3")
-    if 'Rework_COGS' in df_tab:
-        df_tab['Rework Cost'] = df_tab['Rework_COGS'] + df_tab['Rework_Labor']
-        agg = df_tab.groupby('Rework - Stone Shop - Reason')['Rework Cost'].agg(['sum', 'count'])
-        st.dataframe(agg)
+    if 'Rework_COGS' in df:
+        rw = df[df['Total Rework Cost'] > 0]
+        if not rw.empty and 'Rework - Stone Shop - Reason' in rw.columns:
+            agg = rw.groupby('Rework - Stone Shop - Reason')['Total Rework Cost'].agg(['sum', 'count'])
+            agg.columns = ['Total Rework Cost', 'Num Jobs']
+            st.dataframe(agg.style.format({'Total Rework Cost': '${:,.2f}'}))
+        else:
+            st.info("No rework costs recorded in this selection.")
+    else:
+        st.info("Rework columns not found.")
     st.subheader("Low Profit in Rework")
-    low_r = df_tab[df_tab['Branch Profit'] < 0]
+    low_r = df[df['Branch Profit'] < 0]
     if not low_r.empty:
         st.dataframe(low_r[['Production #', 'Job Name', 'Branch Profit']])
 
 # Tab4: Phase
 with tabs[3]:
     st.header("🔍 Phase Drilldown")
-    df_tab = apply_filters(df, "tab4")
-    if 'Phase Throughput - Name' in df_tab:
-        ph = st.selectbox("Phase", sorted(df_tab['Phase Throughput - Name'].dropna().unique()))
-        sub = df_tab[df_tab['Phase Throughput - Name'] == ph]
+    if 'Phase Throughput - Name' in df:
+        ph = st.selectbox("Phase", sorted(df['Phase Throughput - Name'].dropna().unique()))
+        sub = df[df['Phase Throughput - Name'] == ph]
         metrics = {
             'Total Revenue': sub['Phase Throughput - Phase Rev'].sum(),
             'Avg Margin %': sub['Phase Throughput - Phase GM %'].mean()
@@ -257,20 +272,21 @@ with tabs[3]:
 # Tab5: Geo
 with tabs[4]:
     st.header("🌐 Geo & Clusters")
-    st.dataframe(df.groupby('City')['Branch Profit'].sum())
+    if 'City' in df.columns:
+        st.dataframe(df.groupby('City')['Branch Profit'].sum())
 
 # Tab6: Durations
 with tabs[5]:
     st.header("⏱️ Stage Durations")
-    df_tab = apply_filters(df, "tab6")
     
     st.subheader("Jobs with Illogical Date Sequences")
-    illogical_rtf = df_tab[(df_tab['Ready to Fab - Date'].notna()) & (df_tab['Template - Date'].notna()) & (df_tab['Ready to Fab - Date'] < df_tab['Template - Date'])]
-    if not illogical_rtf.empty:
-        st.warning("Found jobs where 'Ready to Fab' date is BEFORE 'Template' date:")
-        st.dataframe(illogical_rtf[['Job Name', 'Production #', 'Template - Date', 'Ready to Fab - Date']])
-    else:
-        st.success("No illogical RTF dates found.")
+    if 'Ready to Fab - Date' in df.columns and 'Template - Date' in df.columns:
+        illogical_rtf = df[(df['Ready to Fab - Date'].notna()) & (df['Template - Date'].notna()) & (df['Ready to Fab - Date'] < df['Template - Date'])]
+        if not illogical_rtf.empty:
+            st.warning("Found jobs where 'Ready to Fab' date is BEFORE 'Template' date:")
+            st.dataframe(illogical_rtf[['Job Name', 'Production #', 'Template - Date', 'Ready to Fab - Date']])
+        else:
+            st.success("No illogical RTF dates found.")
     st.markdown("---")
 
     duration_cols_map = {
@@ -281,8 +297,8 @@ with tabs[5]:
     
     avg_durations = {}
     for friendly_name, actual_col in duration_cols_map.items():
-        if actual_col in df_tab.columns:
-            avg_durations[friendly_name] = df_tab[actual_col].mean()
+        if actual_col in df.columns:
+            avg_durations[friendly_name] = df[actual_col].mean()
 
     st.write("**Average Days in Each Stage**")
     st.json({k: f"{v:.1f}" if pd.notna(v) else "N/A" for k, v in avg_durations.items()})
@@ -290,9 +306,9 @@ with tabs[5]:
     st.subheader("Duration Distributions")
     if MATPLOTLIB_AVAILABLE:
         for friendly_name, actual_col in duration_cols_map.items():
-            if actual_col in df_tab.columns and pd.notna(df_tab[actual_col].mean()):
+            if actual_col in df.columns and pd.notna(df[actual_col].mean()):
                 fig, ax = plt.subplots()
-                df_tab[actual_col].dropna().hist(ax=ax)
+                df[actual_col].dropna().hist(ax=ax)
                 ax.set_title(friendly_name)
                 st.pyplot(fig)
     else:
@@ -301,9 +317,8 @@ with tabs[5]:
 # Tab7: Trends
 with tabs[6]:
     st.header("📅 Forecasts & Trends")
-    df_tab = apply_filters(df, "tab7")
-    if 'Template - Date' in df_tab.columns and not df_tab['Template - Date'].dropna().empty:
-        ts = df_tab.set_index('Template - Date').resample('M').agg(
+    if 'Template - Date' in df.columns and not df['Template - Date'].dropna().empty:
+        ts = df.set_index('Template - Date').resample('M').agg(
             Rev=('Revenue', 'sum'), Jobs=('Production #', 'count')
         )
         st.subheader("Monthly Trend: Revenue & Jobs")
