@@ -94,6 +94,11 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
             lambda row: (row['Branch Profit'] / row['Revenue']) * 100 if row['Revenue'] != 0 else 0,
             axis=1
         )
+
+        df['Profit per SqFt'] = df.apply(
+            lambda row: row['Branch Profit'] / row['Total_Job_SqFt'] if row['Total_Job_SqFt'] != 0 else 0,
+            axis=1
+        )
         
         return df
 
@@ -205,8 +210,8 @@ if st.session_state.df_profit is not None and not st.session_state.df_profit.emp
         st.header("📋 Detailed Job Profitability")
         
         # Add sorting options
-        sort_options = ['Job Name', 'Install - Date', 'Ready to Fab - Date', 'Template - Date', 'Branch Profit', 'Next Sched. - Activity']
-        available_sort_options = [opt for opt in sort_options if opt in df_filtered.columns or opt in ['Job Name', 'Branch Profit']]
+        sort_options = ['Job Name', 'Install - Date', 'Ready to Fab - Date', 'Template - Date', 'Branch Profit', 'Next Sched. - Activity', 'Profit per SqFt']
+        available_sort_options = [opt for opt in sort_options if opt in df_filtered.columns or opt in ['Job Name', 'Branch Profit', 'Profit per SqFt']]
         
         sort_by = st.selectbox("Sort detailed table by:", available_sort_options)
 
@@ -225,15 +230,15 @@ if st.session_state.df_profit is not None and not st.session_state.df_profit.emp
         elif sort_by in ['Install - Date', 'Ready to Fab - Date', 'Template - Date']:
             if sort_by in display_df.columns:
                 display_df = display_df.sort_values(by=sort_by, ascending=True, na_position='last')
-        elif sort_by == 'Branch Profit':
-            if 'Branch Profit' in display_df.columns:
-                display_df = display_df.sort_values(by='Branch Profit', ascending=False)
+        elif sort_by in ['Branch Profit', 'Profit per SqFt']:
+            if sort_by in display_df.columns:
+                display_df = display_df.sort_values(by=sort_by, ascending=False)
         else: # Default sort by Job Name
             if 'Job Name' in display_df.columns:
                 display_df = display_df.sort_values(by='Job Name', ascending=True)
 
         display_cols = [
-            'Production #', 'Job Link', 'Job Name', 'Revenue', 'Total Branch Cost', 'Branch Profit', 'Branch Profit Margin %',
+            'Production #', 'Job Link', 'Job Name', 'Revenue', 'Total Branch Cost', 'Branch Profit', 'Profit per SqFt', 'Branch Profit Margin %',
             'Cost_From_Plant', 'Install Cost', 'Rework_Cost', 'Total_Job_SqFt', 'Order Type', 'Salesperson', 'Customer Category'
         ]
         display_cols_exist = [col for col in display_cols if col in display_df.columns]
@@ -248,6 +253,7 @@ if st.session_state.df_profit is not None and not st.session_state.df_profit.emp
                 "Revenue": st.column_config.NumberColumn(format='$%.2f'),
                 "Total Branch Cost": st.column_config.NumberColumn(format='$%.2f'),
                 "Branch Profit": st.column_config.NumberColumn(format='$%.2f'),
+                "Profit per SqFt": st.column_config.NumberColumn(format='$%.2f'),
                 "Profit Margin %": st.column_config.NumberColumn(format='%.2f%%'),
                 "Cost from Plant": st.column_config.NumberColumn(format='$%.2f'),
                 "Install Cost": st.column_config.NumberColumn(format='$%.2f'),
