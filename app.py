@@ -37,7 +37,7 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
     """Loads, preprocesses, and calculates profitability for all job data."""
     if creds_dict is None:
         st.error("Google credentials not provided or invalid.")
-        return None, None
+        return None
 
     try:
         creds = Credentials.from_service_account_info(creds_dict, scopes=['https://www.googleapis.com/auth/spreadsheets'])
@@ -47,7 +47,7 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
         data = worksheet.get_all_records()
         if not data:
             st.info(f"Worksheet '{worksheet_name}' is empty.")
-            return pd.DataFrame(), pd.DataFrame()
+            return pd.DataFrame()
         
         df = pd.DataFrame(data)
 
@@ -56,7 +56,7 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
             'Total Job Price $': 'Revenue',
             'Job Throughput - Job Plant Invoice': 'Cost_From_Plant',
             'Total Job SqFT': 'Total_Job_SqFt',
-            'Rework - Stone Shop - Rework Price': 'Rework_Price' # Using a temporary name
+            'Rework - Stone Shop - Rework Price': 'Rework_Cost'
         }
         
         for col_original, col_new in numeric_cols.items():
@@ -68,12 +68,12 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
                 df[col_new] = 0.0
 
         critical_cols = ['Order Type', 'Production #', 'Job Name', 'Invoice - Status', 
-                         'Salesperson', 'Customer Category', 'Rework - Stone Shop - Reason', 'Rework - Stone Shop - Bill To']
+                         'Salesperson', 'Customer Category', 'Rework - Stone Shop - Reason']
         for col in critical_cols:
             if col not in df.columns:
                 df[col] = ''
         
-        date_cols = ['Orders - Sale Date', 'Template - Date', 'Ship - Date', 'Invoice - Date', 'Job Creation', 'Ready to Fab - Date']
+        date_cols = ['Orders - Sale Date', 'Template - Date', 'Ship - Date', 'Invoice - Date', 'Ready to Fab - Date']
         for col in date_cols:
              if col in df.columns:
                  df[col] = pd.to_datetime(df[col], errors='coerce')
@@ -86,14 +86,8 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
             if 'pickup' not in str(row.get('Order Type', '')).lower().replace('-', '').replace(' ', '') else 0,
             axis=1
         )
-
-        # Calculate Rework Cost conditionally
-        df['Rework Cost'] = df.apply(
-            lambda row: row['Rework_Price'] if str(row.get('Rework - Stone Shop - Bill To', '')).strip() == 'VER Branch - 14' else 0,
-            axis=1
-        )
         
-        df['Total Branch Cost'] = df['Cost_From_Plant'] + df['Install Cost'] + df['Rework Cost']
+        df['Total Branch Cost'] = df['Cost_From_Plant'] + df['Install Cost'] + df['Rework_Cost']
         df['Branch Profit'] = df['Revenue'] - df['Total Branch Cost']
         
         df['Branch Profit Margin %'] = df.apply(
@@ -101,23 +95,17 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
             axis=1
         )
         
-        # --- Create a separate DataFrame for completed jobs for the main dashboard ---
-        df_completed = df[df['Invoice - Status'].astype(str).str.lower().str.strip() == 'complete'].copy()
-
-        if df_completed.empty:
-            st.info("No jobs with 'Invoice - Status' as 'Complete' were found. Profitability dashboard will be based on 0 completed jobs.")
-        
-        return df, df_completed # Return BOTH full df and completed df
+        return df
 
     except gspread.exceptions.GSpreadException as e:
         if "duplicate" in str(e).lower():
             st.error(f"Error: The header row in '{worksheet_name}' contains duplicate column names. Please ensure all headers are unique.")
         else:
             st.error(f"Error loading Google Sheet: {e}")
-        return None, None
+        return None
     except Exception as e:
         st.error(f"An unexpected error occurred: {e}")
-        return None, None
+        return None
 
 # --- Main App UI ---
 
@@ -134,33 +122,29 @@ if not final_creds:
         except Exception as e:
             st.sidebar.error(f"Error reading uploaded file: {e}")
 
-if 'df_full' not in st.session_state:
-    st.session_state.df_full = None
 if 'df_profit' not in st.session_state:
     st.session_state.df_profit = None
 
 if final_creds:
     if st.sidebar.button("🔄 Load and Calculate Profitability"):
         with st.spinner("Loading and analyzing job data..."):
-            st.session_state.df_full, st.session_state.df_profit = load_and_process_data(final_creds, SPREADSHEET_ID, DATA_WORKSHEET_NAME)
-        
+            st.session_state.df_profit = load_and_process_data(final_creds, SPREADSHEET_ID, DATA_WORKSHEET_NAME)
         if st.session_state.df_profit is not None:
-            st.success(f"Successfully processed profitability for {len(st.session_state.df_profit)} completed jobs.")
+            st.success(f"Successfully processed profitability for {len(st.session_state.df_profit)} jobs.")
         else:
             st.error("Failed to load or process data.")
 else:
     st.info("Please configure your Google credentials in Streamlit Secrets or upload your JSON key file to begin.")
 
 # --- Main Display Area ---
-if st.session_state.df_profit is not None and st.session_state.df_full is not None:
-    df_profit_display = st.session_state.df_profit
-    df_full_display = st.session_state.df_full
+if st.session_state.df_profit is not None and not st.session_state.df_profit.empty:
+    df_full = st.session_state.df_profit
 
     # --- Sidebar Filters ---
     st.sidebar.header("Filters")
     
-    # Use the completed jobs dataframe for filtering options
-    df_for_filters = df_profit_display
+    # Use the full dataframe for filtering options
+    df_for_filters = df_full
     
     selected_salespersons = []
     if 'Salesperson' in df_for_filters.columns:
@@ -173,14 +157,14 @@ if st.session_state.df_profit is not None and st.session_state.df_full is not No
         selected_categories = st.sidebar.multiselect("Filter by Customer Category:", category_options, default=category_options)
 
     # Apply filters
-    df_filtered = df_profit_display.copy()
+    df_filtered = df_full.copy()
     if selected_salespersons:
         df_filtered = df_filtered[df_filtered['Salesperson'].isin(selected_salespersons)]
     if selected_categories:
         df_filtered = df_filtered[df_filtered['Customer Category'].isin(selected_categories)]
 
     # --- Main Dashboard Tabs ---
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Overall Dashboard", "📋 Detailed Profitability Data", "� Rework Analysis", "🛠️ Forecasts & Tools"])
+    tab1, tab2, tab3 = st.tabs(["📊 Overall Dashboard", "📋 Detailed Profitability Data", "🛠️ Forecasts & Tools"])
 
     with tab1:
         st.header("📈 Overall Performance Dashboard")
@@ -205,49 +189,82 @@ if st.session_state.df_profit is not None and st.session_state.df_full is not No
                 if 'Customer Category' in df_filtered.columns:
                     st.bar_chart(df_filtered.groupby('Customer Category')['Revenue'].sum().sort_values(ascending=False))
             
+            st.markdown("---")
+            st.subheader("Rework Cost Analysis")
+            if 'Rework_Cost' in df_filtered.columns and 'Rework - Stone Shop - Reason' in df_filtered.columns:
+                rework_df = df_filtered[df_filtered['Rework_Cost'] > 0]
+                if not rework_df.empty:
+                    rework_summary = rework_df.groupby('Rework - Stone Shop - Reason')['Rework_Cost'].agg(['sum', 'count']).reset_index().rename(columns={'sum': 'Total Rework Cost', 'count': 'Number of Jobs'})
+                    st.dataframe(rework_summary.style.format({'Total Rework Cost': '${:,.2f}'}), use_container_width=True)
+                else:
+                    st.info("No rework costs recorded for the selected jobs.")
         else:
             st.warning("No data matches the current filter selection.")
 
     with tab2:
         st.header("📋 Detailed Job Profitability")
+        
+        # Add sorting options
+        sort_options = ['Job Name', 'Install - Date', 'Ready to Fab - Date', 'Template - Date', 'Branch Profit', 'Next Sched. - Activity']
+        available_sort_options = [opt for opt in sort_options if opt in df_filtered.columns or opt in ['Job Name', 'Branch Profit']]
+        
+        sort_by = st.selectbox("Sort detailed table by:", available_sort_options)
+
+        display_df = df_filtered.copy()
+
+        # Apply sorting
+        if sort_by == 'Next Sched. - Activity':
+            # Define the custom workflow order
+            activity_order = [
+                'Contact Customer', 'Collect Deposit', 'Template', 'Ready to Fab', 'Cutlist', 
+                'Program', 'Material Pull', 'Saw', 'CNC', 'Polish/Fab Completion', 'QC', 
+                'Plant INV', 'Ship', 'Product Rcvd', 'Pick Up', 'Invoice', 'Collect Final'
+            ]
+            display_df['Next Sched. - Activity'] = pd.Categorical(display_df['Next Sched. - Activity'], categories=activity_order, ordered=True)
+            display_df = display_df.sort_values(by=['Next Sched. - Activity', 'Job Name'])
+        elif sort_by in ['Install - Date', 'Ready to Fab - Date', 'Template - Date']:
+            if sort_by in display_df.columns:
+                display_df = display_df.sort_values(by=sort_by, ascending=True, na_position='last')
+        elif sort_by == 'Branch Profit':
+            if 'Branch Profit' in display_df.columns:
+                display_df = display_df.sort_values(by='Branch Profit', ascending=False)
+        else: # Default sort by Job Name
+            if 'Job Name' in display_df.columns:
+                display_df = display_df.sort_values(by='Job Name', ascending=True)
+
         display_cols = [
             'Production #', 'Job Link', 'Job Name', 'Revenue', 'Total Branch Cost', 'Branch Profit', 'Branch Profit Margin %',
-            'Cost_From_Plant', 'Install Cost', 'Rework Cost', 'Total_Job_SqFt', 'Order Type', 'Salesperson', 'Customer Category'
+            'Cost_From_Plant', 'Install Cost', 'Rework_Cost', 'Total_Job_SqFt', 'Order Type', 'Salesperson', 'Customer Category'
         ]
-        display_cols_exist = [col for col in display_cols if col in df_filtered.columns]
-        display_df = df_filtered[display_cols_exist].rename(columns={
-            'Cost_From_Plant': 'Cost from Plant', 'Total_Job_SqFt': 'Total Job SqFt'
+        display_cols_exist = [col for col in display_cols if col in display_df.columns]
+        display_df_final = display_df[display_cols_exist].rename(columns={
+            'Cost_From_Plant': 'Cost from Plant', 'Total_Job_SqFt': 'Total Job SqFt', 'Rework_Cost': 'Rework Cost'
         })
-        st.dataframe(display_df, column_config={"Job Link": st.column_config.LinkColumn("Job Link", display_text="Open ↗")}, use_container_width=True)
+        
+        st.dataframe(
+            display_df_final, 
+            column_config={
+                "Job Link": st.column_config.LinkColumn("Job Link", display_text="Open ↗"),
+                "Revenue": st.column_config.NumberColumn(format='$%.2f'),
+                "Total Branch Cost": st.column_config.NumberColumn(format='$%.2f'),
+                "Branch Profit": st.column_config.NumberColumn(format='$%.2f'),
+                "Profit Margin %": st.column_config.NumberColumn(format='%.2f%%'),
+                "Cost from Plant": st.column_config.NumberColumn(format='$%.2f'),
+                "Install Cost": st.column_config.NumberColumn(format='$%.2f'),
+                "Rework Cost": st.column_config.NumberColumn(format='$%.2f'),
+                "Total Job SqFt": st.column_config.NumberColumn(format='%.2f')
+            }, 
+            use_container_width=True
+        )
+
 
     with tab3:
-        st.header("🔬 Rework Analysis")
-        rework_cols_exist = 'Rework Cost' in df_full_display.columns and \
-                            'Rework - Stone Shop - Bill To' in df_full_display.columns and \
-                            'Job Creation' in df_full_display.columns and \
-                            pd.api.types.is_datetime64_any_dtype(df_full_display['Job Creation'])
-
-        if rework_cols_exist:
-            rework_df = df_full_display[df_full_display['Rework Cost'] > 0].copy()
-            if not rework_df.empty:
-                rework_df['Month'] = rework_df['Job Creation'].dt.to_period('M')
-                rework_summary = rework_df.groupby(['Month', 'Rework - Stone Shop - Bill To'])['Rework Cost'].agg(['sum', 'count']).reset_index()
-                rework_summary = rework_summary.rename(columns={'sum': 'Total Rework Cost', 'count': 'Number of Jobs'})
-                rework_summary['Month'] = rework_summary['Month'].astype(str)
-                st.dataframe(rework_summary.sort_values(by=['Month', 'Total Rework Cost'], ascending=[False, False]).style.format({'Total Rework Cost': '${:,.2f}'}), use_container_width=True)
-            else:
-                st.info("No jobs with rework costs were found in the dataset.")
-        else:
-            st.warning("Could not generate rework analysis. Required columns are missing or have incorrect data types (Rework Cost, Rework - Stone Shop - Bill To, Job Creation).")
-
-
-    with tab4:
         st.header("🛠️ Forecasts & Tools")
         forecast_tab1, forecast_tab2 = st.tabs(["🗓️ Upcoming Template Forecast", "🏭 Production Forecast"])
 
         with forecast_tab1:
-            if 'Template - Date' in df_full_display.columns:
-                future_templates_df = df_full_display[df_full_display['Template - Date'] > datetime.now()].copy()
+            if 'Template - Date' in df_full.columns:
+                future_templates_df = df_full[df_full['Template - Date'] > datetime.now()].copy()
                 if not future_templates_df.empty:
                     st.write("**Weekly Template Forecast**")
                     future_templates_df['Week Start'] = future_templates_df['Template - Date'].dt.to_period('W').apply(lambda p: p.start_time).dt.date
@@ -260,13 +277,13 @@ if st.session_state.df_profit is not None and st.session_state.df_full is not No
                 st.warning("'Template - Date' column not found.")
 
         with forecast_tab2:
-            if 'Ready to Fab - Date' in df_full_display.columns:
+            if 'Ready to Fab - Date' in df_full.columns:
                 st.subheader("Recent Jobs Sent to Production")
-                recent_rtf_df = df_full_display[df_full_display['Ready to Fab - Date'].notna()].sort_values(by='Ready to Fab - Date', ascending=False)
+                recent_rtf_df = df_full[df_full['Ready to Fab - Date'].notna()].sort_values(by='Ready to Fab - Date', ascending=False)
                 st.dataframe(recent_rtf_df[['Job Name', 'Production #', 'Ready to Fab - Date', 'Total_Job_SqFt', 'Revenue']].head(15).style.format({'Total_Job_SqFt': '{:,.2f}', 'Revenue': '${:,.2f}'}), use_container_width=True)
 
                 st.subheader("Weekly Production Forecast (by RTF Date)")
-                rtf_df = df_full_display[df_full_display['Ready to Fab - Date'].notna()].copy()
+                rtf_df = df_full[df_full['Ready to Fab - Date'].notna()].copy()
                 rtf_df['Week Start'] = rtf_df['Ready to Fab - Date'].dt.to_period('W').apply(lambda p: p.start_time).dt.date
                 weekly_rtf_summary = rtf_df.groupby('Week Start').agg(Jobs=('Job Name', 'count'), SqFt=('Total_Job_SqFt', 'sum'), Value=('Revenue', 'sum'), Profit=('Branch Profit', 'sum')).reset_index().sort_values(by='Week Start', ascending=False)
                 weekly_rtf_summary['Margin %'] = weekly_rtf_summary.apply(lambda row: (row['Profit'] / row['Value']) * 100 if row['Value'] != 0 else 0, axis=1)
