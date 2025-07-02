@@ -107,7 +107,11 @@ def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
     # Create a mapping from new to original names for later use if needed
     col_map = dict(zip(new_cols, original_cols))
 
-    # 3. Rename and clean remaining numeric columns
+    # 3. Clean the Production_ column to ensure it's a string for link generation
+    if 'Production_' in df.columns:
+        df['Production_'] = df['Production_'].astype(str).fillna('').str.strip()
+
+    # 4. Rename and clean remaining numeric columns
     numeric_column_map = {
         'Total_Job_Price_': 'Revenue',
         'Job_Throughput_Rework_COGS': 'Rework_COGS',
@@ -126,13 +130,13 @@ def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
         else:
             df[new_name] = 0.0
 
-    # 4. Parse date columns using the new standardized names
+    # 5. Parse date columns using the new standardized names
     date_cols = ['Template_Date', 'Ready_to_Fab_Date', 'Ship_Date', 'Install_Date', 'Service_Date', 'Delivery_Date', 'Job_Creation']
     for col in date_cols:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors='coerce')
 
-    # 5. Calculate profitability metrics
+    # 6. Calculate profitability metrics
     df['Install_Cost'] = df.get('Total_Job_SqFt', 0) * INSTALL_COST_PER_SQFT
     df['Total_Rework_Cost'] = df.get('Rework_COGS', 0) + df.get('Rework_Labor', 0) + df.get('Rework_Price', 0)
     df['Total_Branch_Cost'] = df['Cost_From_Plant'] + df['Install_Cost'] + df['Total_Rework_Cost']
@@ -143,13 +147,13 @@ def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
     )
     df['Profit_Variance'] = df['Branch_Profit'] - df.get('Original_GM', 0)
 
-    # 6. Parse material information
+    # 7. Parse material information
     if 'Job_Material' in df.columns:
         df[['Material_Brand', 'Material_Color']] = df['Job_Material'].apply(lambda x: pd.Series(parse_material(str(x))))
     else:
         df['Material_Brand'] = "N/A"
 
-    # 7. Calculate stage durations and filter out negative values
+    # 8. Calculate stage durations and filter out negative values
     if 'Ready_to_Fab_Date' in df.columns and 'Template_Date' in df.columns:
         df['Days_Template_to_RTF'] = (df['Ready_to_Fab_Date'] - df['Template_Date']).dt.days
         df = df[df['Days_Template_to_RTF'] >= 0]
@@ -160,7 +164,7 @@ def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
         df['Days_Ship_to_Install'] = (df['Install_Date'] - df['Ship_Date']).dt.days
         df = df[df['Days_Ship_to_Install'] >= 0]
 
-    # 8. Geocode city data
+    # 9. Geocode city data
     if 'City' in df.columns:
         df[['lat', 'lon']] = df['City'].apply(lambda x: pd.Series(get_lat_lon(str(x))))
 
