@@ -30,7 +30,7 @@ except ImportError:
     MATPLOTLIB_AVAILABLE = False
 
 # --- Page & App Configuration ---
-st.set_page_config(layout="wide", page_title="Profitability Dashboard", page_icon="�")
+st.set_page_config(layout="wide", page_title="Profitability Dashboard", page_icon="💰")
 
 # --- Constants & Global Configuration ---
 SPREADSHEET_ID = "1iToy3C-Bfn06bjuEM_flHNHwr2k1zMCV1wX9MNKzj38"
@@ -125,7 +125,7 @@ def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
             df[new_name] = 0.0
 
     # 4. Parse date columns
-    date_cols = ['Template_Date', 'Ready_to_Fab_Date', 'Ship_Date', 'Install_Date', 'Job_Creation']
+    date_cols = ['Template_Date', 'Ready_to_Fab_Date', 'Ship_Date', 'Install_Date', 'Service_Date', 'Job_Creation']
     for col in date_cols:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors='coerce')
@@ -281,33 +281,61 @@ def render_pipeline_issues_tab(df: pd.DataFrame):
         else:
             st.info("No jobs with issues in the current selection.")
 
-def render_template_install_tab(df: pd.DataFrame):
-    """Renders the weekly forecast for Template and Install activities."""
-    st.header("👷 Weekly Template & Install Forecast")
+def render_workload_analysis(df: pd.DataFrame, activity_name: str, date_col: str, assignee_col: str):
+    """
+    A reusable function to display weekly workload for a given activity.
+    
+    Args:
+        df: The filtered DataFrame for the dashboard.
+        activity_name: The name of the activity (e.g., "Templates").
+        date_col: The name of the date column for this activity.
+        assignee_col: The name of the assignee column for this activity.
+    """
+    st.subheader(activity_name)
+    
+    if date_col not in df.columns or assignee_col not in df.columns:
+        st.warning(f"Required columns ('{date_col}', '{assignee_col}') not found for {activity_name} analysis.")
+        return
 
-    # --- Template Section ---
-    st.subheader("Templates")
-    if 'Template_Date' in df.columns and 'Template_Assigned_To' in df.columns:
-        template_df = df.dropna(subset=['Template_Date', 'Template_Assigned_To']).copy()
-        if not template_df.empty:
-            template_weekly = template_df.set_index('Template_Date').resample('W-Mon', label='left', closed='left').agg(
-                Jobs=('Production_', 'count'),
-                SqFt=('Total_Job_SqFt', 'sum')
-            ).reset_index()
-            st.write("**Weekly Template Volume**")
-            st.dataframe(template_weekly)
+    activity_df = df.dropna(subset=[date_col, assignee_col]).copy()
+    
+    if activity_df.empty:
+        st.info(f"No {activity_name.lower()} data available for the current selection.")
+        return
 
-    # --- Install Section ---
-    st.subheader("Installs")
-    if 'Install_Date' in df.columns and 'Install_Assigned_To' in df.columns:
-        install_df = df.dropna(subset=['Install_Date', 'Install_Assigned_To']).copy()
-        if not install_df.empty:
-            install_weekly = install_df.set_index('Install_Date').resample('W-Mon', label='left', closed='left').agg(
+    # Get a list of unique assignees, filtering out any empty or placeholder values
+    assignees = sorted([name for name in activity_df[assignee_col].unique() if name and str(name).strip()])
+    
+    for assignee in assignees:
+        with st.expander(f"**{assignee}**"):
+            assignee_df = activity_df[activity_df[assignee_col] == assignee]
+            
+            # Resample data by week for the specific assignee
+            weekly_summary = assignee_df.set_index(date_col).resample('W-Mon', label='left', closed='left').agg(
                 Jobs=('Production_', 'count'),
-                SqFt=('Total_Job_SqFt', 'sum')
+                Total_SqFt=('Total_Job_SqFt', 'sum')
             ).reset_index()
-            st.write("**Weekly Install Volume**")
-            st.dataframe(install_weekly)
+            
+            # Filter out weeks with no activity
+            weekly_summary = weekly_summary[weekly_summary['Jobs'] > 0]
+            
+            if not weekly_summary.empty:
+                st.dataframe(weekly_summary, use_container_width=True)
+            else:
+                st.write("No scheduled work for this person in the selected period.")
+
+
+def render_field_workload_tab(df: pd.DataFrame):
+    """Renders the enhanced tab for Template, Install, and Service workloads."""
+    st.header("👷 Field Workload Planner")
+    st.markdown("Weekly breakdown of jobs and square footage for each team member.")
+
+    render_workload_analysis(df, "Templates", "Template_Date", "Template_Assigned_To")
+    st.markdown("---")
+    render_workload_analysis(df, "Installs", "Install_Date", "Install_Assigned_To")
+    st.markdown("---")
+    render_workload_analysis(df, "Service", "Service_Date", "Service_Assigned_To")
+
 
 # --- Main Application Logic ---
 
@@ -370,7 +398,7 @@ def main():
 
     tab_names = [
         "📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "🔬 Rework & Variance",
-        "🚧 Pipeline & Issues", "👷 Template & Install"
+        "🚧 Pipeline & Issues", "👷 Field Workload"
     ]
     tabs = st.tabs(tab_names)
 
@@ -379,7 +407,7 @@ def main():
     with tabs[2]: render_profit_drivers_tab(df_filtered)
     with tabs[3]: render_rework_tab(df_filtered)
     with tabs[4]: render_pipeline_issues_tab(df_filtered)
-    with tabs[5]: render_template_install_tab(df_filtered)
+    with tabs[5]: render_field_workload_tab(df_filtered)
 
 if __name__ == "__main__":
     main()
