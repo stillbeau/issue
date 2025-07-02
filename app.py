@@ -103,7 +103,10 @@ def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
         df['Cost_From_Plant'] = 0.0
 
     # 2. Standardize all column names for easier access later
-    df.columns = df.columns.str.strip().str.replace(' ', '_').str.replace('[^A-Za-z0-9_]', '', regex=True)
+    # This robust method handles spaces, hyphens, and other special characters
+    new_cols = df.columns.str.strip().str.replace(r'[\s-]+', '_', regex=True)
+    new_cols = new_cols.str.replace(r'[^\w]', '', regex=True) # \w is [A-Za-z0-9_]
+    df.columns = new_cols
 
     # 3. Rename and clean remaining numeric columns
     numeric_column_map = {
@@ -124,8 +127,8 @@ def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
         else:
             df[new_name] = 0.0
 
-    # 4. Parse date columns
-    date_cols = ['Template_Date', 'Ready_to_Fab_Date', 'Ship_Date', 'Install_Date', 'Service_Date', 'Job_Creation']
+    # 4. Parse date columns using the new standardized names
+    date_cols = ['Template_Date', 'Ready_to_Fab_Date', 'Ship_Date', 'Install_Date', 'Service_Date', 'Delivery_Date', 'Job_Creation']
     for col in date_cols:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors='coerce')
@@ -320,7 +323,7 @@ def render_workload_analysis(df: pd.DataFrame, activity_name: str, date_col: str
             weekly_summary = weekly_summary[weekly_summary['Jobs'] > 0]
             
             if not weekly_summary.empty:
-                st.dataframe(weekly_summary, use_container_width=True)
+                st.dataframe(weekly_summary.rename(columns={date_col: 'Week_Start_Date'}), use_container_width=True)
             else:
                 st.write("No scheduled work for this person in the selected period.")
 
@@ -335,6 +338,8 @@ def render_field_workload_tab(df: pd.DataFrame):
     render_workload_analysis(df, "Installs", "Install_Date", "Install_Assigned_To")
     st.markdown("---")
     render_workload_analysis(df, "Service", "Service_Date", "Service_Assigned_To")
+    st.markdown("---")
+    render_workload_analysis(df, "Delivery", "Delivery_Date", "Delivery_Assigned_To")
 
 
 # --- Main Application Logic ---
