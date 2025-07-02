@@ -62,11 +62,8 @@ def load_and_process_data(creds_dict):
     }
     for orig, new in num_map.items():
         if orig in df:
-            # Clean the string data first
-            cleaned_series = df[orig].astype(str).str.replace(r'[\$,]', '', regex=True)
-            # Convert to numeric, coercing errors (like empty strings) to NaN
+            cleaned_series = df[orig].astype(str).str.replace(r'[$,]', '', regex=True)
             numeric_series = pd.to_numeric(cleaned_series, errors='coerce')
-            # Finally, fill any resulting NaN values with 0
             df[new] = numeric_series.fillna(0)
         else:
             df[new] = 0.0
@@ -101,7 +98,8 @@ def load_and_process_data(creds_dict):
     df['Days_Ship_to_Install'] = (df['Install - Date'] - df['Ship-Blank - Date']).dt.days
 
     # --- Job link ---
-    df['Job Link'] = MORAWARE_SEARCH_URL + df['Production #'].astype(str)
+    if 'Production #' in df.columns:
+        df['Job Link'] = MORAWARE_SEARCH_URL + df['Production #'].astype(str)
     
     return df
 
@@ -120,6 +118,9 @@ if not creds:
 
 df_full = load_and_process_data(creds)
 
+# --- Sidebar Filters ---
+st.sidebar.header("Filters")
+
 # Date-range filter
 if 'Template - Date' in df_full.columns and not df_full['Template - Date'].dropna().empty:
     min_d = df_full['Template - Date'].min().date()
@@ -130,9 +131,6 @@ else:
     st.sidebar.warning("'Template - Date' column not found or is empty. Cannot apply date filter.")
     df = df_full.copy()
 
-
-# --- Sidebar Filters ---
-st.sidebar.header("Filters")
 def get_opts(col): return sorted(df[col].dropna().unique()) if col in df else []
 
 sales_opts = get_opts('Salesperson')
@@ -163,26 +161,11 @@ tabs = st.tabs([
     "📅 Forecasts & Trends"
 ])
 
-# Helper to apply in-tab filters
-def apply_filters(df_tab, key_prefix):
-    with st.expander("Filter This Tab"):
-        sel_sales = st.multiselect("Salesperson", sales_opts, default=sales_opts, key=f"{key_prefix}_sales")
-        sel_cat = st.multiselect("Customer Category", cat_opts, default=cat_opts, key=f"{key_prefix}_cat")
-        sel_mat = st.multiselect("Material Brand", mat_opts, default=mat_opts, key=f"{key_prefix}_mat")
-        sel_city = st.multiselect("City", city_opts, default=city_opts, key=f"{key_prefix}_city")
-    
-    if sel_sales: df_tab = df_tab[df_tab['Salesperson'].isin(sel_sales)]
-    if sel_cat: df_tab = df_tab[df_tab['Customer Category'].isin(sel_cat)]
-    if sel_mat: df_tab = df_tab[df_tab['Material Brand'].isin(sel_mat)]
-    if sel_city: df_tab = df_tab[df_tab['City'].isin(sel_city)]
-    return df_tab
-
 # Tab1: Overall
 with tabs[0]:
     st.header("📈 Overall Performance")
-    df_tab = apply_filters(df, "tab1")
-    total_rev = df_tab['Revenue'].sum()
-    total_prof = df_tab['Branch Profit'].sum()
+    total_rev = df['Revenue'].sum()
+    total_prof = df['Branch Profit'].sum()
     avg_marg = (total_prof / total_rev * 100) if total_rev else 0
     c1, c2, c3 = st.columns(3)
     c1.metric("Total Revenue", f"${total_rev:,.0f}")
@@ -190,99 +173,113 @@ with tabs[0]:
     c3.metric("Avg Profit Margin", f"{avg_marg:.1f}%")
     st.markdown("---")
     st.subheader("Profit by Salesperson")
-    st.bar_chart(df_tab.groupby('Salesperson')['Branch Profit'].sum())
+    st.bar_chart(df.groupby('Salesperson')['Branch Profit'].sum())
     st.subheader("Material Brand Leaderboard")
-    mat_lb = df_tab.groupby('Material Brand').agg(
+    mat_lb = df.groupby('Material Brand').agg(
         Total_Profit=('Branch Profit', 'sum'),
         Avg_Margin=('Branch Profit Margin %', 'mean')
     ).sort_values('Total_Profit', ascending=False)
-    st.dataframe(mat_lb)
+    st.dataframe(mat_lb.style.format({'Total_Profit': '${:,.2f}', 'Avg_Margin': '{:.2f}%'}))
     st.subheader("Low Profit Alerts")
-    thresh = st.number_input("Margin below (%)", min_value=0.0, max_value=100.0, value=10.0, key="lp_thresh")
-    low = df_tab[df_tab['Branch Profit Margin %'] < thresh]
+    thresh = st.number_input("Margin below (%)", min_value=-100.0, max_value=100.0, value=10.0, step=1.0, key="lp_thresh")
+    low = df[df['Branch Profit Margin %'] < thresh]
     if not low.empty:
         st.markdown(f"Jobs with margin below {thresh}%:")
         st.dataframe(low[['Production #', 'Job Name', 'Branch Profit Margin %', 'Branch Profit']])
     else:
-        st.write("No low-profit jobs.")
+        st.write("No low-profit jobs in this selection.")
 
 # Tab2: Detailed
 with tabs[1]:
     st.header("📋 Detailed Data")
-    df_tab = apply_filters(df, "tab2")
     cols = ['Production #', 'Job Link', 'Job Name', 'Revenue', 'Branch Profit', 'Branch Profit Margin %']
-    df_disp = df_tab[[c for c in cols if c in df_tab]]
-    st.dataframe(df_disp, use_container_width=True, column_config={"Job Link": st.column_config.LinkColumn("Job Link", "Open ↗")})
+    df_disp = df[[c for c in cols if c in df]]
+    st.dataframe(
+        df_disp, 
+        use_container_width=True, 
+        column_config={
+            "Job Link": st.column_config.LinkColumn("Job Link", display_text="Open ↗"),
+            "Revenue": st.column_config.NumberColumn(format='$%.2f'),
+            "Branch Profit": st.column_config.NumberColumn(format='$%.2f'),
+            "Branch Profit Margin %": st.column_config.NumberColumn(format='%.2f%%')
+        }
+    )
 
 # Tab3: Rework
 with tabs[2]:
     st.header("🔬 Rework Insights")
-    df_tab = apply_filters(df, "tab3")
-    if 'Rework_COGS' in df_tab:
-        df_tab['Rework Cost'] = df_tab['Rework_COGS'] + df_tab['Rework_Labor']
-        agg = df_tab.groupby('Rework - Stone Shop - Reason')['Rework Cost'].agg(['sum', 'count'])
-        st.dataframe(agg)
-    st.subheader("Low Profit in Rework")
-    low_r = df_tab[df_tab['Branch Profit'] < 0]
-    if not low_r.empty:
-        st.dataframe(low_r[['Production #', 'Job Name', 'Branch Profit']])
+    if 'Rework_COGS' in df:
+        rw = df[df['Total Rework Cost'] > 0]
+        if not rw.empty:
+            agg = rw.groupby('Rework - Stone Shop - Reason')['Total Rework Cost'].agg(['sum', 'count'])
+            agg.columns = ['Total Rework Cost', 'Num Jobs']
+            st.dataframe(agg.style.format({'Total Rework Cost': '${:,.2f}'}))
+        else:
+            st.info("No rework costs recorded in this selection.")
+    else:
+        st.info("Rework columns not found.")
 
 # Tab4: Phase
 with tabs[3]:
     st.header("🔍 Phase Drilldown")
-    df_tab = apply_filters(df, "tab4")
-    if 'Phase Throughput - Name' in df_tab:
-        ph = st.selectbox("Phase", sorted(df_tab['Phase Throughput - Name'].unique()))
-        sub = df_tab[df_tab['Phase Throughput - Name'] == ph]
+    if 'Phase Throughput - Name' in df:
+        ph = st.selectbox("Phase", sorted(df['Phase Throughput - Name'].dropna().unique()))
+        sub = df[df['Phase Throughput - Name'] == ph]
         metrics = {
-            'Total Rev': sub['Phase Throughput - Phase Rev'].sum(),
-            'Avg Margin%': sub['Phase Throughput - Phase GM %'].mean()
+            'Total Revenue': sub['Phase Throughput - Phase Rev'].sum(),
+            'Avg Margin %': sub['Phase Throughput - Phase GM %'].mean()
         }
         st.json(metrics)
+    else:
+        st.info("Phase throughput data not available.")
 
 # Tab5: Geo
 with tabs[4]:
     st.header("🌐 Geo & Clusters")
-    df_tab = apply_filters(df, "tab5")
-    st.dataframe(df_tab.groupby('City')['Branch Profit'].sum())
+    st.dataframe(df.groupby('City')['Branch Profit'].sum())
 
 # Tab6: Durations
 with tabs[5]:
     st.header("⏱️ Stage Durations")
-    df_tab = apply_filters(df, "tab6")
     avg = {
-        'Temp→RTF': df_tab['Days_Template_to_RTF'].mean(),
-        'RTF→Ship': df_tab['Days_RTF_to_Ship'].mean(),
-        'Ship→Inst': df_tab['Days_Ship_to_Install'].mean()
+        'Template→RTF': df['Days_Template_to_RTF'].mean(),
+        'RTF→Ship': df['Days_RTF_to_Ship'].mean(),
+        'Ship→Inst': df['Days_Ship_to_Install'].mean()
     }
     st.json(avg)
     st.subheader("Duration Distributions")
     if MATPLOTLIB_AVAILABLE:
-        for col in avg.keys():
-            fig, ax = plt.subplots()
-            df_tab[col].dropna().hist(ax=ax)
-            ax.set_title(col)
-            st.pyplot(fig)
+        for col, avg_val in avg.items():
+            if pd.notna(avg_val):
+                fig, ax = plt.subplots()
+                df[col].dropna().hist(ax=ax)
+                ax.set_title(col)
+                st.pyplot(fig)
     else:
         st.warning("Duration charts require the 'matplotlib' library. Please add it to your requirements.txt file.")
-
 
 # Tab7: Trends
 with tabs[6]:
     st.header("📅 Forecasts & Trends")
-    df_tab = apply_filters(df, "tab7")
-    ts = df_tab.set_index('Template - Date').resample('M').agg(
-        Rev=('Revenue', 'sum'), Jobs=('Production #', 'count')
-    )
-    st.line_chart(ts)
-    
-    st.subheader("Linear Forecast (Next 3 Months)")
-    if SKLEARN_AVAILABLE:
-        last = ts.tail(6)['Rev'].reset_index(drop=True)
-        model = LinearRegression().fit(last.index.values.reshape(-1, 1), last.values)
-        future_idx = pd.DataFrame({'x': range(6, 9)})
-        preds = model.predict(future_idx[['x']])
-        fc = pd.Series(preds, index=pd.date_range(start=ts.index[-1] + relativedelta(months=1), periods=3, freq='M'))
-        st.line_chart(fc, height=200)
+    if 'Template - Date' in df.columns and not df['Template - Date'].dropna().empty:
+        ts = df.set_index('Template - Date').resample('M').agg(
+            Rev=('Revenue', 'sum'), Jobs=('Production #', 'count')
+        )
+        st.subheader("Monthly Trend: Revenue & Jobs")
+        st.line_chart(ts)
+        
+        st.subheader("Linear Forecast (Next 3 Months)")
+        if SKLEARN_AVAILABLE:
+            last = ts.tail(6)['Rev'].reset_index(drop=True)
+            if len(last) > 1:
+                model = LinearRegression().fit(last.index.values.reshape(-1, 1), last.values)
+                future_idx = pd.DataFrame({'x': range(len(last), len(last) + 3)})
+                preds = model.predict(future_idx[['x']])
+                fc = pd.Series(preds, index=pd.date_range(start=ts.index[-1] + relativedelta(months=1), periods=3, freq='M'))
+                st.line_chart(fc, height=200)
+            else:
+                st.info("Not enough data for a forecast.")
+        else:
+            st.warning("Forecasting requires the 'scikit-learn' library. Please add it to your requirements.txt file.")
     else:
-        st.warning("Forecasting requires the 'scikit-learn' library. Please add it to your requirements.txt file.")
+        st.info("Not enough date data for trend analysis.")
