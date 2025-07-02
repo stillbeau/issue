@@ -96,6 +96,11 @@ def load_and_process_data(creds_dict):
     df['Days_Template_to_RTF'] = (df['Ready to Fab - Date'] - df['Template - Date']).dt.days
     df['Days_RTF_to_Ship'] = (df['Ship-Blank - Date'] - df['Ready to Fab - Date']).dt.days
     df['Days_Ship_to_Install'] = (df['Install - Date'] - df['Ship-Blank - Date']).dt.days
+    
+    # Handle illogical negative durations by converting them to NaN so they are ignored in calculations
+    df.loc[df['Days_Template_to_RTF'] < 0, 'Days_Template_to_RTF'] = pd.NA
+    df.loc[df['Days_RTF_to_Ship'] < 0, 'Days_RTF_to_Ship'] = pd.NA
+    df.loc[df['Days_Ship_to_Install'] < 0, 'Days_Ship_to_Install'] = pd.NA
 
     # --- Job link ---
     if 'Production #' in df.columns:
@@ -258,6 +263,16 @@ with tabs[4]:
 with tabs[5]:
     st.header("⏱️ Stage Durations")
     df_tab = apply_filters(df, "tab6")
+    
+    st.subheader("Jobs with Illogical Date Sequences")
+    illogical_rtf = df_tab[(df_tab['Ready to Fab - Date'].notna()) & (df_tab['Template - Date'].notna()) & (df_tab['Ready to Fab - Date'] < df_tab['Template - Date'])]
+    if not illogical_rtf.empty:
+        st.warning("Found jobs where 'Ready to Fab' date is BEFORE 'Template' date:")
+        st.dataframe(illogical_rtf[['Job Name', 'Production #', 'Template - Date', 'Ready to Fab - Date']])
+    else:
+        st.success("No illogical RTF dates found.")
+    st.markdown("---")
+
     duration_cols_map = {
         'Temp→RTF': 'Days_Template_to_RTF',
         'RTF→Ship': 'Days_RTF_to_Ship',
