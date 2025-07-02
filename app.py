@@ -68,12 +68,12 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
                 df[col_new] = 0.0
 
         critical_cols = ['Order Type', 'Production #', 'Job Name', 'Invoice - Status', 
-                         'Salesperson', 'Customer Category', 'Rework - Stone Shop - Reason']
+                         'Salesperson', 'Customer Category', 'Rework - Stone Shop - Reason', 'Next Sched. - Activity']
         for col in critical_cols:
             if col not in df.columns:
                 df[col] = ''
         
-        date_cols = ['Orders - Sale Date', 'Template - Date', 'Ship - Date', 'Invoice - Date']
+        date_cols = ['Orders - Sale Date', 'Template - Date', 'Ship - Date', 'Invoice - Date', 'Ready to Fab - Date']
         for col in date_cols:
              if col in df.columns:
                  df[col] = pd.to_datetime(df[col], errors='coerce')
