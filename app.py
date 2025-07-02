@@ -7,8 +7,14 @@ import json
 import re
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
-from sklearn.linear_model import LinearRegression
 import matplotlib.pyplot as plt
+
+# --- Attempt to import scikit-learn ---
+try:
+    from sklearn.linear_model import LinearRegression
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
 
 # --- Page Configuration ---
 st.set_page_config(layout="wide", page_title="Profitability Dashboard", page_icon="💰")
@@ -256,10 +262,15 @@ with tabs[6]:
         Rev=('Revenue', 'sum'), Jobs=('Production #', 'count')
     )
     st.line_chart(ts)
+    
     st.subheader("Linear Forecast (Next 3 Months)")
-    last = ts.tail(6)['Rev'].reset_index(drop=True)
-    model = LinearRegression().fit(last.index.values.reshape(-1, 1), last.values)
-    future_idx = pd.DataFrame({'x': range(6, 9)})
-    preds = model.predict(future_idx[['x']])
-    fc = pd.Series(preds, index=pd.date_range(start=ts.index[-1] + relativedelta(months=1), periods=3, freq='M'))
-    st.line_chart(fc, height=200)
+    if SKLEARN_AVAILABLE:
+        last = ts.tail(6)['Rev'].reset_index(drop=True)
+        model = LinearRegression().fit(last.index.values.reshape(-1, 1), last.values)
+        future_idx = pd.DataFrame({'x': range(6, 9)})
+        preds = model.predict(future_idx[['x']])
+        fc = pd.Series(preds, index=pd.date_range(start=ts.index[-1] + relativedelta(months=1), periods=3, freq='M'))
+        st.line_chart(fc, height=200)
+    else:
+        st.warning("Forecasting requires the 'scikit-learn' library. Please add it to your requirements.txt file.")
+
