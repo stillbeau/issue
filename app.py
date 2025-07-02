@@ -37,7 +37,7 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
     """Loads, preprocesses, and calculates profitability for all job data."""
     if creds_dict is None:
         st.error("Google credentials not provided or invalid.")
-        return None
+        return None, None
 
     try:
         creds = Credentials.from_service_account_info(creds_dict, scopes=['https://www.googleapis.com/auth/spreadsheets'])
@@ -47,7 +47,7 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
         data = worksheet.get_all_records()
         if not data:
             st.info(f"Worksheet '{worksheet_name}' is empty.")
-            return pd.DataFrame()
+            return pd.DataFrame(), pd.DataFrame()
         
         df = pd.DataFrame(data)
 
@@ -68,7 +68,7 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
                 df[col_new] = 0.0
 
         critical_cols = ['Order Type', 'Production #', 'Job Name', 'Invoice - Status', 
-                         'Salesperson', 'Customer Category', 'Rework - Stone Shop - Reason', 'Next Sched. - Activity']
+                         'Salesperson', 'Customer Category', 'Rework - Stone Shop - Reason']
         for col in critical_cols:
             if col not in df.columns:
                 df[col] = ''
@@ -95,17 +95,23 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
             axis=1
         )
         
-        return df
+        # --- Create a separate DataFrame for completed jobs for the main dashboard ---
+        df_completed = df[df['Invoice - Status'].astype(str).str.lower().str.strip() == 'complete'].copy()
+
+        if df_completed.empty:
+            st.info("No jobs with 'Invoice - Status' as 'Complete' were found. Profitability dashboard will be based on 0 completed jobs.")
+        
+        return df, df_completed # Return BOTH full df and completed df
 
     except gspread.exceptions.GSpreadException as e:
         if "duplicate" in str(e).lower():
             st.error(f"Error: The header row in '{worksheet_name}' contains duplicate column names. Please ensure all headers are unique.")
         else:
             st.error(f"Error loading Google Sheet: {e}")
-        return None
+        return None, None
     except Exception as e:
         st.error(f"An unexpected error occurred: {e}")
-        return None
+        return None, None
 
 # --- Main App UI ---
 
@@ -122,29 +128,33 @@ if not final_creds:
         except Exception as e:
             st.sidebar.error(f"Error reading uploaded file: {e}")
 
+if 'df_full' not in st.session_state:
+    st.session_state.df_full = None
 if 'df_profit' not in st.session_state:
     st.session_state.df_profit = None
 
 if final_creds:
     if st.sidebar.button("🔄 Load and Calculate Profitability"):
         with st.spinner("Loading and analyzing job data..."):
-            st.session_state.df_profit = load_and_process_data(final_creds, SPREADSHEET_ID, DATA_WORKSHEET_NAME)
+            st.session_state.df_full, st.session_state.df_profit = load_and_process_data(final_creds, SPREADSHEET_ID, DATA_WORKSHEET_NAME)
+        
         if st.session_state.df_profit is not None:
-            st.success(f"Successfully processed profitability for {len(st.session_state.df_profit)} jobs.")
+            st.success(f"Successfully processed profitability for {len(st.session_state.df_profit)} completed jobs.")
         else:
             st.error("Failed to load or process data.")
 else:
     st.info("Please configure your Google credentials in Streamlit Secrets or upload your JSON key file to begin.")
 
 # --- Main Display Area ---
-if st.session_state.df_profit is not None and not st.session_state.df_profit.empty:
-    df_full = st.session_state.df_profit
+if st.session_state.df_profit is not None and st.session_state.df_full is not None:
+    df_profit_display = st.session_state.df_profit
+    df_full_display = st.session_state.df_full
 
     # --- Sidebar Filters ---
     st.sidebar.header("Filters")
     
-    # Use the full dataframe for filtering options
-    df_for_filters = df_full
+    # Use the completed jobs dataframe for filtering options
+    df_for_filters = df_profit_display
     
     selected_salespersons = []
     if 'Salesperson' in df_for_filters.columns:
@@ -157,7 +167,7 @@ if st.session_state.df_profit is not None and not st.session_state.df_profit.emp
         selected_categories = st.sidebar.multiselect("Filter by Customer Category:", category_options, default=category_options)
 
     # Apply filters
-    df_filtered = df_full.copy()
+    df_filtered = df_profit_display.copy()
     if selected_salespersons:
         df_filtered = df_filtered[df_filtered['Salesperson'].isin(selected_salespersons)]
     if selected_categories:
@@ -198,6 +208,39 @@ if st.session_state.df_profit is not None and not st.session_state.df_profit.emp
                     st.dataframe(rework_summary.style.format({'Total Rework Cost': '${:,.2f}'}), use_container_width=True)
                 else:
                     st.info("No rework costs recorded for the selected jobs.")
+            
+            st.markdown("---")
+            st.header("🔍 Profitability Watchlist (Pre-Production Jobs)")
+            
+            pre_production_df = df_full_display[df_full_display['Ready to Fab - Date'].isna()].copy()
+            
+            watchlist_cols = st.columns(2)
+            with watchlist_cols[0]:
+                st.subheader("Top 10 Highest Profit Jobs")
+                top_10_profit = pre_production_df.sort_values(by='Branch Profit', ascending=False).head(10)
+                st.dataframe(
+                    top_10_profit[['Job Name', 'Branch Profit', 'Revenue', 'Total Branch Cost']],
+                    column_config={
+                        "Branch Profit": st.column_config.NumberColumn(format='$%.2f'),
+                        "Revenue": st.column_config.NumberColumn(format='$%.2f'),
+                        "Total Branch Cost": st.column_config.NumberColumn(format='$%.2f'),
+                    },
+                    use_container_width=True
+                )
+
+            with watchlist_cols[1]:
+                st.subheader("Top 10 Lowest Profit Jobs")
+                bottom_10_profit = pre_production_df.sort_values(by='Branch Profit', ascending=True).head(10)
+                st.dataframe(
+                    bottom_10_profit[['Job Name', 'Branch Profit', 'Revenue', 'Total Branch Cost']],
+                    column_config={
+                        "Branch Profit": st.column_config.NumberColumn(format='$%.2f'),
+                        "Revenue": st.column_config.NumberColumn(format='$%.2f'),
+                        "Total Branch Cost": st.column_config.NumberColumn(format='$%.2f'),
+                    },
+                    use_container_width=True
+                )
+
         else:
             st.warning("No data matches the current filter selection.")
 
