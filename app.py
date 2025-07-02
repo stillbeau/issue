@@ -59,6 +59,26 @@ def get_lat_lon(city_name: str) -> tuple[float, float]:
     }
     return city_coords.get(str(city_name).lower(), (0, 0))
 
+def calculate_production_cost(value: str) -> float:
+    """
+    Calculates the total production cost from a string that may contain
+    multiple numeric values separated by newlines.
+    """
+    total_cost = 0.0
+    if isinstance(value, str):
+        # Split by newline and process each potential number
+        parts = value.split('\n')
+        for part in parts:
+            # Remove currency symbols and commas, then convert to numeric
+            cleaned_part = part.replace('$', '').replace(',', '').strip()
+            if cleaned_part:
+                try:
+                    total_cost += float(cleaned_part)
+                except (ValueError, TypeError):
+                    # Ignore parts that are not valid numbers
+                    continue
+    return total_cost
+
 
 # --- Data Loading and Processing ---
 
@@ -77,7 +97,6 @@ def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
     # 2. Rename and clean numeric columns
     numeric_column_map = {
         'Total_Job_Price_': 'Revenue',
-        'Job_Throughput_Job_Plant_Invoice': 'Cost_From_Plant',
         'Job_Throughput_Rework_COGS': 'Rework_COGS',
         'Job_Throughput_Rework_Job_Labor': 'Rework_Labor',
         'Rework_Stone_Shop_Rework_Price': 'Rework_Price',
@@ -93,14 +112,24 @@ def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
             df[new_name] = numeric_series.fillna(0)
         else:
             df[new_name] = 0.0
+            
+    # 3. Calculate Production Cost from 'Phase_Dollars_Plant_Invoice_'
+    if 'Phase_Dollars_Plant_Invoice_' in df.columns:
+        df['Cost_From_Plant'] = df['Phase_Dollars_Plant_Invoice_'].apply(calculate_production_cost)
+    elif 'Job_Throughput_Job_Plant_Invoice' in df.columns:
+        # Fallback to the original column if the detailed one is missing
+        df['Cost_From_Plant'] = pd.to_numeric(df['Job_Throughput_Job_Plant_Invoice'].astype(str).str.replace(r'[$,%]', '', regex=True), errors='coerce').fillna(0)
+    else:
+        df['Cost_From_Plant'] = 0.0
 
-    # 3. Parse date columns
+
+    # 4. Parse date columns
     date_cols = ['Template_Date', 'Ready_to_Fab_Date', 'Ship_Date', 'Install_Date', 'Job_Creation']
     for col in date_cols:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors='coerce')
 
-    # 4. Calculate profitability metrics
+    # 5. Calculate profitability metrics
     df['Install_Cost'] = df['Total_Job_SqFt'] * INSTALL_COST_PER_SQFT
     df['Total_Rework_Cost'] = df.get('Rework_COGS', 0) + df.get('Rework_Labor', 0) + df.get('Rework_Price', 0)
     df['Total_Branch_Cost'] = df['Cost_From_Plant'] + df['Install_Cost'] + df['Total_Rework_Cost']
@@ -111,13 +140,13 @@ def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
     )
     df['Profit_Variance'] = df['Branch_Profit'] - df.get('Original_GM', 0)
 
-    # 5. Parse material information
+    # 6. Parse material information
     if 'Job_Material' in df.columns:
         df[['Material_Brand', 'Material_Color']] = df['Job_Material'].apply(lambda x: pd.Series(parse_material(str(x))))
     else:
         df['Material_Brand'] = "N/A"
 
-    # 6. Calculate stage durations and filter out negative (irregular) values
+    # 7. Calculate stage durations and filter out negative (irregular) values
     if 'Ready_to_Fab_Date' in df.columns and 'Template_Date' in df.columns:
         df['Days_Template_to_RTF'] = (df['Ready_to_Fab_Date'] - df['Template_Date']).dt.days
         df = df[df['Days_Template_to_RTF'] >= 0]
@@ -128,11 +157,11 @@ def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
         df['Days_Ship_to_Install'] = (df['Install_Date'] - df['Ship_Date']).dt.days
         df = df[df['Days_Ship_to_Install'] >= 0]
 
-    # 7. Create dynamic job link
+    # 8. Create dynamic job link
     if 'Production_' in df.columns:
         df['Job_Link'] = MORAWARE_SEARCH_URL + df['Production_'].astype(str)
 
-    # 8. Geocode city data
+    # 9. Geocode city data
     if 'City' in df.columns:
         df[['lat', 'lon']] = df['City'].apply(lambda x: pd.Series(get_lat_lon(str(x))))
 
