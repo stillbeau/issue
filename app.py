@@ -304,4 +304,3 @@ with tabs[6]:
                 st.warning("Forecasting requires the 'scikit-learn' library. Please add it to your requirements.txt file.")
     else:
         st.info("Not enough date data for trend analysis.")
-�
