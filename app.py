@@ -210,17 +210,19 @@ if st.session_state.df_profit is not None and st.session_state.df_full is not No
                     st.info("No rework costs recorded for the selected jobs.")
             
             st.markdown("---")
-            st.header("🔍 Profitability Watchlist (Pre-Production Jobs)")
+            st.header("🔍 Profitability Watchlist (Jobs Sent to Production)")
             
-            pre_production_df = df_full_display[df_full_display['Ready to Fab - Date'].isna()].copy()
+            # MODIFIED: Filter for jobs that have a "Ready to Fab - Date"
+            rtf_jobs_df = df_full_display[df_full_display['Ready to Fab - Date'].notna()].copy()
             
             watchlist_cols = st.columns(2)
             with watchlist_cols[0]:
                 st.subheader("Top 10 Highest Profit Jobs")
-                top_10_profit = pre_production_df.sort_values(by='Branch Profit', ascending=False).head(10)
+                top_10_profit = rtf_jobs_df.sort_values(by='Branch Profit', ascending=False).head(10)
                 st.dataframe(
-                    top_10_profit[['Job Name', 'Branch Profit', 'Revenue', 'Total Branch Cost']],
+                    top_10_profit[['Production #', 'Job Link', 'Job Name', 'Branch Profit', 'Revenue', 'Total Branch Cost']],
                     column_config={
+                        "Job Link": st.column_config.LinkColumn("Job Link", display_text="Open ↗"),
                         "Branch Profit": st.column_config.NumberColumn(format='$%.2f'),
                         "Revenue": st.column_config.NumberColumn(format='$%.2f'),
                         "Total Branch Cost": st.column_config.NumberColumn(format='$%.2f'),
@@ -230,10 +232,11 @@ if st.session_state.df_profit is not None and st.session_state.df_full is not No
 
             with watchlist_cols[1]:
                 st.subheader("Top 10 Lowest Profit Jobs")
-                bottom_10_profit = pre_production_df.sort_values(by='Branch Profit', ascending=True).head(10)
+                bottom_10_profit = rtf_jobs_df.sort_values(by='Branch Profit', ascending=True).head(10)
                 st.dataframe(
-                    bottom_10_profit[['Job Name', 'Branch Profit', 'Revenue', 'Total Branch Cost']],
+                    bottom_10_profit[['Production #', 'Job Link', 'Job Name', 'Branch Profit', 'Revenue', 'Total Branch Cost']],
                     column_config={
+                        "Job Link": st.column_config.LinkColumn("Job Link", display_text="Open ↗"),
                         "Branch Profit": st.column_config.NumberColumn(format='$%.2f'),
                         "Revenue": st.column_config.NumberColumn(format='$%.2f'),
                         "Total Branch Cost": st.column_config.NumberColumn(format='$%.2f'),
