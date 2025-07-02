@@ -241,19 +241,27 @@ with tabs[4]:
 # Tab6: Durations
 with tabs[5]:
     st.header("⏱️ Stage Durations")
-    avg = {
-        'Template→RTF': df['Days_Template_to_RTF'].mean(),
-        'RTF→Ship': df['Days_RTF_to_Ship'].mean(),
-        'Ship→Inst': df['Days_Ship_to_Install'].mean()
+    duration_cols_map = {
+        'Template→RTF': 'Days_Template_to_RTF',
+        'RTF→Ship': 'Days_RTF_to_Ship',
+        'Ship→Inst': 'Days_Ship_to_Install'
     }
-    st.json(avg)
+    
+    avg_durations = {}
+    for friendly_name, actual_col in duration_cols_map.items():
+        if actual_col in df.columns:
+            avg_durations[friendly_name] = df[actual_col].mean()
+
+    st.write("**Average Days in Each Stage**")
+    st.json({k: f"{v:.1f}" if pd.notna(v) else "N/A" for k, v in avg_durations.items()})
+
     st.subheader("Duration Distributions")
     if MATPLOTLIB_AVAILABLE:
-        for col, avg_val in avg.items():
-            if pd.notna(avg_val):
+        for friendly_name, actual_col in duration_cols_map.items():
+            if actual_col in df.columns and pd.notna(df[actual_col].mean()):
                 fig, ax = plt.subplots()
-                df[col].dropna().hist(ax=ax)
-                ax.set_title(col)
+                df[actual_col].dropna().hist(ax=ax)
+                ax.set_title(friendly_name)
                 st.pyplot(fig)
     else:
         st.warning("Duration charts require the 'matplotlib' library. Please add it to your requirements.txt file.")
