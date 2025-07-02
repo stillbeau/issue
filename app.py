@@ -109,7 +109,9 @@ def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
 
     # 3. Clean the Production_ column to ensure it's a string for link generation
     if 'Production_' in df.columns:
-        df['Production_'] = df['Production_'].astype(str).fillna('').str.strip()
+        # This sequence is important: fill NA, then convert to string, then strip.
+        # This avoids converting None to the string 'None' or NaN to 'nan'.
+        df['Production_'] = df['Production_'].fillna('').astype(str).str.strip()
 
     # 4. Rename and clean remaining numeric columns
     numeric_column_map = {
