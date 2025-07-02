@@ -4,11 +4,12 @@ A Streamlit dashboard for analyzing job profitability data from a Google Sheet.
 
 This application connects to a specified Google Sheet, processes job data,
 calculates various financial and operational metrics, and presents them in an
-interactive, multi-tabbed dashboard.
+interactive, multi-tabbed dashboard with forecasting capabilities.
 """
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 import gspread
 from google.oauth2.service_account import Credentials
 import json
@@ -199,22 +200,31 @@ def render_detailed_data_tab(df: pd.DataFrame):
         'Cost_From_Plant', 'Install_Cost', 'Total_Branch_Cost', 'Branch_Profit', 
         'Branch_Profit_Margin_%', 'Profit_Variance'
     ]
-    df_display = df[[c for c in display_cols if c in df.columns]]
+    # Ensure all display columns exist in the dataframe before trying to access them
+    df_display = df[[c for c in display_cols if c in df.columns]].copy()
+    
+    # Configure the link column if the necessary columns are present
+    column_config = {
+        "Revenue": st.column_config.NumberColumn(format='$%.2f'),
+        "Total_Job_SqFt": st.column_config.NumberColumn("SqFt", format='%.2f'),
+        "Cost_From_Plant": st.column_config.NumberColumn("Production Cost", format='$%.2f'),
+        "Install_Cost": st.column_config.NumberColumn(format='$%.2f'),
+        "Total_Branch_Cost": st.column_config.NumberColumn(format='$%.2f'),
+        "Branch_Profit": st.column_config.NumberColumn(format='$%.2f'),
+        "Profit_Variance": st.column_config.NumberColumn(format='$%.2f'),
+        "Branch_Profit_Margin_%": st.column_config.ProgressColumn(
+            "Profit Margin", format='%.2f%%', min_value=-100, max_value=100
+        ),
+    }
+    if 'Production_' in df_display.columns:
+        column_config["Production_"] = st.column_config.LinkColumn(
+            "Prod #", 
+            href=MORAWARE_SEARCH_URL + df_display['Production_'].astype(str)
+        )
+
     st.dataframe(
         df_display, use_container_width=True,
-        column_config={
-            "Production_": st.column_config.LinkColumn("Prod #", href=MORAWARE_SEARCH_URL + df['Production_'].astype(str)),
-            "Revenue": st.column_config.NumberColumn(format='$%.2f'),
-            "Total_Job_SqFt": st.column_config.NumberColumn("SqFt", format='%.2f'),
-            "Cost_From_Plant": st.column_config.NumberColumn("Production Cost", format='$%.2f'),
-            "Install_Cost": st.column_config.NumberColumn(format='$%.2f'),
-            "Total_Branch_Cost": st.column_config.NumberColumn(format='$%.2f'),
-            "Branch_Profit": st.column_config.NumberColumn(format='$%.2f'),
-            "Profit_Variance": st.column_config.NumberColumn(format='$%.2f'),
-            "Branch_Profit_Margin_%": st.column_config.ProgressColumn(
-                "Profit Margin", format='%.2f%%', min_value=-100, max_value=100
-            ),
-        }
+        column_config=column_config
     )
 
 def render_profit_drivers_tab(df: pd.DataFrame):
@@ -245,17 +255,65 @@ def render_profit_drivers_tab(df: pd.DataFrame):
         }))
 
 def render_rework_tab(df: pd.DataFrame):
-    """Renders the 'Rework & Variance' tab."""
+    """Renders the 'Rework & Variance' tab with detailed job links."""
     st.header("🔬 Rework Insights & Profit Variance")
-    if 'Total_Rework_Cost' in df and 'Rework_Stone_Shop_Reason' in df.columns:
-        rework_jobs = df[df['Total_Rework_Cost'] > 0]
-        if not rework_jobs.empty:
-            st.subheader("Rework Costs by Reason")
-            agg_rework = rework_jobs.groupby('Rework_Stone_Shop_Reason')['Total_Rework_Cost'].agg(['sum', 'count'])
-            agg_rework.columns = ['Total Rework Cost', 'Number of Jobs']
-            st.dataframe(agg_rework.sort_values('Total Rework Cost', ascending=False).style.format({'Total Rework Cost': '${:,.2f}'}))
+    
+    c1, c2 = st.columns(2)
+
+    with c1:
+        st.subheader("Rework Analysis")
+        if 'Total_Rework_Cost' in df and 'Rework_Stone_Shop_Reason' in df.columns:
+            rework_jobs = df[df['Total_Rework_Cost'] > 0].copy()
+            if not rework_jobs.empty:
+                st.metric("Total Rework Cost", f"${rework_jobs['Total_Rework_Cost'].sum():,.2f}", f"{len(rework_jobs)} jobs affected")
+                
+                st.write("**Rework Costs by Reason**")
+                agg_rework = rework_jobs.groupby('Rework_Stone_Shop_Reason')['Total_Rework_Cost'].agg(['sum', 'count'])
+                agg_rework.columns = ['Total Rework Cost', 'Number of Jobs']
+                st.dataframe(agg_rework.sort_values('Total Rework Cost', ascending=False).style.format({'Total Rework Cost': '${:,.2f}'}))
+
+                with st.expander("View Rework Job Details"):
+                    rework_display_cols = ['Production_', 'Job_Name', 'Total_Rework_Cost', 'Rework_Stone_Shop_Reason']
+                    st.dataframe(
+                        rework_jobs[rework_display_cols],
+                        use_container_width=True,
+                        column_config={
+                            "Production_": st.column_config.LinkColumn(
+                                "Prod #", href=MORAWARE_SEARCH_URL + rework_jobs['Production_'].astype(str)
+                            ),
+                            "Total_Rework_Cost": st.column_config.NumberColumn("Rework Cost", format='$%.2f'),
+                        }
+                    )
+            else:
+                st.info("No rework costs recorded for the current selection.")
         else:
-            st.info("No rework costs recorded for the current selection.")
+            st.info("Rework data not available.")
+
+    with c2:
+        st.subheader("Profit Variance Analysis")
+        if 'Profit_Variance' in df.columns and 'Original_GM' in df.columns:
+            variance_jobs = df[df['Profit_Variance'].abs() > 0.01].copy() # Filter for any variance
+            if not variance_jobs.empty:
+                st.metric("Jobs with Profit Variance", f"{len(variance_jobs)}")
+
+                st.write("**Jobs with Largest Profit Variance**")
+                variance_display_cols = ['Production_', 'Job_Name', 'Original_GM', 'Branch_Profit', 'Profit_Variance']
+                st.dataframe(
+                    variance_jobs[variance_display_cols].sort_values(by='Profit_Variance', key=abs, ascending=False).head(20),
+                    use_container_width=True,
+                    column_config={
+                        "Production_": st.column_config.LinkColumn(
+                            "Prod #", href=MORAWARE_SEARCH_URL + variance_jobs['Production_'].astype(str)
+                        ),
+                        "Original_GM": st.column_config.NumberColumn("Est. Profit", format='$%.2f'),
+                        "Branch_Profit": st.column_config.NumberColumn("Actual Profit", format='$%.2f'),
+                        "Profit_Variance": st.column_config.NumberColumn("Variance", format='$%.2f'),
+                    }
+                )
+            else:
+                st.info("No significant profit variance found.")
+        else:
+            st.info("Profit variance data not available.")
 
 def render_pipeline_issues_tab(df: pd.DataFrame):
     """Renders the 'Pipeline & Issues' tab."""
@@ -355,6 +413,89 @@ def render_field_workload_tab(df: pd.DataFrame):
     st.markdown("---")
     render_workload_analysis(df, "Delivery", "Delivery_Date", "Delivery_Assigned_To")
 
+def render_forecasting_tab(df: pd.DataFrame):
+    """Renders the 'Forecasting & Trends' tab."""
+    st.header("🔮 Forecasting & Trends")
+
+    if not SKLEARN_AVAILABLE or not MATPLOTLIB_AVAILABLE:
+        st.error("Forecasting features require scikit-learn and matplotlib. Please install them.")
+        return
+        
+    if 'Job_Creation' not in df.columns or df['Job_Creation'].isnull().all():
+        st.warning("Job Creation date column is required for trend analysis and is missing or empty.")
+        return
+
+    df_trends = df.copy()
+    df_trends = df_trends.set_index('Job_Creation').sort_index()
+    
+    # --- Monthly Performance Trends ---
+    st.subheader("Monthly Performance Trends")
+    monthly_summary = df_trends.resample('M').agg({
+        'Revenue': 'sum',
+        'Branch_Profit': 'sum',
+        'Production_': 'count'
+    }).rename(columns={'Production_': 'Job_Count'})
+    monthly_summary['Branch_Profit_Margin_%'] = (monthly_summary['Branch_Profit'] / monthly_summary['Revenue'] * 100).fillna(0)
+    
+    # Remove the last month if it's incomplete
+    if not monthly_summary.empty:
+        last_month = monthly_summary.index[-1]
+        if last_month.month == datetime.now().month and last_month.year == datetime.now().year:
+            monthly_summary = monthly_summary[:-1]
+    
+    if monthly_summary.empty:
+        st.info("Not enough historical data to display monthly trends.")
+        return
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.line_chart(monthly_summary[['Revenue', 'Branch_Profit']])
+    with c2:
+        st.line_chart(monthly_summary[['Branch_Profit_Margin_%']])
+    
+    st.bar_chart(monthly_summary['Job_Count'])
+    
+    st.markdown("---")
+    
+    # --- Revenue Forecast ---
+    st.subheader("Simple Revenue Forecast")
+    
+    forecast_df = monthly_summary[['Revenue']].reset_index()
+    forecast_df['Time'] = np.arange(len(forecast_df.index))
+    
+    # Train model
+    model = LinearRegression()
+    X = forecast_df[['Time']]
+    y = forecast_df['Revenue']
+    model.fit(X, y)
+    
+    # Create future dataframe
+    future_periods = st.slider("Months to Forecast:", 1, 12, 3)
+    last_time = forecast_df['Time'].max()
+    last_date = forecast_df['Job_Creation'].max()
+    
+    future_dates = pd.date_range(start=last_date, periods=future_periods + 1, freq='M')[1:]
+    future_df = pd.DataFrame({
+        'Job_Creation': future_dates,
+        'Time': np.arange(last_time + 1, last_time + 1 + future_periods)
+    })
+    
+    # Predict future revenue
+    future_df['Forecast'] = model.predict(future_df[['Time']])
+    
+    # Combine and plot
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(forecast_df['Job_Creation'], forecast_df['Revenue'], label='Actual Revenue', marker='o')
+    ax.plot(future_df['Job_Creation'], future_df['Forecast'], label='Forecasted Revenue', linestyle='--', marker='o')
+    
+    ax.set_title('Monthly Revenue and Forecast')
+    ax.set_ylabel('Revenue ($)')
+    ax.legend()
+    plt.grid(True, which='both', linestyle='--', linewidth=0.5)
+    st.pyplot(fig)
+    
+    st.caption("Note: This is a simple linear regression forecast and should be used for directional guidance only.")
+
 
 # --- Main Application Logic ---
 
@@ -380,14 +521,21 @@ def main():
         df_full = load_and_process_data(creds)
     except Exception as e:
         st.error(f"Failed to load or process data: {e}")
+        st.exception(e) # Provides a full traceback for debugging
         st.stop()
 
     st.sidebar.header("📊 Filters")
     if 'Job_Creation' in df_full.columns and not df_full['Job_Creation'].dropna().empty:
         min_date = df_full['Job_Creation'].min().date()
         max_date = df_full['Job_Creation'].max().date()
+        
+        # Default to the last 12 months if the date range is very large
+        default_start = max_date - relativedelta(months=12)
+        if default_start < min_date:
+            default_start = min_date
+
         start_date, end_date = st.sidebar.date_input(
-            "Filter by Job Creation Date", value=[min_date, max_date],
+            "Filter by Job Creation Date", value=[default_start, max_date],
             min_value=min_date, max_value=max_date
         )
         df_filtered = df_full[
@@ -405,7 +553,8 @@ def main():
     for col, label in filter_cols.items():
         if col in df_filtered:
             options = get_unique_options(df_filtered, col)
-            selected = st.sidebar.multiselect(label, options, default=options)
+            # Use a key for multiselect to prevent state issues on rerun
+            selected = st.sidebar.multiselect(label, options, default=options, key=f"select_{col}")
             if selected:
                 df_filtered = df_filtered[df_filtered[col].isin(selected)]
 
@@ -415,7 +564,7 @@ def main():
 
     tab_names = [
         "📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "🔬 Rework & Variance",
-        "🚧 Pipeline & Issues", "👷 Field Workload"
+        "🚧 Pipeline & Issues", "👷 Field Workload", "🔮 Forecasting & Trends"
     ]
     tabs = st.tabs(tab_names)
 
@@ -425,6 +574,7 @@ def main():
     with tabs[3]: render_rework_tab(df_filtered)
     with tabs[4]: render_pipeline_issues_tab(df_filtered)
     with tabs[5]: render_field_workload_tab(df_filtered)
+    with tabs[6]: render_forecasting_tab(df_filtered)
 
 if __name__ == "__main__":
     main()
