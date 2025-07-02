@@ -161,11 +161,26 @@ tabs = st.tabs([
     "📅 Forecasts & Trends"
 ])
 
+# Helper to apply in-tab filters
+def apply_filters(df_tab, key_prefix):
+    with st.expander("Filter This Tab"):
+        sel_sales = st.multiselect("Salesperson", sales_opts, default=sales_opts, key=f"{key_prefix}_sales")
+        sel_cat = st.multiselect("Customer Category", cat_opts, default=cat_opts, key=f"{key_prefix}_cat")
+        sel_mat = st.multiselect("Material Brand", mat_opts, default=mat_opts, key=f"{key_prefix}_mat")
+        sel_city = st.multiselect("City", city_opts, default=city_opts, key=f"{key_prefix}_city")
+    
+    if sel_sales: df_tab = df_tab[df_tab['Salesperson'].isin(sel_sales)]
+    if sel_cat: df_tab = df_tab[df_tab['Customer Category'].isin(sel_cat)]
+    if sel_mat: df_tab = df_tab[df_tab['Material Brand'].isin(sel_mat)]
+    if sel_city: df_tab = df_tab[df_tab['City'].isin(sel_city)]
+    return df_tab
+
 # Tab1: Overall
 with tabs[0]:
     st.header("📈 Overall Performance")
-    total_rev = df['Revenue'].sum()
-    total_prof = df['Branch Profit'].sum()
+    df_tab = apply_filters(df, "tab1")
+    total_rev = df_tab['Revenue'].sum()
+    total_prof = df_tab['Branch Profit'].sum()
     avg_marg = (total_prof / total_rev * 100) if total_rev else 0
     c1, c2, c3 = st.columns(3)
     c1.metric("Total Revenue", f"${total_rev:,.0f}")
@@ -173,53 +188,28 @@ with tabs[0]:
     c3.metric("Avg Profit Margin", f"{avg_marg:.1f}%")
     st.markdown("---")
     st.subheader("Profit by Salesperson")
-    st.bar_chart(df.groupby('Salesperson')['Branch Profit'].sum())
+    st.bar_chart(df_tab.groupby('Salesperson')['Branch Profit'].sum())
     st.subheader("Material Brand Leaderboard")
-    mat_lb = df.groupby('Material Brand').agg(
+    mat_lb = df_tab.groupby('Material Brand').agg(
         Total_Profit=('Branch Profit', 'sum'),
         Avg_Margin=('Branch Profit Margin %', 'mean')
     ).sort_values('Total_Profit', ascending=False)
     st.dataframe(mat_lb.style.format({'Total_Profit': '${:,.2f}', 'Avg_Margin': '{:.2f}%'}))
-    
-    st.markdown("---")
-    st.header("🔍 Profitability Watchlist (Pre-Production Jobs)")
-    
-    pre_production_df = df[df['Ready to Fab - Date'].isna()].copy()
-    
-    watchlist_cols = st.columns(2)
-    with watchlist_cols[0]:
-        st.subheader("Top 10 Highest Profit Jobs")
-        top_10_profit = pre_production_df.sort_values(by='Branch Profit', ascending=False).head(10)
-        st.dataframe(
-            top_10_profit[['Production #', 'Job Link', 'Job Name', 'Branch Profit', 'Revenue', 'Total Branch Cost']],
-            column_config={
-                "Job Link": st.column_config.LinkColumn("Job Link", display_text="Open ↗"),
-                "Branch Profit": st.column_config.NumberColumn(format='$%.2f'),
-                "Revenue": st.column_config.NumberColumn(format='$%.2f'),
-                "Total Branch Cost": st.column_config.NumberColumn(format='$%.2f'),
-            },
-            use_container_width=True
-        )
-
-    with watchlist_cols[1]:
-        st.subheader("Top 10 Lowest Profit Jobs")
-        bottom_10_profit = pre_production_df.sort_values(by='Branch Profit', ascending=True).head(10)
-        st.dataframe(
-            bottom_10_profit[['Production #', 'Job Link', 'Job Name', 'Branch Profit', 'Revenue', 'Total Branch Cost']],
-            column_config={
-                "Job Link": st.column_config.LinkColumn("Job Link", display_text="Open ↗"),
-                "Branch Profit": st.column_config.NumberColumn(format='$%.2f'),
-                "Revenue": st.column_config.NumberColumn(format='$%.2f'),
-                "Total Branch Cost": st.column_config.NumberColumn(format='$%.2f'),
-            },
-            use_container_width=True
-        )
+    st.subheader("Low Profit Alerts")
+    thresh = st.number_input("Margin below (%)", min_value=-100.0, max_value=100.0, value=10.0, step=1.0, key="lp_thresh")
+    low = df_tab[df_tab['Branch Profit Margin %'] < thresh]
+    if not low.empty:
+        st.markdown(f"Jobs with margin below {thresh}%:")
+        st.dataframe(low[['Production #', 'Job Name', 'Branch Profit Margin %', 'Branch Profit']])
+    else:
+        st.write("No low-profit jobs in this selection.")
 
 # Tab2: Detailed
 with tabs[1]:
     st.header("📋 Detailed Data")
+    df_tab = apply_filters(df, "tab2")
     cols = ['Production #', 'Job Link', 'Job Name', 'Revenue', 'Branch Profit', 'Branch Profit Margin %']
-    df_disp = df[[c for c in cols if c in df]]
+    df_disp = df_tab[[c for c in cols if c in df_tab]]
     st.dataframe(
         df_disp, 
         use_container_width=True, 
@@ -234,23 +224,23 @@ with tabs[1]:
 # Tab3: Rework
 with tabs[2]:
     st.header("🔬 Rework Insights")
-    if 'Rework_COGS' in df:
-        rw = df[df['Total Rework Cost'] > 0]
-        if not rw.empty:
-            agg = rw.groupby('Rework - Stone Shop - Reason')['Total Rework Cost'].agg(['sum', 'count'])
-            agg.columns = ['Total Rework Cost', 'Num Jobs']
-            st.dataframe(agg.style.format({'Total Rework Cost': '${:,.2f}'}))
-        else:
-            st.info("No rework costs recorded in this selection.")
-    else:
-        st.info("Rework columns not found.")
+    df_tab = apply_filters(df, "tab3")
+    if 'Rework_COGS' in df_tab:
+        df_tab['Rework Cost'] = df_tab['Rework_COGS'] + df_tab['Rework_Labor']
+        agg = df_tab.groupby('Rework - Stone Shop - Reason')['Rework Cost'].agg(['sum', 'count'])
+        st.dataframe(agg)
+    st.subheader("Low Profit in Rework")
+    low_r = df_tab[df_tab['Branch Profit'] < 0]
+    if not low_r.empty:
+        st.dataframe(low_r[['Production #', 'Job Name', 'Branch Profit']])
 
 # Tab4: Phase
 with tabs[3]:
     st.header("🔍 Phase Drilldown")
-    if 'Phase Throughput - Name' in df:
-        ph = st.selectbox("Phase", sorted(df['Phase Throughput - Name'].dropna().unique()))
-        sub = df[df['Phase Throughput - Name'] == ph]
+    df_tab = apply_filters(df, "tab4")
+    if 'Phase Throughput - Name' in df_tab:
+        ph = st.selectbox("Phase", sorted(df_tab['Phase Throughput - Name'].dropna().unique()))
+        sub = df_tab[df_tab['Phase Throughput - Name'] == ph]
         metrics = {
             'Total Revenue': sub['Phase Throughput - Phase Rev'].sum(),
             'Avg Margin %': sub['Phase Throughput - Phase GM %'].mean()
@@ -267,16 +257,17 @@ with tabs[4]:
 # Tab6: Durations
 with tabs[5]:
     st.header("⏱️ Stage Durations")
+    df_tab = apply_filters(df, "tab6")
     duration_cols_map = {
-        'Template→RTF': 'Days_Template_to_RTF',
+        'Temp→RTF': 'Days_Template_to_RTF',
         'RTF→Ship': 'Days_RTF_to_Ship',
         'Ship→Inst': 'Days_Ship_to_Install'
     }
     
     avg_durations = {}
     for friendly_name, actual_col in duration_cols_map.items():
-        if actual_col in df.columns:
-            avg_durations[friendly_name] = df[actual_col].mean()
+        if actual_col in df_tab.columns:
+            avg_durations[friendly_name] = df_tab[actual_col].mean()
 
     st.write("**Average Days in Each Stage**")
     st.json({k: f"{v:.1f}" if pd.notna(v) else "N/A" for k, v in avg_durations.items()})
@@ -284,9 +275,9 @@ with tabs[5]:
     st.subheader("Duration Distributions")
     if MATPLOTLIB_AVAILABLE:
         for friendly_name, actual_col in duration_cols_map.items():
-            if actual_col in df.columns and pd.notna(df[actual_col].mean()):
+            if actual_col in df_tab.columns and pd.notna(df_tab[actual_col].mean()):
                 fig, ax = plt.subplots()
-                df[actual_col].dropna().hist(ax=ax)
+                df_tab[actual_col].dropna().hist(ax=ax)
                 ax.set_title(friendly_name)
                 st.pyplot(fig)
     else:
@@ -295,8 +286,9 @@ with tabs[5]:
 # Tab7: Trends
 with tabs[6]:
     st.header("📅 Forecasts & Trends")
-    if 'Template - Date' in df.columns and not df['Template - Date'].dropna().empty:
-        ts = df.set_index('Template - Date').resample('M').agg(
+    df_tab = apply_filters(df, "tab7")
+    if 'Template - Date' in df_tab.columns and not df_tab['Template - Date'].dropna().empty:
+        ts = df_tab.set_index('Template - Date').resample('M').agg(
             Rev=('Revenue', 'sum'), Jobs=('Production #', 'count')
         )
         st.subheader("Monthly Trend: Revenue & Jobs")
