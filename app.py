@@ -258,4 +258,3 @@ if st.session_state.df_full is not None and not st.session_state.df_full.empty:
                 st.dataframe(weekly_rtf_summary.style.format({'SqFt': '{:,.2f}', 'Value': '${:,.2f}', 'Profit': '${:,.2f}', 'Margin %': '{:.2f}%'}), use_container_width=True)
             else:
                 st.warning("'Ready to Fab - Date' column not found.")
-�
