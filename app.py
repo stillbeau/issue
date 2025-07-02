@@ -60,13 +60,16 @@ def load_and_process_data(creds_dict):
         'Job Throughput - Job GM (original)': 'Original_GM',
         'Job Throughput - Job SqFt': 'Total_Job_SqFt'
     }
-    for o, n in num_map.items():
-        if o in df:
-            df[n] = (df[o].astype(str)
-                     .str.replace(r'[\$,]', '', regex=True)
-                     .astype(float).fillna(0))
+    for orig, new in num_map.items():
+        if orig in df:
+            # Clean the string data first
+            cleaned_series = df[orig].astype(str).str.replace(r'[\$,]', '', regex=True)
+            # Convert to numeric, coercing errors (like empty strings) to NaN
+            numeric_series = pd.to_numeric(cleaned_series, errors='coerce')
+            # Finally, fill any resulting NaN values with 0
+            df[new] = numeric_series.fillna(0)
         else:
-            df[n] = 0.0
+            df[new] = 0.0
     
     # --- Dates parse ---
     date_cols = ['Template - Date', 'Ready to Fab - Date', 'Ship-Blank - Date', 'Install - Date']
@@ -283,4 +286,3 @@ with tabs[6]:
         st.line_chart(fc, height=200)
     else:
         st.warning("Forecasting requires the 'scikit-learn' library. Please add it to your requirements.txt file.")
-
