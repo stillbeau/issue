@@ -66,7 +66,7 @@ def load_and_process_data(creds_dict, spreadsheet_id, worksheet_name):
                 df[col_new] = df[col_original].astype(str).str.replace('$', '', regex=False).str.replace(',', '', regex=False)
                 df[col_new] = pd.to_numeric(df[col_new], errors='coerce').fillna(0)
             else:
-                # Don't show a warning here, as it can be noisy. The app will handle missing cols gracefully.
+                st.warning(f"Required column '{col_original}' not found. Calculations may be inaccurate.")
                 df[col_new] = 0.0
 
         critical_cols = ['Order Type', 'Production #', 'Job Name', 'Invoice - Status', 
@@ -147,68 +147,21 @@ else:
 if st.session_state.df_full is not None and not st.session_state.df_full.empty:
     df_full = st.session_state.df_full
 
-    # --- Sidebar Filters ---
-    st.sidebar.header("Filters")
-    
-    df_for_filters = df_full
-    
-    # Initialize empty lists for selections
-    selected_salespersons = []
-    selected_categories = []
-    selected_materials = []
-    selected_cities = []
-    
-    # Salesperson Filter - Only show if the column exists
-    if 'Salesperson' in df_for_filters.columns:
-        salesperson_options = sorted(df_for_filters['Salesperson'].dropna().unique())
-        selected_salespersons = st.sidebar.multiselect("Filter by Salesperson:", salesperson_options, default=salesperson_options)
-    else:
-        st.sidebar.warning("'Salesperson' column not found in your sheet.")
-
-    # Customer Category Filter - Only show if the column exists
-    if 'Customer Category' in df_for_filters.columns:
-        category_options = sorted(df_for_filters['Customer Category'].dropna().unique())
-        selected_categories = st.sidebar.multiselect("Filter by Customer Category:", category_options, default=category_options)
-    else:
-        st.sidebar.warning("'Customer Category' column not found in your sheet.")
-
-    # Job Material Filter
-    if 'Job Material' in df_for_filters.columns:
-        material_options = sorted(df_for_filters['Job Material'].dropna().unique())
-        selected_materials = st.sidebar.multiselect("Filter by Job Material:", material_options, default=material_options)
-    else:
-        st.sidebar.warning("'Job Material' column not found in your sheet.")
-
-    # City Filter
-    if 'City' in df_for_filters.columns:
-        city_options = sorted(df_for_filters['City'].dropna().unique())
-        selected_cities = st.sidebar.multiselect("Filter by City:", city_options, default=city_options)
-    else:
-        st.sidebar.warning("'City' column not found in your sheet.")
-
-
-    # Apply filters
-    df_filtered = df_full.copy()
-    if selected_salespersons and 'Salesperson' in df_filtered.columns:
-        df_filtered = df_filtered[df_filtered['Salesperson'].isin(selected_salespersons)]
-    if selected_categories and 'Customer Category' in df_filtered.columns:
-        df_filtered = df_filtered[df_filtered['Customer Category'].isin(selected_categories)]
-    if selected_materials and 'Job Material' in df_filtered.columns:
-        df_filtered = df_filtered[df_filtered['Job Material'].isin(selected_materials)]
-    if selected_cities and 'City' in df_filtered.columns:
-        df_filtered = df_filtered[df_filtered['City'].isin(selected_cities)]
-
-
     # --- Main Dashboard Tabs ---
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Overall Dashboard", "📋 Detailed Profitability Data", "🔬 Rework & Variance Analysis", "🛠️ Forecasts"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Overall Dashboard", "📋 Detailed Profitability Data", "� Rework & Variance Analysis", "🛠️ Forecasts"])
 
     with tab1:
         st.header("📈 Overall Performance Dashboard")
-        if not df_filtered.empty:
-            total_revenue = df_filtered['Revenue'].sum()
-            total_profit = df_filtered['Branch Profit'].sum()
+        
+        # Filter for completed jobs for summary metrics
+        df_completed = df_full[df_full['Invoice - Status'].astype(str).str.lower().str.strip() == 'complete'].copy()
+
+        if not df_completed.empty:
+            total_revenue = df_completed['Revenue'].sum()
+            total_profit = df_completed['Branch Profit'].sum()
             avg_margin = (total_profit / total_revenue) * 100 if total_revenue != 0 else 0
             
+            st.subheader("Summary for Completed Jobs")
             summary_cols = st.columns(3)
             summary_cols[0].metric("Total Revenue", f"${total_revenue:,.2f}")
             summary_cols[1].metric("Total Branch Profit", f"${total_profit:,.2f}")
@@ -218,14 +171,14 @@ if st.session_state.df_full is not None and not st.session_state.df_full.empty:
             chart_cols = st.columns(2)
             with chart_cols[0]:
                 st.subheader("Profit by Salesperson")
-                if 'Salesperson' in df_filtered.columns:
-                    st.bar_chart(df_filtered.groupby('Salesperson')['Branch Profit'].sum().sort_values(ascending=False))
+                if 'Salesperson' in df_completed.columns:
+                    st.bar_chart(df_completed.groupby('Salesperson')['Branch Profit'].sum().sort_values(ascending=False))
             with chart_cols[1]:
                 st.subheader("Profit by Job Material")
-                if 'Job Material' in df_filtered.columns:
-                    st.bar_chart(df_filtered.groupby('Job Material')['Branch Profit'].sum().sort_values(ascending=False))
+                if 'Job Material' in df_completed.columns:
+                    st.bar_chart(df_completed.groupby('Job Material')['Branch Profit'].sum().sort_values(ascending=False))
         else:
-            st.warning("No data matches the current filter selection.")
+            st.warning("No completed jobs found to display summary statistics.")
 
     with tab2:
         st.header("📋 Detailed Job Profitability")
@@ -233,8 +186,8 @@ if st.session_state.df_full is not None and not st.session_state.df_full.empty:
             'Production #', 'Job Link', 'Job Name', 'Revenue', 'Total Branch Cost', 'Branch Profit', 'Branch Profit Margin %', 'Profit Variance',
             'Cost_From_Plant', 'Install Cost', 'Total Rework Cost', 'Total_Job_SqFt', 'Order Type', 'Salesperson', 'Customer Category'
         ]
-        display_cols_exist = [col for col in display_cols if col in df_filtered.columns]
-        display_df = df_filtered[display_cols_exist].rename(columns={
+        display_cols_exist = [col for col in display_cols if col in df_full.columns]
+        display_df = df_full[display_cols_exist].rename(columns={
             'Cost_From_Plant': 'Cost from Plant', 'Total_Job_SqFt': 'Total Job SqFt'
         })
         st.dataframe(display_df, column_config={"Job Link": st.column_config.LinkColumn("Job Link", display_text="Open ↗")}, use_container_width=True)
@@ -243,8 +196,8 @@ if st.session_state.df_full is not None and not st.session_state.df_full.empty:
         st.header("🔬 Rework & Variance Analysis")
         
         st.subheader("Rework Cost Breakdown by Reason")
-        if 'Rework_Cost' in df_filtered.columns and 'Rework - Stone Shop - Reason' in df_filtered.columns:
-            rework_df = df_filtered[df_filtered['Rework_Cost'] > 0]
+        if 'Rework_Cost' in df_full.columns and 'Rework - Stone Shop - Reason' in df_full.columns:
+            rework_df = df_full[df_full['Rework_Cost'] > 0]
             if not rework_df.empty:
                 rework_summary = rework_df.groupby('Rework - Stone Shop - Reason')['Rework_Cost'].agg(['sum', 'count']).reset_index().rename(columns={'sum': 'Total Rework Cost', 'count': 'Number of Jobs'})
                 st.dataframe(rework_summary.style.format({'Total Rework Cost': '${:,.2f}'}), use_container_width=True)
@@ -255,7 +208,7 @@ if st.session_state.df_full is not None and not st.session_state.df_full.empty:
 
         st.markdown("---")
         st.subheader("Profit Variance Analysis")
-        variance_df = df_filtered.copy()
+        variance_df = df_full.copy()
         if 'Profit Variance' in variance_df.columns:
             variance_df['Abs_Variance'] = variance_df['Profit Variance'].abs()
             
@@ -305,3 +258,4 @@ if st.session_state.df_full is not None and not st.session_state.df_full.empty:
                 st.dataframe(weekly_rtf_summary.style.format({'SqFt': '{:,.2f}', 'Value': '${:,.2f}', 'Profit': '${:,.2f}', 'Margin %': '{:.2f}%'}), use_container_width=True)
             else:
                 st.warning("'Ready to Fab - Date' column not found.")
+�
