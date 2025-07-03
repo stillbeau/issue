@@ -89,11 +89,11 @@ def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
     df = pd.DataFrame(worksheet.get_all_records())
 
     # --- Data Cleaning and Transformation ---
-    
+
     # 1. Calculate Production Cost FIRST, using original column names for reliability
     prod_cost_col = 'Phase Dollars - Plant Invoice $'
     fallback_prod_cost_col = 'Job Throughput - Job Plant Invoice'
-    
+
     if prod_cost_col in df.columns:
         df['Cost_From_Plant'] = df[prod_cost_col].apply(calculate_production_cost)
     elif fallback_prod_cost_col in df.columns:
@@ -108,13 +108,11 @@ def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
     # Create a mapping from new to original names for later use if needed
     col_map = dict(zip(new_cols, original_cols))
 
-    # 3. Clean key text columns and create a dedicated Job_Link column for hyperlinks
+    # 3. Clean key text columns
     if 'Production_' in df.columns:
         df['Production_'] = df['Production_'].fillna('').astype(str).str.strip()
-        # Create a full URL in a new column. This is a more robust way to handle links.
-        df['Job_Link'] = df['Production_'].apply(
-            lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None
-        )
+        # NOTE: The creation of a dedicated 'Job_Link' column has been removed.
+        # Links will be handled within each UI rendering function.
 
     # 4. Rename and clean remaining numeric columns
     numeric_column_map = {
@@ -212,21 +210,32 @@ def render_overview_tab(df: pd.DataFrame):
 def render_detailed_data_tab(df: pd.DataFrame):
     """Renders the 'Detailed Data' tab."""
     st.header("📋 Detailed Data View")
+    
+    # Define which columns from the main dataframe we want to show.
     display_cols = [
-        'Production_', 'Job_Link', 'Job_Name', 'Revenue', 'Total_Job_SqFt', 
-        'Cost_From_Plant', 'Install_Cost', 'Total_Branch_Cost', 'Branch_Profit', 
+        'Production_', 'Job_Name', 'Revenue', 'Total_Job_SqFt',
+        'Cost_From_Plant', 'Install_Cost', 'Total_Branch_Cost', 'Branch_Profit',
         'Branch_Profit_Margin_%', 'Shop_Profit_Margin_%', 'Profit_Variance'
     ]
     df_display = df[[c for c in display_cols if c in df.columns]].copy()
-    
+
+    # To use st.column_config.LinkColumn, the column must contain the full URL.
+    # We create a new column 'Link' with the URL for display purposes.
+    if 'Production_' in df_display.columns:
+        df_display['Link'] = df_display['Production_'].apply(
+            lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None
+        )
+
     column_config = {
-        "Job_Link": st.column_config.LinkColumn(
+        # Configure the 'Link' column to be a clickable link.
+        # The 'display_text' regex extracts the PO number from the URL to show in the cell.
+        "Link": st.column_config.LinkColumn(
             "Prod #",
-            display_text=f"{MORAWARE_SEARCH_URL}(.*)", # Regex to show only the PO number
-            tooltip="Click to search in Moraware",
-            new_tab=True
+            help="Click to search in Moraware",
+            display_text=f"{MORAWARE_SEARCH_URL}(.*)" 
         ),
-        "Production_": None, # Hide the original text column
+        # Hide the original text column, as 'Link' now serves its purpose.
+        "Production_": None,
         "Revenue": st.column_config.NumberColumn(format='$%.2f'),
         "Total_Job_SqFt": st.column_config.NumberColumn("SqFt", format='%.2f'),
         "Cost_From_Plant": st.column_config.NumberColumn("Production Cost", format='$%.2f'),
@@ -241,18 +250,28 @@ def render_detailed_data_tab(df: pd.DataFrame):
             "Shop Profit Margin", format='%.2f%%', min_value=-100, max_value=100
         ),
     }
+    
+    # Define the final display order of columns.
+    column_order = [
+        'Link', 'Job_Name', 'Revenue', 'Total_Job_SqFt', 'Cost_From_Plant',
+        'Install_Cost', 'Total_Branch_Cost', 'Branch_Profit',
+        'Branch_Profit_Margin_%', 'Shop_Profit_Margin_%', 'Profit_Variance'
+    ]
+    # Filter order to only include columns that actually exist.
+    final_column_order = [c for c in column_order if c in df_display.columns]
 
     st.dataframe(
-        df_display, use_container_width=True,
+        df_display,
+        use_container_width=True,
         column_config=column_config,
-        column_order=[col for col in ['Job_Link', 'Job_Name', 'Revenue', 'Total_Job_SqFt', 'Cost_From_Plant', 'Install_Cost', 'Total_Branch_Cost', 'Branch_Profit', 'Branch_Profit_Margin_%', 'Shop_Profit_Margin_%', 'Profit_Variance'] if col in df_display.columns]
+        column_order=final_column_order
     )
 
 def render_profit_drivers_tab(df: pd.DataFrame):
     """Renders the 'Profit Drivers' tab."""
     st.header("💸 Profitability Drivers")
     st.markdown("Analyze which business segments are most profitable.")
-    
+
     driver_options = ['Job_Type', 'Order_Type', 'Lead_Source', 'Material_Brand']
     valid_drivers = [d for d in driver_options if d in df.columns]
 
@@ -261,7 +280,7 @@ def render_profit_drivers_tab(df: pd.DataFrame):
         return
 
     selected_driver = st.selectbox("Analyze Profitability by:", valid_drivers)
-    
+
     if selected_driver:
         agg_dict = {
             'Avg_Branch_Profit_Margin': ('Branch_Profit_Margin_%', 'mean'),
@@ -272,9 +291,9 @@ def render_profit_drivers_tab(df: pd.DataFrame):
             agg_dict['Avg_Shop_Profit_Margin'] = ('Shop_Profit_Margin_%', 'mean')
 
         driver_analysis = df.groupby(selected_driver).agg(**agg_dict).sort_values('Avg_Branch_Profit_Margin', ascending=False)
-        
+
         st.subheader(f"Profitability by {selected_driver.replace('_', ' ')}")
-        
+
         format_dict = {
             'Avg_Branch_Profit_Margin': '{:.2f}%',
             'Total_Profit': '${:,.2f}'
@@ -287,7 +306,7 @@ def render_profit_drivers_tab(df: pd.DataFrame):
 def render_rework_tab(df: pd.DataFrame):
     """Renders the 'Rework & Variance' tab."""
     st.header("🔬 Rework Insights & Profit Variance")
-    
+
     c1, c2 = st.columns(2)
 
     with c1:
@@ -296,19 +315,23 @@ def render_rework_tab(df: pd.DataFrame):
             rework_jobs = df[df['Total_Rework_Cost'] > 0].copy()
             if not rework_jobs.empty:
                 st.metric("Total Rework Cost", f"${rework_jobs['Total_Rework_Cost'].sum():,.2f}", f"{len(rework_jobs)} jobs affected")
-                
+
                 st.write("**Rework Costs by Reason**")
                 agg_rework = rework_jobs.groupby('Rework_Stone_Shop_Reason')['Total_Rework_Cost'].agg(['sum', 'count'])
                 agg_rework.columns = ['Total Rework Cost', 'Number of Jobs']
                 st.dataframe(agg_rework.sort_values('Total Rework Cost', ascending=False).style.format({'Total Rework Cost': '${:,.2f}'}))
 
                 with st.expander("View Rework Job Details"):
-                    rework_display_cols = ['Job_Link', 'Job_Name', 'Total_Rework_Cost', 'Rework_Stone_Shop_Reason']
+                    if 'Production_' in rework_jobs.columns:
+                        rework_jobs['Link'] = rework_jobs['Production_'].apply(
+                            lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None
+                        )
+                    rework_display_cols = ['Link', 'Job_Name', 'Total_Rework_Cost', 'Rework_Stone_Shop_Reason']
                     st.dataframe(
                         rework_jobs[[c for c in rework_display_cols if c in rework_jobs.columns]],
                         use_container_width=True,
                         column_config={
-                            "Job_Link": st.column_config.LinkColumn("Prod #", display_text=f"{MORAWARE_SEARCH_URL}(.*)", tooltip="Click to search in Moraware", new_tab=True),
+                            "Link": st.column_config.LinkColumn("Prod #", display_text=f"{MORAWARE_SEARCH_URL}(.*)", tooltip="Click to search in Moraware", new_tab=True),
                             "Total_Rework_Cost": st.column_config.NumberColumn("Rework Cost", format='$%.2f'),
                         }
                     )
@@ -325,12 +348,16 @@ def render_rework_tab(df: pd.DataFrame):
                 st.metric("Jobs with Profit Variance", f"{len(variance_jobs)}")
 
                 st.write("**Jobs with Largest Profit Variance**")
-                variance_display_cols = ['Job_Link', 'Job_Name', 'Original_GM', 'Branch_Profit', 'Profit_Variance']
+                if 'Production_' in variance_jobs.columns:
+                    variance_jobs['Link'] = variance_jobs['Production_'].apply(
+                        lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None
+                    )
+                variance_display_cols = ['Link', 'Job_Name', 'Original_GM', 'Branch_Profit', 'Profit_Variance']
                 st.dataframe(
                     variance_jobs[[c for c in variance_display_cols if c in variance_jobs.columns]].sort_values(by='Profit_Variance', key=abs, ascending=False).head(20),
                     use_container_width=True,
                     column_config={
-                        "Job_Link": st.column_config.LinkColumn("Prod #", display_text=f"{MORAWARE_SEARCH_URL}(.*)", tooltip="Click to search in Moraware", new_tab=True),
+                        "Link": st.column_config.LinkColumn("Prod #", display_text=f"{MORAWARE_SEARCH_URL}(.*)", tooltip="Click to search in Moraware", new_tab=True),
                         "Original_GM": st.column_config.NumberColumn("Est. Profit", format='$%.2f'),
                         "Branch_Profit": st.column_config.NumberColumn("Actual Profit", format='$%.2f'),
                         "Profit_Variance": st.column_config.NumberColumn("Variance", format='$%.2f'),
@@ -344,7 +371,7 @@ def render_rework_tab(df: pd.DataFrame):
 def render_pipeline_issues_tab(df: pd.DataFrame):
     """Renders the 'Pipeline & Issues' tab."""
     st.header("🚧 Job Pipeline & Issues")
-    
+
     st.subheader("Jobs Awaiting Ready-to-Fab")
     st.markdown("Jobs that have been templated but are not yet marked as 'Ready to Fab'.")
 
@@ -355,31 +382,39 @@ def render_pipeline_issues_tab(df: pd.DataFrame):
 
     if not stuck_jobs.empty:
         stuck_jobs['Days_Since_Template'] = (today - stuck_jobs['Template_Date']).dt.days
-        display_cols = ['Job_Link', 'Job_Name', 'Salesperson', 'Template_Date', 'Days_Since_Template']
+        if 'Production_' in stuck_jobs.columns:
+            stuck_jobs['Link'] = stuck_jobs['Production_'].apply(
+                lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None
+            )
+        display_cols = ['Link', 'Job_Name', 'Salesperson', 'Template_Date', 'Days_Since_Template']
         st.dataframe(
             stuck_jobs[[c for c in display_cols if c in stuck_jobs.columns]].sort_values(by='Days_Since_Template', ascending=False),
             use_container_width=True,
             column_config={
-                "Job_Link": st.column_config.LinkColumn("Prod #", display_text=f"{MORAWARE_SEARCH_URL}(.*)", tooltip="Click to search in Moraware", new_tab=True),
+                "Link": st.column_config.LinkColumn("Prod #", display_text=f"{MORAWARE_SEARCH_URL}(.*)", tooltip="Click to search in Moraware", new_tab=True),
                 "Template_Date": st.column_config.DateColumn("Template Date", format="YYYY-MM-DD")
             }
         )
     else:
         st.success("✅ No jobs are currently stuck between Template and Ready to Fab.")
-    
+
     st.markdown("---")
-    
+
     issue_cols = ['Job_Issues', 'Account_Issues']
     valid_issue_cols = [i for i in issue_cols if i in df.columns]
     if valid_issue_cols:
         st.subheader("Jobs with Reported Issues")
         jobs_with_issues = df[df[valid_issue_cols].notna().any(axis=1) & (df[valid_issue_cols] != '').any(axis=1)].copy()
         if not jobs_with_issues.empty:
-            display_cols = ['Job_Link', 'Job_Name', 'Branch_Profit_Margin_%', 'Shop_Profit_Margin_%'] + valid_issue_cols
+            if 'Production_' in jobs_with_issues.columns:
+                jobs_with_issues['Link'] = jobs_with_issues['Production_'].apply(
+                    lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None
+                )
+            display_cols = ['Link', 'Job_Name', 'Branch_Profit_Margin_%', 'Shop_Profit_Margin_%'] + valid_issue_cols
             st.dataframe(
                 jobs_with_issues[[c for c in display_cols if c in jobs_with_issues.columns]],
                 column_config={
-                    "Job_Link": st.column_config.LinkColumn("Prod #", display_text=f"{MORAWARE_SEARCH_URL}(.*)", tooltip="Click to search in Moraware", new_tab=True)
+                    "Link": st.column_config.LinkColumn("Prod #", display_text=f"{MORAWARE_SEARCH_URL}(.*)", tooltip="Click to search in Moraware", new_tab=True)
                 }
             )
         else:
@@ -388,40 +423,44 @@ def render_pipeline_issues_tab(df: pd.DataFrame):
 def render_workload_analysis(df: pd.DataFrame, activity_name: str, date_col: str, assignee_col: str):
     """A reusable function to display weekly workload for a given activity."""
     st.subheader(activity_name)
-    
+
     if date_col not in df.columns or assignee_col not in df.columns:
         st.warning(f"Required columns not found for {activity_name} analysis.")
         return
 
     activity_df = df.dropna(subset=[date_col, assignee_col]).copy()
-    
+
     if activity_df.empty:
         st.info(f"No {activity_name.lower()} data available for the current selection.")
         return
 
     assignees = sorted([name for name in activity_df[assignee_col].unique() if name and str(name).strip()])
-    
+
     for assignee in assignees:
         with st.expander(f"**{assignee}**"):
-            assignee_df = activity_df[activity_df[assignee_col] == assignee]
-            
+            assignee_df = activity_df[activity_df[assignee_col] == assignee].copy()
+
             weekly_summary = assignee_df.set_index(date_col).resample('W-Mon', label='left', closed='left').agg(
                 Jobs=('Production_', 'count'),
                 Total_SqFt=('Total_Job_SqFt', 'sum')
             ).reset_index()
             weekly_summary = weekly_summary[weekly_summary['Jobs'] > 0]
-            
+
             if not weekly_summary.empty:
                 st.write("**Weekly Summary**")
                 st.dataframe(weekly_summary.rename(columns={date_col: 'Week_Start_Date'}), use_container_width=True)
 
                 with st.expander("Show Job Details"):
-                    job_detail_cols = ['Job_Link', 'Job_Name', 'Total_Job_SqFt', date_col]
+                    if 'Production_' in assignee_df.columns:
+                        assignee_df['Link'] = assignee_df['Production_'].apply(
+                            lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None
+                        )
+                    job_detail_cols = ['Link', 'Job_Name', 'Total_Job_SqFt', date_col]
                     st.dataframe(
                         assignee_df[[c for c in job_detail_cols if c in assignee_df.columns]].sort_values(by=date_col),
                         use_container_width=True,
                         column_config={
-                            "Job_Link": st.column_config.LinkColumn("Prod #", display_text=f"{MORAWARE_SEARCH_URL}(.*)", tooltip="Click to search in Moraware", new_tab=True),
+                            "Link": st.column_config.LinkColumn("Prod #", display_text=f"{MORAWARE_SEARCH_URL}(.*)", tooltip="Click to search in Moraware", new_tab=True),
                             date_col: st.column_config.DateColumn("Scheduled Date", format="YYYY-MM-DD")
                         }
                     )
@@ -448,14 +487,14 @@ def render_forecasting_tab(df: pd.DataFrame):
     if not SKLEARN_AVAILABLE or not MATPLOTLIB_AVAILABLE:
         st.error("Forecasting features require scikit-learn and matplotlib. Please install them.")
         return
-        
+
     if 'Job_Creation' not in df.columns or df['Job_Creation'].isnull().all():
         st.warning("Job Creation date column is required for trend analysis and is missing or empty.")
         return
 
     df_trends = df.copy()
     df_trends = df_trends.set_index('Job_Creation').sort_index()
-    
+
     # --- Monthly Performance Trends ---
     st.subheader("Monthly Performance Trends")
     monthly_summary = df_trends.resample('M').agg({
@@ -464,13 +503,13 @@ def render_forecasting_tab(df: pd.DataFrame):
         'Production_': 'count'
     }).rename(columns={'Production_': 'Job_Count'})
     monthly_summary['Branch_Profit_Margin_%'] = (monthly_summary['Branch_Profit'] / monthly_summary['Revenue'] * 100).fillna(0)
-    
+
     # Remove the last month if it's incomplete
     if not monthly_summary.empty:
         last_month = monthly_summary.index[-1]
         if last_month.month == datetime.now().month and last_month.year == datetime.now().year:
             monthly_summary = monthly_summary[:-1]
-    
+
     if monthly_summary.empty:
         st.info("Not enough historical data to display monthly trends.")
         return
@@ -480,48 +519,48 @@ def render_forecasting_tab(df: pd.DataFrame):
         st.line_chart(monthly_summary[['Revenue', 'Branch_Profit']])
     with c2:
         st.line_chart(monthly_summary[['Branch_Profit_Margin_%']])
-    
+
     st.bar_chart(monthly_summary['Job_Count'])
-    
+
     st.markdown("---")
-    
+
     # --- Revenue Forecast ---
     st.subheader("Simple Revenue Forecast")
-    
+
     forecast_df = monthly_summary[['Revenue']].reset_index()
     forecast_df['Time'] = np.arange(len(forecast_df.index))
-    
+
     # Train model
     model = LinearRegression()
     X = forecast_df[['Time']]
     y = forecast_df['Revenue']
     model.fit(X, y)
-    
+
     # Create future dataframe
     future_periods = st.slider("Months to Forecast:", 1, 12, 3)
     last_time = forecast_df['Time'].max()
     last_date = forecast_df['Job_Creation'].max()
-    
+
     future_dates = pd.date_range(start=last_date, periods=future_periods + 1, freq='M')[1:]
     future_df = pd.DataFrame({
         'Job_Creation': future_dates,
         'Time': np.arange(last_time + 1, last_time + 1 + future_periods)
     })
-    
+
     # Predict future revenue
     future_df['Forecast'] = model.predict(future_df[['Time']])
-    
+
     # Combine and plot
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.plot(forecast_df['Job_Creation'], forecast_df['Revenue'], label='Actual Revenue', marker='o')
     ax.plot(future_df['Job_Creation'], future_df['Forecast'], label='Forecasted Revenue', linestyle='--', marker='o')
-    
+
     ax.set_title('Monthly Revenue and Forecast')
     ax.set_ylabel('Revenue ($)')
     ax.legend()
     plt.grid(True, which='both', linestyle='--', linewidth=0.5)
     st.pyplot(fig)
-    
+
     st.caption("Note: This is a simple linear regression forecast and should be used for directional guidance only.")
 
 
@@ -556,7 +595,7 @@ def main():
     if 'Job_Creation' in df_full.columns and not df_full['Job_Creation'].dropna().empty:
         min_date = df_full['Job_Creation'].min().date()
         max_date = df_full['Job_Creation'].max().date()
-        
+
         # Default to the last 12 months if the date range is very large
         default_start = max_date - relativedelta(months=12)
         if default_start < min_date:
@@ -576,7 +615,7 @@ def main():
     def get_unique_options(df, col_name):
         return sorted(df[col_name].dropna().unique()) if col_name in df else []
 
-    filter_cols = {'Salesperson': 'Salesperson', 'Customer_Category': 'Customer Category', 
+    filter_cols = {'Salesperson': 'Salesperson', 'Customer_Category': 'Customer Category',
                    'Material_Brand': 'Material Brand', 'City': 'City'}
     for col, label in filter_cols.items():
         if col in df_filtered:
