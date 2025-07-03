@@ -362,13 +362,12 @@ def render_rework_tab(df: pd.DataFrame):
 def render_pipeline_issues_tab(df: pd.DataFrame, today: pd.Timestamp):
     """Renders the 'Pipeline & Issues' tab, using a specific date as 'today'."""
     st.header("🚧 Job Pipeline & Issues")
-    if df.empty:
-        st.warning("No data available for the selected filters.")
-        return
+    # This tab receives the full, unfiltered dataframe.
+    # The main sidebar filters do NOT apply here.
 
     # --- Section for Jobs Awaiting RTF ---
     st.subheader("Jobs Awaiting Ready-to-Fab")
-    st.markdown("Jobs that have been templated but are not yet marked as 'Ready to Fab' as of the selected date.")
+    st.markdown("Jobs that have been templated but are not yet marked as 'Ready to Fab' as of the selected date. This view ignores the sidebar filters.")
     stuck_jobs = df[
         (df['Template_Date'].notna()) & (df['Template_Date'] <= today) & (df['Ready_to_Fab_Date'].isna())
     ].copy()
@@ -392,7 +391,7 @@ def render_pipeline_issues_tab(df: pd.DataFrame, today: pd.Timestamp):
     
     # --- Section for Missing Plant Invoice ---
     st.subheader("Jobs with Missing Plant Invoice $")
-    st.markdown("Jobs within the selected filters that are missing the 'Phase Dollars - Plant Invoice $' amount.")
+    st.markdown("Jobs that are missing the 'Phase Dollars - Plant Invoice $' amount. This view ignores the sidebar filters.")
     if 'Cost_From_Plant' in df.columns and 'Job_Creation' in df.columns:
         missing_invoice_jobs = df[df['Cost_From_Plant'] == 0].copy()
         if not missing_invoice_jobs.empty:
@@ -564,6 +563,7 @@ def main():
 
     # --- Sidebar: Filters ---
     st.sidebar.header("📊 Filters")
+    st.sidebar.info("These filters apply to all tabs except 'Pipeline & Issues'.")
 
     # Date Filter
     date_filter_column = st.sidebar.selectbox(
@@ -626,7 +626,8 @@ def main():
     with tabs[1]: render_detailed_data_tab(df_filtered)
     with tabs[2]: render_profit_drivers_tab(df_filtered)
     with tabs[3]: render_rework_tab(df_filtered)
-    with tabs[4]: render_pipeline_issues_tab(df_filtered, today_dt)
+    # The Pipeline tab should look at ALL data, not the filtered data, to find stuck jobs.
+    with tabs[4]: render_pipeline_issues_tab(df_full, today_dt)
     with tabs[5]: render_field_workload_tab(df_filtered)
     with tabs[6]: render_forecasting_tab(df_filtered)
 
