@@ -376,12 +376,16 @@ def render_pipeline_issues_tab(df: pd.DataFrame, today: pd.Timestamp):
         (df['Ready_to_Fab_Date'].isna())
     )
 
-    # Add extra conditions to ensure the job is not actually complete
     # Exclude jobs that have been shipped or installed, as they are past the RTF stage
     if 'Ship_Date' in df.columns:
         conditions &= (df['Ship_Date'].isna())
     if 'Install_Date' in df.columns:
         conditions &= (df['Install_Date'].isna())
+        
+    # Exclude jobs that are explicitly closed or cancelled, if a status column exists
+    if 'Job_Status' in df.columns:
+        closed_statuses = ['closed', 'complete', 'cancelled']
+        conditions &= (~df['Job_Status'].str.lower().isin(closed_statuses))
         
     stuck_jobs = df[conditions].copy()
 
