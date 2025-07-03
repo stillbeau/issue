@@ -369,23 +369,20 @@ def render_pipeline_issues_tab(df: pd.DataFrame, today: pd.Timestamp):
     st.subheader("Jobs Awaiting Ready-to-Fab")
     st.markdown("Jobs that have been templated but are not yet marked as 'Ready to Fab' as of the selected date. This view ignores the sidebar filters.")
     
-    # Base condition: Templated but not yet Ready for Fab
+    # Base condition: Templated on or before the selected date.
     conditions = (
         (df['Template_Date'].notna()) &
-        (df['Template_Date'] <= today) &
-        (df['Ready_to_Fab_Date'].isna())
+        (df['Template_Date'] <= today)
     )
 
-    # Exclude jobs that have been shipped or installed, as they are past the RTF stage
-    if 'Ship_Date' in df.columns:
-        conditions &= (df['Ship_Date'].isna())
-    if 'Install_Date' in df.columns:
-        conditions &= (df['Install_Date'].isna())
-        
-    # Exclude jobs that are explicitly closed or cancelled, if a status column exists
-    if 'Job_Status' in df.columns:
-        closed_statuses = ['closed', 'complete', 'cancelled']
-        conditions &= (~df['Job_Status'].str.lower().isin(closed_statuses))
+    # A job is considered "stuck" if the RTF status column exists and is not 'Complete',
+    # or if the status column doesn't exist, we fall back to checking if the RTF date is missing.
+    if 'Ready_to_Fab_Status' in df.columns:
+        # Treat NaN or any string other than 'complete' (case-insensitive) as not complete.
+        conditions &= (df['Ready_to_Fab_Status'].fillna('').str.lower() != 'complete')
+    else:
+        # Fallback if the status column isn't present, check for the date
+        conditions &= (df['Ready_to_Fab_Date'].isna())
         
     stuck_jobs = df[conditions].copy()
 
