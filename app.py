@@ -576,59 +576,14 @@ def main():
         st.warning("No data was loaded from the Google Sheet.")
         st.stop()
 
-    # --- Sidebar: Filters ---
-    st.sidebar.header("📊 Filters")
-    st.sidebar.info("These filters apply to all tabs except 'Pipeline & Issues'.")
-
-    # Date Filter
-    date_filter_column = st.sidebar.selectbox(
-        "Filter by Date Column:",
-        options=['Install_Date', 'Template_Date', 'Job_Creation'],
-        index=0
-    )
-    
-    min_date = df_full[date_filter_column].min().date() if not df_full[date_filter_column].isnull().all() else datetime.now().date() - timedelta(days=365)
-    max_date = df_full[date_filter_column].max().date() if not df_full[date_filter_column].isnull().all() else datetime.now().date()
-
-    start_date, end_date = st.sidebar.date_input(
-        f"Select {date_filter_column.replace('_',' ')} Range:",
-        value=(max_date - timedelta(days=89), max_date), # Default to last 90 days
-        min_value=min_date,
-        max_value=max_date,
-        key='date_range_picker'
-    )
-    
-    # Salesperson Filter
-    if 'Salesperson' in df_full.columns:
-        salespeople = sorted(df_full['Salesperson'].dropna().unique())
-        selected_salespeople = st.sidebar.multiselect(
-            "Filter by Salesperson:",
-            options=salespeople,
-            default=[]
-        )
-    else:
-        selected_salespeople = []
-
-    # Pipeline "Today" Date
+    # --- Sidebar: Date Selection for Pipeline ---
+    st.sidebar.header("🗓️ Date Selection")
     today_date = st.sidebar.date_input(
         "Select 'Today's' Date for Pipeline Calculations",
         value=datetime.now().date(),
         help="This date is used to calculate metrics like 'Days Since Template'."
     )
     today_dt = pd.to_datetime(today_date)
-
-    # --- Applying Filters ---
-    df_filtered = df_full.copy()
-    
-    # Apply date filter
-    if start_date and end_date:
-        start_dt = pd.to_datetime(start_date)
-        end_dt = pd.to_datetime(end_date)
-        df_filtered = df_filtered[df_filtered[date_filter_column].between(start_dt, end_dt, inclusive='both')]
-
-    # Apply salesperson filter
-    if selected_salespeople:
-        df_filtered = df_filtered[df_filtered['Salesperson'].isin(selected_salespeople)]
 
     # --- Main Content: Tabs ---
     tab_names = [
@@ -637,14 +592,13 @@ def main():
     ]
     tabs = st.tabs(tab_names)
 
-    with tabs[0]: render_overview_tab(df_filtered)
-    with tabs[1]: render_detailed_data_tab(df_filtered)
-    with tabs[2]: render_profit_drivers_tab(df_filtered)
-    with tabs[3]: render_rework_tab(df_filtered)
-    # The Pipeline tab should look at ALL data, not the filtered data, to find stuck jobs.
+    with tabs[0]: render_overview_tab(df_full)
+    with tabs[1]: render_detailed_data_tab(df_full)
+    with tabs[2]: render_profit_drivers_tab(df_full)
+    with tabs[3]: render_rework_tab(df_full)
     with tabs[4]: render_pipeline_issues_tab(df_full, today_dt)
-    with tabs[5]: render_field_workload_tab(df_filtered)
-    with tabs[6]: render_forecasting_tab(df_filtered)
+    with tabs[5]: render_field_workload_tab(df_full)
+    with tabs[6]: render_forecasting_tab(df_full)
 
 if __name__ == "__main__":
     main()
