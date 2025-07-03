@@ -37,7 +37,7 @@ st.set_page_config(layout="wide", page_title="Profitability Dashboard", page_ico
 # --- Constants & Global Configuration ---
 SPREADSHEET_ID = "1iToy3C-Bfn06bjuEM_flHNHwr2k1zMCV1wX9MNKzj38"
 WORKSHEET_NAME = "jobs"
-MORAWARE_SEARCH_URL_PATTERN = "https://floformcountertops.moraware.net/sys/search?&search={value}"
+MORAWARE_SEARCH_URL_HREF = "https://floformcountertops.moraware.net/sys/search?&search={value}"
 INSTALL_COST_PER_SQFT = 15.0
 
 
@@ -220,8 +220,9 @@ def render_detailed_data_tab(df: pd.DataFrame):
     column_config = {
         "Production_": st.column_config.LinkColumn(
             "Prod #",
-            pattern=MORAWARE_SEARCH_URL_PATTERN,
-            tooltip="Click to search in Moraware"
+            href=MORAWARE_SEARCH_URL_HREF.format(value="{value}"),
+            tooltip="Click to search in Moraware",
+            new_tab=True
         ),
         "Revenue": st.column_config.NumberColumn(format='$%.2f'),
         "Total_Job_SqFt": st.column_config.NumberColumn("SqFt", format='%.2f'),
@@ -303,7 +304,7 @@ def render_rework_tab(df: pd.DataFrame):
                         rework_jobs[[c for c in rework_display_cols if c in rework_jobs.columns]],
                         use_container_width=True,
                         column_config={
-                            "Production_": st.column_config.LinkColumn("Prod #", pattern=MORAWARE_SEARCH_URL_PATTERN, tooltip="Click to search in Moraware"),
+                            "Production_": st.column_config.LinkColumn("Prod #", href=MORAWARE_SEARCH_URL_HREF.format(value="{value}"), tooltip="Click to search in Moraware", new_tab=True),
                             "Total_Rework_Cost": st.column_config.NumberColumn("Rework Cost", format='$%.2f'),
                         }
                     )
@@ -325,7 +326,7 @@ def render_rework_tab(df: pd.DataFrame):
                     variance_jobs[[c for c in variance_display_cols if c in variance_jobs.columns]].sort_values(by='Profit_Variance', key=abs, ascending=False).head(20),
                     use_container_width=True,
                     column_config={
-                        "Production_": st.column_config.LinkColumn("Prod #", pattern=MORAWARE_SEARCH_URL_PATTERN, tooltip="Click to search in Moraware"),
+                        "Production_": st.column_config.LinkColumn("Prod #", href=MORAWARE_SEARCH_URL_HREF.format(value="{value}"), tooltip="Click to search in Moraware", new_tab=True),
                         "Original_GM": st.column_config.NumberColumn("Est. Profit", format='$%.2f'),
                         "Branch_Profit": st.column_config.NumberColumn("Actual Profit", format='$%.2f'),
                         "Profit_Variance": st.column_config.NumberColumn("Variance", format='$%.2f'),
@@ -355,7 +356,7 @@ def render_pipeline_issues_tab(df: pd.DataFrame):
             stuck_jobs[[c for c in display_cols if c in stuck_jobs.columns]].sort_values(by='Days_Since_Template', ascending=False),
             use_container_width=True,
             column_config={
-                "Production_": st.column_config.LinkColumn("Prod #", pattern=MORAWARE_SEARCH_URL_PATTERN, tooltip="Click to search in Moraware"),
+                "Production_": st.column_config.LinkColumn("Prod #", href=MORAWARE_SEARCH_URL_HREF.format(value="{value}"), tooltip="Click to search in Moraware", new_tab=True),
                 "Template_Date": st.column_config.DateColumn("Template Date", format="YYYY-MM-DD")
             }
         )
@@ -374,7 +375,7 @@ def render_pipeline_issues_tab(df: pd.DataFrame):
             st.dataframe(
                 jobs_with_issues[[c for c in display_cols if c in jobs_with_issues.columns]],
                 column_config={
-                    "Production_": st.column_config.LinkColumn("Prod #", pattern=MORAWARE_SEARCH_URL_PATTERN, tooltip="Click to search in Moraware")
+                    "Production_": st.column_config.LinkColumn("Prod #", href=MORAWARE_SEARCH_URL_HREF.format(value="{value}"), tooltip="Click to search in Moraware", new_tab=True)
                 }
             )
         else:
@@ -416,7 +417,7 @@ def render_workload_analysis(df: pd.DataFrame, activity_name: str, date_col: str
                         assignee_df[[c for c in job_detail_cols if c in assignee_df.columns]].sort_values(by=date_col),
                         use_container_width=True,
                         column_config={
-                            "Production_": st.column_config.LinkColumn("Prod #", pattern=MORAWARE_SEARCH_URL_PATTERN, tooltip="Click to search in Moraware"),
+                            "Production_": st.column_config.LinkColumn("Prod #", href=MORAWARE_SEARCH_URL_HREF.format(value="{value}"), tooltip="Click to search in Moraware", new_tab=True),
                             date_col: st.column_config.DateColumn("Scheduled Date", format="YYYY-MM-DD")
                         }
                     )
