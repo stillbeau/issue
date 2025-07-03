@@ -215,14 +215,22 @@ def render_detailed_data_tab(df: pd.DataFrame):
     ]
     df_display = df[[c for c in display_cols if c in df.columns]].copy()
 
-    # Create a markdown link column. st.dataframe will render this as a clickable link.
+    # Create a new column containing the full URL for the link.
     if 'Production_' in df_display.columns:
-        df_display['Job Link'] = df_display['Production_'].apply(
-            lambda po: f"[Job Link]({MORAWARE_SEARCH_URL}{po})" if po else ""
+        df_display['Link'] = df_display['Production_'].apply(
+            lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None
         )
 
     column_config = {
-        # Hide the original Production_ column, as 'Job Link' now serves its purpose.
+        # Configure the 'Link' column. This column contains the URL.
+        "Link": st.column_config.LinkColumn(
+            # Set the header of the column.
+            "Prod #",
+            help="Click to search in Moraware",
+            # Use a regex to extract the job number from the URL to use as the display text.
+            display_text=r".*search=(.*)"
+        ),
+        # Hide the original Production_ column.
         "Production_": None,
         "Revenue": st.column_config.NumberColumn(format='$%.2f'),
         "Total_Job_SqFt": st.column_config.NumberColumn("SqFt", format='%.2f'),
@@ -240,7 +248,7 @@ def render_detailed_data_tab(df: pd.DataFrame):
     }
     
     column_order = [
-        'Job Link', 'Job_Name', 'Revenue', 'Total_Job_SqFt', 'Cost_From_Plant',
+        'Link', 'Job_Name', 'Revenue', 'Total_Job_SqFt', 'Cost_From_Plant',
         'Install_Cost', 'Total_Branch_Cost', 'Branch_Profit',
         'Branch_Profit_Margin_%', 'Shop_Profit_Margin_%', 'Profit_Variance'
     ]
@@ -309,14 +317,15 @@ def render_rework_tab(df: pd.DataFrame):
 
                 with st.expander("View Rework Job Details"):
                     if 'Production_' in rework_jobs.columns:
-                        rework_jobs['Prod #'] = rework_jobs['Production_'].apply(
-                            lambda po: f"[{po}]({MORAWARE_SEARCH_URL}{po})" if po else ""
+                        rework_jobs['Link'] = rework_jobs['Production_'].apply(
+                            lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None
                         )
-                    rework_display_cols = ['Prod #', 'Job_Name', 'Total_Rework_Cost', 'Rework_Stone_Shop_Reason']
+                    rework_display_cols = ['Link', 'Job_Name', 'Total_Rework_Cost', 'Rework_Stone_Shop_Reason']
                     st.dataframe(
                         rework_jobs[[c for c in rework_display_cols if c in rework_jobs.columns]],
                         use_container_width=True,
                         column_config={
+                            "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)"),
                             "Total_Rework_Cost": st.column_config.NumberColumn("Rework Cost", format='$%.2f'),
                         }
                     )
@@ -334,14 +343,15 @@ def render_rework_tab(df: pd.DataFrame):
 
                 st.write("**Jobs with Largest Profit Variance**")
                 if 'Production_' in variance_jobs.columns:
-                    variance_jobs['Prod #'] = variance_jobs['Production_'].apply(
-                        lambda po: f"[{po}]({MORAWARE_SEARCH_URL}{po})" if po else ""
+                    variance_jobs['Link'] = variance_jobs['Production_'].apply(
+                        lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None
                     )
-                variance_display_cols = ['Prod #', 'Job_Name', 'Original_GM', 'Branch_Profit', 'Profit_Variance']
+                variance_display_cols = ['Link', 'Job_Name', 'Original_GM', 'Branch_Profit', 'Profit_Variance']
                 st.dataframe(
                     variance_jobs[[c for c in variance_display_cols if c in variance_jobs.columns]].sort_values(by='Profit_Variance', key=abs, ascending=False).head(20),
                     use_container_width=True,
                     column_config={
+                        "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)"),
                         "Original_GM": st.column_config.NumberColumn("Est. Profit", format='$%.2f'),
                         "Branch_Profit": st.column_config.NumberColumn("Actual Profit", format='$%.2f'),
                         "Profit_Variance": st.column_config.NumberColumn("Variance", format='$%.2f'),
@@ -367,14 +377,15 @@ def render_pipeline_issues_tab(df: pd.DataFrame):
     if not stuck_jobs.empty:
         stuck_jobs['Days_Since_Template'] = (today - stuck_jobs['Template_Date']).dt.days
         if 'Production_' in stuck_jobs.columns:
-            stuck_jobs['Prod #'] = stuck_jobs['Production_'].apply(
-                lambda po: f"[{po}]({MORAWARE_SEARCH_URL}{po})" if po else ""
+            stuck_jobs['Link'] = stuck_jobs['Production_'].apply(
+                lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None
             )
-        display_cols = ['Prod #', 'Job_Name', 'Salesperson', 'Template_Date', 'Days_Since_Template']
+        display_cols = ['Link', 'Job_Name', 'Salesperson', 'Template_Date', 'Days_Since_Template']
         st.dataframe(
             stuck_jobs[[c for c in display_cols if c in stuck_jobs.columns]].sort_values(by='Days_Since_Template', ascending=False),
             use_container_width=True,
             column_config={
+                "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)"),
                 "Template_Date": st.column_config.DateColumn("Template Date", format="YYYY-MM-DD")
             }
         )
@@ -390,12 +401,15 @@ def render_pipeline_issues_tab(df: pd.DataFrame):
         jobs_with_issues = df[df[valid_issue_cols].notna().any(axis=1) & (df[valid_issue_cols] != '').any(axis=1)].copy()
         if not jobs_with_issues.empty:
             if 'Production_' in jobs_with_issues.columns:
-                jobs_with_issues['Prod #'] = jobs_with_issues['Production_'].apply(
-                    lambda po: f"[{po}]({MORAWARE_SEARCH_URL}{po})" if po else ""
+                jobs_with_issues['Link'] = jobs_with_issues['Production_'].apply(
+                    lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None
                 )
-            display_cols = ['Prod #', 'Job_Name', 'Branch_Profit_Margin_%', 'Shop_Profit_Margin_%'] + valid_issue_cols
+            display_cols = ['Link', 'Job_Name', 'Branch_Profit_Margin_%', 'Shop_Profit_Margin_%'] + valid_issue_cols
             st.dataframe(
-                jobs_with_issues[[c for c in display_cols if c in jobs_with_issues.columns]]
+                jobs_with_issues[[c for c in display_cols if c in jobs_with_issues.columns]],
+                column_config={
+                    "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)")
+                }
             )
         else:
             st.info("No jobs with issues in the current selection.")
@@ -432,14 +446,15 @@ def render_workload_analysis(df: pd.DataFrame, activity_name: str, date_col: str
 
                 with st.expander("Show Job Details"):
                     if 'Production_' in assignee_df.columns:
-                        assignee_df['Prod #'] = assignee_df['Production_'].apply(
-                            lambda po: f"[{po}]({MORAWARE_SEARCH_URL}{po})" if po else ""
+                        assignee_df['Link'] = assignee_df['Production_'].apply(
+                            lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None
                         )
-                    job_detail_cols = ['Prod #', 'Job_Name', 'Total_Job_SqFt', date_col]
+                    job_detail_cols = ['Link', 'Job_Name', 'Total_Job_SqFt', date_col]
                     st.dataframe(
                         assignee_df[[c for c in job_detail_cols if c in assignee_df.columns]].sort_values(by=date_col),
                         use_container_width=True,
                         column_config={
+                            "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)"),
                             date_col: st.column_config.DateColumn("Scheduled Date", format="YYYY-MM-DD")
                         }
                     )
