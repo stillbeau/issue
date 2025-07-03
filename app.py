@@ -2,9 +2,9 @@
 """
 A Streamlit dashboard for analyzing job profitability data from a Google Sheet.
 
-This application connects to a specified Google Sheet, processes job data,
-calculates various financial and operational metrics, and presents them in an
-interactive, multi-tabbed dashboard with forecasting capabilities.
+This refactored version includes interactive sidebar filters, improved code
+modularity, and enhanced UI/UX for a more powerful and user-friendly analysis
+experience.
 """
 
 import streamlit as st
@@ -15,7 +15,6 @@ from google.oauth2.service_account import Credentials
 import json
 import re
 from datetime import datetime, timedelta
-from dateutil.relativedelta import relativedelta
 
 # --- Attempt to import optional libraries for advanced features ---
 try:
@@ -77,41 +76,23 @@ def calculate_production_cost(value: str) -> float:
     return total_cost
 
 
-# --- Data Loading and Processing ---
+# --- Data Loading and Processing Sub-Functions ---
 
-@st.cache_data(ttl=300)
-def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
-    """Loads, cleans, and processes data from Google Sheets for analysis."""
-    creds = Credentials.from_service_account_info(creds_dict, scopes=['https://www.googleapis.com/auth/spreadsheets'])
-    gc = gspread.authorize(creds)
-    worksheet = gc.open_by_key(SPREADSHEET_ID).worksheet(WORKSHEET_NAME)
-    df = pd.DataFrame(worksheet.get_all_records())
+def _clean_column_names(df: pd.DataFrame) -> pd.DataFrame:
+    """Standardizes all column names for easier access."""
+    df.columns = df.columns.str.strip().str.replace(r'[\s-]+', '_', regex=True).str.replace(r'[^\w]', '', regex=True)
+    return df
 
-    # --- Data Cleaning and Transformation ---
+def _parse_date_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Parses all known date columns to datetime objects."""
+    date_cols = ['Template_Date', 'Ready_to_Fab_Date', 'Ship_Date', 'Install_Date', 'Service_Date', 'Delivery_Date', 'Job_Creation']
+    for col in date_cols:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors='coerce')
+    return df
 
-    # 1. Calculate Production Cost FIRST, using original column names for reliability
-    prod_cost_col = 'Phase Dollars - Plant Invoice $'
-    fallback_prod_cost_col = 'Job Throughput - Job Plant Invoice'
-
-    if prod_cost_col in df.columns:
-        df['Cost_From_Plant'] = df[prod_cost_col].apply(calculate_production_cost)
-    elif fallback_prod_cost_col in df.columns:
-        df['Cost_From_Plant'] = df[fallback_prod_cost_col].apply(calculate_production_cost)
-    else:
-        df['Cost_From_Plant'] = 0.0
-
-    # 2. Standardize all column names for easier access later
-    original_cols = df.columns.tolist()
-    new_cols = df.columns.str.strip().str.replace(r'[\s-]+', '_', regex=True).str.replace(r'[^\w]', '', regex=True)
-    df.columns = new_cols
-    # Create a mapping from new to original names for later use if needed
-    col_map = dict(zip(new_cols, original_cols))
-
-    # 3. Clean key text columns
-    if 'Production_' in df.columns:
-        df['Production_'] = df['Production_'].fillna('').astype(str).str.strip()
-
-    # 4. Rename and clean remaining numeric columns
+def _clean_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Renames and cleans key numeric columns."""
     numeric_column_map = {
         'Total_Job_Price_': 'Revenue',
         'Job_Throughput_Rework_COGS': 'Rework_COGS',
@@ -121,7 +102,7 @@ def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
         'Total_Job_SqFT': 'Total_Job_SqFt',
         'Job_Throughput_Job_T': 'Throughput_T',
         'Job_Throughput_Job_T_': 'Throughput_T_Percent',
-        'Job_Throughput_Total_COGS': 'Total_COGS' # Added for Shop Profit calculation
+        'Job_Throughput_Total_COGS': 'Total_COGS'
     }
     for original_name, new_name in numeric_column_map.items():
         if original_name in df.columns:
@@ -130,14 +111,11 @@ def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
             df[new_name] = numeric_series.fillna(0)
         else:
             df[new_name] = 0.0
+    return df
 
-    # 5. Parse date columns using the new standardized names
-    date_cols = ['Template_Date', 'Ready_to_Fab_Date', 'Ship_Date', 'Install_Date', 'Service_Date', 'Delivery_Date', 'Job_Creation']
-    for col in date_cols:
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col], errors='coerce')
-
-    # 6. Calculate profitability metrics
+def _calculate_profitability_metrics(df: pd.DataFrame) -> pd.DataFrame:
+    """Calculates all core profitability and cost metrics."""
+    # Branch Profitability
     df['Install_Cost'] = df.get('Total_Job_SqFt', 0) * INSTALL_COST_PER_SQFT
     df['Total_Rework_Cost'] = df.get('Rework_COGS', 0) + df.get('Rework_Labor', 0) + df.get('Rework_Price', 0)
     df['Total_Branch_Cost'] = df['Cost_From_Plant'] + df['Install_Cost'] + df['Total_Rework_Cost']
@@ -148,7 +126,7 @@ def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
     )
     df['Profit_Variance'] = df['Branch_Profit'] - df.get('Original_GM', 0)
 
-    # Calculate Shop Profitability
+    # Shop Profitability
     if 'Cost_From_Plant' in df.columns and 'Total_COGS' in df.columns:
         df['Shop_Profit'] = df['Cost_From_Plant'] - df['Total_COGS']
         df['Shop_Profit_Margin_%'] = df.apply(
@@ -158,27 +136,67 @@ def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
     else:
         df['Shop_Profit'] = 0.0
         df['Shop_Profit_Margin_%'] = 0.0
+    return df
 
-    # 7. Parse material information
+def _calculate_durations(df: pd.DataFrame) -> pd.DataFrame:
+    """Calculates durations between key process stages and filters out negative values."""
+    if 'Ready_to_Fab_Date' in df.columns and 'Template_Date' in df.columns:
+        df['Days_Template_to_RTF'] = (df['Ready_to_Fab_Date'] - df['Template_Date']).dt.days
+        df.loc[df['Days_Template_to_RTF'] < 0, 'Days_Template_to_RTF'] = np.nan
+    if 'Ship_Date' in df.columns and 'Ready_to_Fab_Date' in df.columns:
+        df['Days_RTF_to_Ship'] = (df['Ship_Date'] - df['Ready_to_Fab_Date']).dt.days
+        df.loc[df['Days_RTF_to_Ship'] < 0, 'Days_RTF_to_Ship'] = np.nan
+    if 'Install_Date' in df.columns and 'Ship_Date' in df.columns:
+        df['Days_Ship_to_Install'] = (df['Install_Date'] - df['Ship_Date']).dt.days
+        df.loc[df['Days_Ship_to_Install'] < 0, 'Days_Ship_to_Install'] = np.nan
+    return df
+
+def _enrich_data(df: pd.DataFrame) -> pd.DataFrame:
+    """Adds supplementary data like material parsing and geocoding."""
+    # Parse material information
     if 'Job_Material' in df.columns:
         df[['Material_Brand', 'Material_Color']] = df['Job_Material'].apply(lambda x: pd.Series(parse_material(str(x))))
     else:
         df['Material_Brand'] = "N/A"
+        df['Material_Color'] = "N/A"
 
-    # 8. Calculate stage durations and filter out negative values
-    if 'Ready_to_Fab_Date' in df.columns and 'Template_Date' in df.columns:
-        df['Days_Template_to_RTF'] = (df['Ready_to_Fab_Date'] - df['Template_Date']).dt.days
-        df = df[df['Days_Template_to_RTF'] >= 0]
-    if 'Ship_Date' in df.columns and 'Ready_to_Fab_Date' in df.columns:
-        df['Days_RTF_to_Ship'] = (df['Ship_Date'] - df['Ready_to_Fab_Date']).dt.days
-        df = df[df['Days_RTF_to_Ship'] >= 0]
-    if 'Install_Date' in df.columns and 'Ship_Date' in df.columns:
-        df['Days_Ship_to_Install'] = (df['Install_Date'] - df['Ship_Date']).dt.days
-        df = df[df['Days_Ship_to_Install'] >= 0]
-
-    # 9. Geocode city data
+    # Geocode city data
     if 'City' in df.columns:
         df[['lat', 'lon']] = df['City'].apply(lambda x: pd.Series(get_lat_lon(str(x))))
+
+    return df
+
+
+@st.cache_data(ttl=300)
+def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
+    """Main data pipeline: Loads, cleans, and processes data from Google Sheets."""
+    # 1. Load data from Google Sheets
+    creds = Credentials.from_service_account_info(creds_dict, scopes=['https://www.googleapis.com/auth/spreadsheets'])
+    gc = gspread.authorize(creds)
+    worksheet = gc.open_by_key(SPREADSHEET_ID).worksheet(WORKSHEET_NAME)
+    df = pd.DataFrame(worksheet.get_all_records())
+
+    # 2. Initial Cost Calculation (before renaming columns)
+    prod_cost_col = 'Phase Dollars - Plant Invoice $'
+    fallback_prod_cost_col = 'Job Throughput - Job Plant Invoice'
+    if prod_cost_col in df.columns:
+        df['Cost_From_Plant'] = df[prod_cost_col].apply(calculate_production_cost)
+    elif fallback_prod_cost_col in df.columns:
+        df['Cost_From_Plant'] = df[fallback_prod_cost_col].apply(calculate_production_cost)
+    else:
+        df['Cost_From_Plant'] = 0.0
+
+    # 3. Processing Pipeline
+    df = _clean_column_names(df)
+    df = _parse_date_columns(df)
+    df = _clean_numeric_columns(df)
+    df = _calculate_profitability_metrics(df)
+    df = _calculate_durations(df)
+    df = _enrich_data(df)
+
+    # 4. Final cleaning
+    if 'Production_' in df.columns:
+        df['Production_'] = df['Production_'].fillna('').astype(str).str.strip()
 
     return df.copy()
 
@@ -188,6 +206,10 @@ def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
 def render_overview_tab(df: pd.DataFrame):
     """Renders the 'Overall' performance tab."""
     st.header("📈 Overall Performance")
+    if df.empty:
+        st.warning("No data available for the selected filters.")
+        return
+
     total_revenue = df['Revenue'].sum()
     total_profit = df['Branch_Profit'].sum()
     avg_margin = (total_profit / total_revenue * 100) if total_revenue else 0
@@ -201,20 +223,19 @@ def render_overview_tab(df: pd.DataFrame):
 
     st.markdown("---")
     st.subheader("Profit by Salesperson")
-    if 'Salesperson' in df.columns:
-        st.bar_chart(df.groupby('Salesperson')['Branch_Profit'].sum())
+    if 'Salesperson' in df.columns and not df.empty:
+        sales_profit = df.groupby('Salesperson')['Branch_Profit'].sum().sort_values(ascending=False)
+        st.bar_chart(sales_profit)
 
 def render_detailed_data_tab(df: pd.DataFrame):
     """Renders the 'Detailed Data' tab."""
     st.header("📋 Detailed Data View")
-    
-    display_cols = [
-        'Production_', 'Job_Name', 'Revenue', 'Total_Job_SqFt',
-        'Cost_From_Plant', 'Install_Cost', 'Total_Branch_Cost', 'Branch_Profit',
-        'Branch_Profit_Margin_%', 'Shop_Profit_Margin_%', 'Profit_Variance'
-    ]
-    df_display = df[[c for c in display_cols if c in df.columns]].copy()
+    if df.empty:
+        st.warning("No data available for the selected filters.")
+        return
 
+    df_display = df.copy()
+    
     # Create a new column containing the full URL for the link.
     if 'Production_' in df_display.columns:
         df_display['Link'] = df_display['Production_'].apply(
@@ -222,16 +243,8 @@ def render_detailed_data_tab(df: pd.DataFrame):
         )
 
     column_config = {
-        # Configure the 'Link' column. This column contains the URL.
-        "Link": st.column_config.LinkColumn(
-            # Set the header of the column.
-            "Prod #",
-            help="Click to search in Moraware",
-            # Use a regex to extract the job number from the URL to use as the display text.
-            display_text=r".*search=(.*)"
-        ),
-        # Hide the original Production_ column.
-        "Production_": None,
+        "Link": st.column_config.LinkColumn("Prod #", help="Click to search in Moraware", display_text=r".*search=(.*)"),
+        "Production_": None, # Hide original column
         "Revenue": st.column_config.NumberColumn(format='$%.2f'),
         "Total_Job_SqFt": st.column_config.NumberColumn("SqFt", format='%.2f'),
         "Cost_From_Plant": st.column_config.NumberColumn("Production Cost", format='$%.2f'),
@@ -239,12 +252,8 @@ def render_detailed_data_tab(df: pd.DataFrame):
         "Total_Branch_Cost": st.column_config.NumberColumn(format='$%.2f'),
         "Branch_Profit": st.column_config.NumberColumn(format='$%.2f'),
         "Profit_Variance": st.column_config.NumberColumn(format='$%.2f'),
-        "Branch_Profit_Margin_%": st.column_config.ProgressColumn(
-            "Branch Profit Margin", format='%.2f%%', min_value=-100, max_value=100
-        ),
-        "Shop_Profit_Margin_%": st.column_config.ProgressColumn(
-            "Shop Profit Margin", format='%.2f%%', min_value=-100, max_value=100
-        ),
+        "Branch_Profit_Margin_%": st.column_config.ProgressColumn("Branch Profit Margin", format='%.2f%%', min_value=-100, max_value=100),
+        "Shop_Profit_Margin_%": st.column_config.ProgressColumn("Shop Profit Margin", format='%.2f%%', min_value=-100, max_value=100),
     }
     
     column_order = [
@@ -252,6 +261,7 @@ def render_detailed_data_tab(df: pd.DataFrame):
         'Install_Cost', 'Total_Branch_Cost', 'Branch_Profit',
         'Branch_Profit_Margin_%', 'Shop_Profit_Margin_%', 'Profit_Variance'
     ]
+    # Ensure we only try to display columns that actually exist in the dataframe
     final_column_order = [c for c in column_order if c in df_display.columns]
 
     st.dataframe(
@@ -265,6 +275,10 @@ def render_profit_drivers_tab(df: pd.DataFrame):
     """Renders the 'Profit Drivers' tab."""
     st.header("💸 Profitability Drivers")
     st.markdown("Analyze which business segments are most profitable.")
+
+    if df.empty:
+        st.warning("No data available for the selected filters.")
+        return
 
     driver_options = ['Job_Type', 'Order_Type', 'Lead_Source', 'Material_Brand']
     valid_drivers = [d for d in driver_options if d in df.columns]
@@ -287,7 +301,6 @@ def render_profit_drivers_tab(df: pd.DataFrame):
         driver_analysis = df.groupby(selected_driver).agg(**agg_dict).sort_values('Avg_Branch_Profit_Margin', ascending=False)
 
         st.subheader(f"Profitability by {selected_driver.replace('_', ' ')}")
-
         format_dict = {
             'Avg_Branch_Profit_Margin': '{:.2f}%',
             'Total_Profit': '${:,.2f}'
@@ -295,11 +308,14 @@ def render_profit_drivers_tab(df: pd.DataFrame):
         if 'Avg_Shop_Profit_Margin' in driver_analysis.columns:
             format_dict['Avg_Shop_Profit_Margin'] = '{:.2f}%'
 
-        st.dataframe(driver_analysis.style.format(format_dict))
+        st.dataframe(driver_analysis.style.format(format_dict), use_container_width=True)
 
 def render_rework_tab(df: pd.DataFrame):
     """Renders the 'Rework & Variance' tab."""
     st.header("🔬 Rework Insights & Profit Variance")
+    if df.empty:
+        st.warning("No data available for the selected filters.")
+        return
 
     c1, c2 = st.columns(2)
 
@@ -309,30 +325,14 @@ def render_rework_tab(df: pd.DataFrame):
             rework_jobs = df[df['Total_Rework_Cost'] > 0].copy()
             if not rework_jobs.empty:
                 st.metric("Total Rework Cost", f"${rework_jobs['Total_Rework_Cost'].sum():,.2f}", f"{len(rework_jobs)} jobs affected")
-
                 st.write("**Rework Costs by Reason**")
                 agg_rework = rework_jobs.groupby('Rework_Stone_Shop_Reason')['Total_Rework_Cost'].agg(['sum', 'count'])
                 agg_rework.columns = ['Total Rework Cost', 'Number of Jobs']
                 st.dataframe(agg_rework.sort_values('Total Rework Cost', ascending=False).style.format({'Total Rework Cost': '${:,.2f}'}))
-
-                with st.expander("View Rework Job Details"):
-                    if 'Production_' in rework_jobs.columns:
-                        rework_jobs['Link'] = rework_jobs['Production_'].apply(
-                            lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None
-                        )
-                    rework_display_cols = ['Link', 'Job_Name', 'Total_Rework_Cost', 'Rework_Stone_Shop_Reason']
-                    st.dataframe(
-                        rework_jobs[[c for c in rework_display_cols if c in rework_jobs.columns]],
-                        use_container_width=True,
-                        column_config={
-                            "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)"),
-                            "Total_Rework_Cost": st.column_config.NumberColumn("Rework Cost", format='$%.2f'),
-                        }
-                    )
             else:
                 st.info("No rework costs recorded for the current selection.")
         else:
-            st.info("Rework data not available.")
+            st.info("Rework data not available in the source sheet.")
 
     with c2:
         st.subheader("Profit Variance Analysis")
@@ -340,12 +340,9 @@ def render_rework_tab(df: pd.DataFrame):
             variance_jobs = df[df['Profit_Variance'].abs() > 0.01].copy()
             if not variance_jobs.empty:
                 st.metric("Jobs with Profit Variance", f"{len(variance_jobs)}")
-
                 st.write("**Jobs with Largest Profit Variance**")
                 if 'Production_' in variance_jobs.columns:
-                    variance_jobs['Link'] = variance_jobs['Production_'].apply(
-                        lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None
-                    )
+                    variance_jobs['Link'] = variance_jobs['Production_'].apply(lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None)
                 variance_display_cols = ['Link', 'Job_Name', 'Original_GM', 'Branch_Profit', 'Profit_Variance']
                 st.dataframe(
                     variance_jobs[[c for c in variance_display_cols if c in variance_jobs.columns]].sort_values(by='Profit_Variance', key=abs, ascending=False).head(20),
@@ -365,21 +362,20 @@ def render_rework_tab(df: pd.DataFrame):
 def render_pipeline_issues_tab(df: pd.DataFrame, today: pd.Timestamp):
     """Renders the 'Pipeline & Issues' tab, using a specific date as 'today'."""
     st.header("🚧 Job Pipeline & Issues")
+    if df.empty:
+        st.warning("No data available for the selected filters.")
+        return
 
     # --- Section for Jobs Awaiting RTF ---
     st.subheader("Jobs Awaiting Ready-to-Fab")
     st.markdown("Jobs that have been templated but are not yet marked as 'Ready to Fab' as of the selected date.")
-
     stuck_jobs = df[
         (df['Template_Date'].notna()) & (df['Template_Date'] <= today) & (df['Ready_to_Fab_Date'].isna())
     ].copy()
-
     if not stuck_jobs.empty:
         stuck_jobs['Days_Since_Template'] = (today - stuck_jobs['Template_Date']).dt.days
         if 'Production_' in stuck_jobs.columns:
-            stuck_jobs['Link'] = stuck_jobs['Production_'].apply(
-                lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None
-            )
+            stuck_jobs['Link'] = stuck_jobs['Production_'].apply(lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None)
         display_cols = ['Link', 'Job_Name', 'Salesperson', 'Template_Date', 'Days_Since_Template']
         st.dataframe(
             stuck_jobs[[c for c in display_cols if c in stuck_jobs.columns]].sort_values(by='Days_Since_Template', ascending=False),
@@ -396,18 +392,12 @@ def render_pipeline_issues_tab(df: pd.DataFrame, today: pd.Timestamp):
     
     # --- Section for Missing Plant Invoice ---
     st.subheader("Jobs with Missing Plant Invoice $")
-    st.markdown("Jobs created recently that are missing the 'Phase Dollars - Plant Invoice $' amount.")
-    
+    st.markdown("Jobs within the selected filters that are missing the 'Phase Dollars - Plant Invoice $' amount.")
     if 'Cost_From_Plant' in df.columns and 'Job_Creation' in df.columns:
-        missing_invoice_jobs = df[
-            (df['Cost_From_Plant'] == 0) & (df['Job_Creation'].notna())
-        ].copy()
-
+        missing_invoice_jobs = df[df['Cost_From_Plant'] == 0].copy()
         if not missing_invoice_jobs.empty:
             if 'Production_' in missing_invoice_jobs.columns:
-                missing_invoice_jobs['Link'] = missing_invoice_jobs['Production_'].apply(
-                    lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None
-                )
+                missing_invoice_jobs['Link'] = missing_invoice_jobs['Production_'].apply(lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None)
             display_cols = ['Link', 'Job_Name', 'Salesperson', 'Job_Creation']
             st.dataframe(
                 missing_invoice_jobs[[c for c in display_cols if c in missing_invoice_jobs.columns]].sort_values(by='Job_Creation', ascending=False),
@@ -420,83 +410,41 @@ def render_pipeline_issues_tab(df: pd.DataFrame, today: pd.Timestamp):
         else:
             st.success("✅ No jobs with missing plant invoices in the current selection.")
     else:
-        st.warning("Could not check for missing invoices. Required columns 'Cost_From_Plant' or 'Job_Creation' not found.")
-
-
-    st.markdown("---")
-
-    # --- Section for Reported Issues ---
-    issue_cols = ['Job_Issues', 'Account_Issues']
-    valid_issue_cols = [i for i in issue_cols if i in df.columns]
-    if valid_issue_cols:
-        st.subheader("Jobs with Reported Issues")
-        jobs_with_issues = df[df[valid_issue_cols].notna().any(axis=1) & (df[valid_issue_cols] != '').any(axis=1)].copy()
-        if not jobs_with_issues.empty:
-            if 'Production_' in jobs_with_issues.columns:
-                jobs_with_issues['Link'] = jobs_with_issues['Production_'].apply(
-                    lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None
-                )
-            display_cols = ['Link', 'Job_Name', 'Branch_Profit_Margin_%', 'Shop_Profit_Margin_%'] + valid_issue_cols
-            st.dataframe(
-                jobs_with_issues[[c for c in display_cols if c in jobs_with_issues.columns]],
-                column_config={
-                    "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)")
-                }
-            )
-        else:
-            st.info("No jobs with issues in the current selection.")
-
-def render_workload_analysis(df: pd.DataFrame, activity_name: str, date_col: str, assignee_col: str):
-    """A reusable function to display weekly workload for a given activity."""
-    st.subheader(activity_name)
-
-    if date_col not in df.columns or assignee_col not in df.columns:
-        st.warning(f"Required columns not found for {activity_name} analysis.")
-        return
-
-    activity_df = df.dropna(subset=[date_col, assignee_col]).copy()
-
-    if activity_df.empty:
-        st.info(f"No {activity_name.lower()} data available for the current selection.")
-        return
-
-    assignees = sorted([name for name in activity_df[assignee_col].unique() if name and str(name).strip()])
-
-    for assignee in assignees:
-        with st.expander(f"**{assignee}**"):
-            assignee_df = activity_df[activity_df[assignee_col] == assignee].copy()
-
-            weekly_summary = assignee_df.set_index(date_col).resample('W-Mon', label='left', closed='left').agg(
-                Jobs=('Production_', 'count'),
-                Total_SqFt=('Total_Job_SqFt', 'sum')
-            ).reset_index()
-            weekly_summary = weekly_summary[weekly_summary['Jobs'] > 0]
-
-            if not weekly_summary.empty:
-                st.write("**Weekly Summary**")
-                st.dataframe(weekly_summary.rename(columns={date_col: 'Week_Start_Date'}), use_container_width=True)
-
-                with st.expander("Show Job Details"):
-                    if 'Production_' in assignee_df.columns:
-                        assignee_df['Link'] = assignee_df['Production_'].apply(
-                            lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None
-                        )
-                    job_detail_cols = ['Link', 'Job_Name', 'Total_Job_SqFt', date_col]
-                    st.dataframe(
-                        assignee_df[[c for c in job_detail_cols if c in assignee_df.columns]].sort_values(by=date_col),
-                        use_container_width=True,
-                        column_config={
-                            "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)"),
-                            date_col: st.column_config.DateColumn("Scheduled Date", format="YYYY-MM-DD")
-                        }
-                    )
-            else:
-                st.write("No scheduled work for this person in the selected period.")
+        st.warning("Could not check for missing invoices. Required columns not found.")
 
 def render_field_workload_tab(df: pd.DataFrame):
     """Renders the enhanced tab for Template, Install, and Service workloads."""
     st.header("👷 Field Workload Planner")
-    st.markdown("Weekly breakdown of jobs and square footage for each team member.")
+    st.markdown("Weekly breakdown of jobs and square footage for each team member, based on the selected filters.")
+    if df.empty:
+        st.warning("No data available for the selected filters.")
+        return
+
+    def render_workload_analysis(df_filtered: pd.DataFrame, activity_name: str, date_col: str, assignee_col: str):
+        """A reusable function to display weekly workload for a given activity."""
+        st.subheader(activity_name)
+        if date_col not in df_filtered.columns or assignee_col not in df_filtered.columns:
+            st.warning(f"Required columns not found for {activity_name} analysis.")
+            return
+
+        activity_df = df_filtered.dropna(subset=[date_col, assignee_col]).copy()
+        if activity_df.empty:
+            st.info(f"No {activity_name.lower()} data available for the current selection.")
+            return
+
+        assignees = sorted([name for name in activity_df[assignee_col].unique() if name and str(name).strip()])
+        for assignee in assignees:
+            with st.expander(f"**{assignee}**"):
+                assignee_df = activity_df[activity_df[assignee_col] == assignee].copy()
+                weekly_summary = assignee_df.set_index(date_col).resample('W-Mon', label='left', closed='left').agg(
+                    Jobs=('Production_', 'count'),
+                    Total_SqFt=('Total_Job_SqFt', 'sum')
+                ).reset_index()
+                weekly_summary = weekly_summary[weekly_summary['Jobs'] > 0]
+                if not weekly_summary.empty:
+                    st.dataframe(weekly_summary.rename(columns={date_col: 'Week_Start_Date'}), use_container_width=True)
+                else:
+                    st.write("No scheduled work for this person in the selected period.")
 
     render_workload_analysis(df, "Templates", "Template_Date", "Template_Assigned_To")
     st.markdown("---")
@@ -517,12 +465,17 @@ def render_forecasting_tab(df: pd.DataFrame):
     if 'Job_Creation' not in df.columns or df['Job_Creation'].isnull().all():
         st.warning("Job Creation date column is required for trend analysis and is missing or empty.")
         return
+        
+    if df.empty:
+        st.warning("No data available for the selected filters.")
+        return
 
     df_trends = df.copy()
     df_trends = df_trends.set_index('Job_Creation').sort_index()
 
     # --- Monthly Performance Trends ---
     st.subheader("Monthly Performance Trends")
+    st.caption("Trends are based on the data within the selected date range and filters.")
     monthly_summary = df_trends.resample('M').agg({
         'Revenue': 'sum',
         'Branch_Profit': 'sum',
@@ -530,14 +483,8 @@ def render_forecasting_tab(df: pd.DataFrame):
     }).rename(columns={'Production_': 'Job_Count'})
     monthly_summary['Branch_Profit_Margin_%'] = (monthly_summary['Branch_Profit'] / monthly_summary['Revenue'] * 100).fillna(0)
 
-    # Remove the last month if it's incomplete
-    if not monthly_summary.empty:
-        last_month = monthly_summary.index[-1]
-        if last_month.month == datetime.now().month and last_month.year == datetime.now().year:
-            monthly_summary = monthly_summary[:-1]
-
-    if monthly_summary.empty:
-        st.info("Not enough historical data to display monthly trends.")
+    if monthly_summary.empty or len(monthly_summary) < 2:
+        st.info("Not enough historical data in the selected range to display monthly trends or forecasts.")
         return
 
     c1, c2 = st.columns(2)
@@ -545,49 +492,41 @@ def render_forecasting_tab(df: pd.DataFrame):
         st.line_chart(monthly_summary[['Revenue', 'Branch_Profit']])
     with c2:
         st.line_chart(monthly_summary[['Branch_Profit_Margin_%']])
-
     st.bar_chart(monthly_summary['Job_Count'])
 
     st.markdown("---")
 
     # --- Revenue Forecast ---
     st.subheader("Simple Revenue Forecast")
+    st.caption("Note: This is a simple linear forecast based on the filtered data. For better results, select a longer date range (12+ months).")
 
     forecast_df = monthly_summary[['Revenue']].reset_index()
     forecast_df['Time'] = np.arange(len(forecast_df.index))
 
-    # Train model
     model = LinearRegression()
     X = forecast_df[['Time']]
     y = forecast_df['Revenue']
     model.fit(X, y)
 
-    # Create future dataframe
     future_periods = st.slider("Months to Forecast:", 1, 12, 3)
     last_time = forecast_df['Time'].max()
     last_date = forecast_df['Job_Creation'].max()
 
-    future_dates = pd.date_range(start=last_date, periods=future_periods + 1, freq='M')[1:]
+    future_dates = pd.to_datetime([last_date + pd.DateOffset(months=i) for i in range(1, future_periods + 1)])
     future_df = pd.DataFrame({
         'Job_Creation': future_dates,
         'Time': np.arange(last_time + 1, last_time + 1 + future_periods)
     })
-
-    # Predict future revenue
     future_df['Forecast'] = model.predict(future_df[['Time']])
 
-    # Combine and plot
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.plot(forecast_df['Job_Creation'], forecast_df['Revenue'], label='Actual Revenue', marker='o')
     ax.plot(future_df['Job_Creation'], future_df['Forecast'], label='Forecasted Revenue', linestyle='--', marker='o')
-
     ax.set_title('Monthly Revenue and Forecast')
     ax.set_ylabel('Revenue ($)')
     ax.legend()
     plt.grid(True, which='both', linestyle='--', linewidth=0.5)
     st.pyplot(fig)
-
-    st.caption("Note: This is a simple linear regression forecast and should be used for directional guidance only.")
 
 
 # --- Main Application Logic ---
@@ -595,8 +534,9 @@ def render_forecasting_tab(df: pd.DataFrame):
 def main():
     """Main function to run the Streamlit app."""
     st.title("💰 Enhanced Job Profitability Dashboard")
-    st.markdown("An efficient, multi-faceted dashboard to analyze job data and drive profitability.")
+    st.markdown("An interactive dashboard to analyze job data and drive profitability.")
 
+    # --- Sidebar: Credentials ---
     st.sidebar.header("⚙️ Configuration")
     creds = None
     if "google_creds_json" in st.secrets:
@@ -610,42 +550,85 @@ def main():
         st.sidebar.error("Please provide Google credentials to load data.")
         st.stop()
 
+    # --- Data Loading ---
     try:
         df_full = load_and_process_data(creds)
     except Exception as e:
         st.error(f"Failed to load or process data: {e}")
-        st.exception(e) # Provides a full traceback for debugging
+        st.exception(e)
         st.stop()
-    
-    # --- Sidebar Configuration ---
-    st.sidebar.header("🗓️ Date Selection")
-    today_date = st.sidebar.date_input(
-        "Select 'Today's' Date for Calculations",
-        value=datetime.now().date(),
-        help="This date is used to calculate pipeline metrics like 'Days Since Template'."
-    )
-    # Convert the selected date to a pandas Timestamp for consistent calculations
-    today_dt = pd.to_datetime(today_date)
 
     if df_full.empty:
         st.warning("No data was loaded from the Google Sheet.")
         st.stop()
 
+    # --- Sidebar: Filters ---
+    st.sidebar.header("📊 Filters")
+
+    # Date Filter
+    date_filter_column = st.sidebar.selectbox(
+        "Filter by Date Column:",
+        options=['Install_Date', 'Template_Date', 'Job_Creation'],
+        index=0
+    )
+    
+    min_date = df_full[date_filter_column].min().date() if not df_full[date_filter_column].isnull().all() else datetime.now().date() - timedelta(days=365)
+    max_date = df_full[date_filter_column].max().date() if not df_full[date_filter_column].isnull().all() else datetime.now().date()
+
+    start_date, end_date = st.sidebar.date_input(
+        f"Select {date_filter_column.replace('_',' ')} Range:",
+        value=(max_date - timedelta(days=89), max_date), # Default to last 90 days
+        min_value=min_date,
+        max_value=max_date,
+        key='date_range_picker'
+    )
+    
+    # Salesperson Filter
+    if 'Salesperson' in df_full.columns:
+        salespeople = sorted(df_full['Salesperson'].dropna().unique())
+        selected_salespeople = st.sidebar.multiselect(
+            "Filter by Salesperson:",
+            options=salespeople,
+            default=[]
+        )
+    else:
+        selected_salespeople = []
+
+    # Pipeline "Today" Date
+    today_date = st.sidebar.date_input(
+        "Select 'Today's' Date for Pipeline Calculations",
+        value=datetime.now().date(),
+        help="This date is used to calculate metrics like 'Days Since Template'."
+    )
+    today_dt = pd.to_datetime(today_date)
+
+    # --- Applying Filters ---
+    df_filtered = df_full.copy()
+    
+    # Apply date filter
+    if start_date and end_date:
+        start_dt = pd.to_datetime(start_date)
+        end_dt = pd.to_datetime(end_date)
+        df_filtered = df_filtered[df_filtered[date_filter_column].between(start_dt, end_dt, inclusive='both')]
+
+    # Apply salesperson filter
+    if selected_salespeople:
+        df_filtered = df_filtered[df_filtered['Salesperson'].isin(selected_salespeople)]
+
+    # --- Main Content: Tabs ---
     tab_names = [
         "📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "🔬 Rework & Variance",
         "🚧 Pipeline & Issues", "👷 Field Workload", "🔮 Forecasting & Trends"
     ]
     tabs = st.tabs(tab_names)
 
-    # Pass the full, unfiltered dataframe to all tabs
-    with tabs[0]: render_overview_tab(df_full)
-    with tabs[1]: render_detailed_data_tab(df_full)
-    with tabs[2]: render_profit_drivers_tab(df_full)
-    with tabs[3]: render_rework_tab(df_full)
-    # Pass the selected 'today' date to the pipeline tab for its calculations
-    with tabs[4]: render_pipeline_issues_tab(df_full, today_dt)
-    with tabs[5]: render_field_workload_tab(df_full)
-    with tabs[6]: render_forecasting_tab(df_full)
+    with tabs[0]: render_overview_tab(df_filtered)
+    with tabs[1]: render_detailed_data_tab(df_filtered)
+    with tabs[2]: render_profit_drivers_tab(df_filtered)
+    with tabs[3]: render_rework_tab(df_filtered)
+    with tabs[4]: render_pipeline_issues_tab(df_filtered, today_dt)
+    with tabs[5]: render_field_workload_tab(df_filtered)
+    with tabs[6]: render_forecasting_tab(df_filtered)
 
 if __name__ == "__main__":
     main()
