@@ -366,6 +366,7 @@ def render_pipeline_issues_tab(df: pd.DataFrame):
     """Renders the 'Pipeline & Issues' tab."""
     st.header("🚧 Job Pipeline & Issues")
 
+    # --- Section for Jobs Awaiting RTF ---
     st.subheader("Jobs Awaiting Ready-to-Fab")
     st.markdown("Jobs that have been templated but are not yet marked as 'Ready to Fab'.")
 
@@ -393,7 +394,39 @@ def render_pipeline_issues_tab(df: pd.DataFrame):
         st.success("✅ No jobs are currently stuck between Template and Ready to Fab.")
 
     st.markdown("---")
+    
+    # --- NEW Section for Missing Plant Invoice ---
+    st.subheader("Jobs with Missing Plant Invoice $")
+    st.markdown("Jobs created recently that are missing the 'Phase Dollars - Plant Invoice $' amount.")
+    
+    if 'Cost_From_Plant' in df.columns and 'Job_Creation' in df.columns:
+        missing_invoice_jobs = df[
+            (df['Cost_From_Plant'] == 0) & (df['Job_Creation'].notna())
+        ].copy()
 
+        if not missing_invoice_jobs.empty:
+            if 'Production_' in missing_invoice_jobs.columns:
+                missing_invoice_jobs['Link'] = missing_invoice_jobs['Production_'].apply(
+                    lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None
+                )
+            display_cols = ['Link', 'Job_Name', 'Salesperson', 'Job_Creation']
+            st.dataframe(
+                missing_invoice_jobs[[c for c in display_cols if c in missing_invoice_jobs.columns]].sort_values(by='Job_Creation', ascending=False),
+                use_container_width=True,
+                column_config={
+                    "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)"),
+                    "Job_Creation": st.column_config.DateColumn("Job Creation Date", format="YYYY-MM-DD")
+                }
+            )
+        else:
+            st.success("✅ No jobs with missing plant invoices in the current selection.")
+    else:
+        st.warning("Could not check for missing invoices. Required columns 'Cost_From_Plant' or 'Job_Creation' not found.")
+
+
+    st.markdown("---")
+
+    # --- Section for Reported Issues ---
     issue_cols = ['Job_Issues', 'Account_Issues']
     valid_issue_cols = [i for i in issue_cols if i in df.columns]
     if valid_issue_cols:
@@ -624,7 +657,7 @@ def main():
         st.stop()
 
     tab_names = [
-        "📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "🔬 Rework & Variance",
+        "📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "� Rework & Variance",
         "🚧 Pipeline & Issues", "👷 Field Workload", "🔮 Forecasting & Trends"
     ]
     tabs = st.tabs(tab_names)
@@ -639,3 +672,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+�
