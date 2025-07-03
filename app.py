@@ -368,9 +368,23 @@ def render_pipeline_issues_tab(df: pd.DataFrame, today: pd.Timestamp):
     # --- Section for Jobs Awaiting RTF ---
     st.subheader("Jobs Awaiting Ready-to-Fab")
     st.markdown("Jobs that have been templated but are not yet marked as 'Ready to Fab' as of the selected date. This view ignores the sidebar filters.")
-    stuck_jobs = df[
-        (df['Template_Date'].notna()) & (df['Template_Date'] <= today) & (df['Ready_to_Fab_Date'].isna())
-    ].copy()
+    
+    # Base condition: Templated but not yet Ready for Fab
+    conditions = (
+        (df['Template_Date'].notna()) &
+        (df['Template_Date'] <= today) &
+        (df['Ready_to_Fab_Date'].isna())
+    )
+
+    # Add extra conditions to ensure the job is not actually complete
+    # Exclude jobs that have been shipped or installed, as they are past the RTF stage
+    if 'Ship_Date' in df.columns:
+        conditions &= (df['Ship_Date'].isna())
+    if 'Install_Date' in df.columns:
+        conditions &= (df['Install_Date'].isna())
+        
+    stuck_jobs = df[conditions].copy()
+
     if not stuck_jobs.empty:
         stuck_jobs['Days_Since_Template'] = (today - stuck_jobs['Template_Date']).dt.days
         if 'Production_' in stuck_jobs.columns:
