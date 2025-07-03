@@ -125,7 +125,8 @@ def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
         'Job_Throughput_Job_GM_original': 'Original_GM',
         'Total_Job_SqFT': 'Total_Job_SqFt',
         'Job_Throughput_Job_T': 'Throughput_T',
-        'Job_Throughput_Job_T_': 'Throughput_T_Percent'
+        'Job_Throughput_Job_T_': 'Throughput_T_Percent',
+        'Job_Throughput_Total_COGS': 'Total_COGS' # Added for Shop Profit calculation
     }
     for original_name, new_name in numeric_column_map.items():
         if original_name in df.columns:
@@ -151,6 +152,17 @@ def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
         axis=1
     )
     df['Profit_Variance'] = df['Branch_Profit'] - df.get('Original_GM', 0)
+
+    # Calculate Shop Profitability
+    if 'Cost_From_Plant' in df.columns and 'Total_COGS' in df.columns:
+        df['Shop_Profit'] = df['Cost_From_Plant'] - df['Total_COGS']
+        df['Shop_Profit_Margin_%'] = df.apply(
+            lambda row: (row['Shop_Profit'] / row['Cost_From_Plant'] * 100) if row.get('Cost_From_Plant') and row['Cost_From_Plant'] != 0 else 0,
+            axis=1
+        )
+    else:
+        df['Shop_Profit'] = 0.0
+        df['Shop_Profit_Margin_%'] = 0.0
 
     # 7. Parse material information
     if 'Job_Material' in df.columns:
@@ -203,7 +215,7 @@ def render_detailed_data_tab(df: pd.DataFrame):
     display_cols = [
         'Production_', 'Job_Name', 'Revenue', 'Total_Job_SqFt', 
         'Cost_From_Plant', 'Install_Cost', 'Total_Branch_Cost', 'Branch_Profit', 
-        'Branch_Profit_Margin_%', 'Profit_Variance'
+        'Branch_Profit_Margin_%', 'Shop_Profit_Margin_%', 'Profit_Variance'
     ]
     df_display = df[[c for c in display_cols if c in df.columns]].copy()
     
@@ -217,7 +229,10 @@ def render_detailed_data_tab(df: pd.DataFrame):
         "Branch_Profit": st.column_config.NumberColumn(format='$%.2f'),
         "Profit_Variance": st.column_config.NumberColumn(format='$%.2f'),
         "Branch_Profit_Margin_%": st.column_config.ProgressColumn(
-            "Profit Margin", format='%.2f%%', min_value=-100, max_value=100
+            "Branch Profit Margin", format='%.2f%%', min_value=-100, max_value=100
+        ),
+        "Shop_Profit_Margin_%": st.column_config.ProgressColumn(
+            "Shop Profit Margin", format='%.2f%%', min_value=-100, max_value=100
         ),
     }
 
@@ -241,17 +256,26 @@ def render_profit_drivers_tab(df: pd.DataFrame):
     selected_driver = st.selectbox("Analyze Profitability by:", valid_drivers)
     
     if selected_driver:
-        driver_analysis = df.groupby(selected_driver).agg(
-            Avg_Profit_Margin=('Branch_Profit_Margin_%', 'mean'),
-            Total_Profit=('Branch_Profit', 'sum'),
-            Job_Count=('Production_', 'count')
-        ).sort_values('Avg_Profit_Margin', ascending=False)
+        agg_dict = {
+            'Avg_Branch_Profit_Margin': ('Branch_Profit_Margin_%', 'mean'),
+            'Total_Profit': ('Branch_Profit', 'sum'),
+            'Job_Count': ('Production_', 'count')
+        }
+        if 'Shop_Profit_Margin_%' in df.columns:
+            agg_dict['Avg_Shop_Profit_Margin'] = ('Shop_Profit_Margin_%', 'mean')
+
+        driver_analysis = df.groupby(selected_driver).agg(**agg_dict).sort_values('Avg_Branch_Profit_Margin', ascending=False)
         
         st.subheader(f"Profitability by {selected_driver.replace('_', ' ')}")
-        st.dataframe(driver_analysis.style.format({
-            'Avg_Profit_Margin': '{:.2f}%',
+        
+        format_dict = {
+            'Avg_Branch_Profit_Margin': '{:.2f}%',
             'Total_Profit': '${:,.2f}'
-        }))
+        }
+        if 'Avg_Shop_Profit_Margin' in driver_analysis.columns:
+            format_dict['Avg_Shop_Profit_Margin'] = '{:.2f}%'
+
+        st.dataframe(driver_analysis.style.format(format_dict))
 
 def render_rework_tab(df: pd.DataFrame):
     """Renders the 'Rework & Variance' tab."""
@@ -341,7 +365,7 @@ def render_pipeline_issues_tab(df: pd.DataFrame):
         st.subheader("Jobs with Reported Issues")
         jobs_with_issues = df[df[valid_issue_cols].notna().any(axis=1) & (df[valid_issue_cols] != '').any(axis=1)].copy()
         if not jobs_with_issues.empty:
-            display_cols = ['Production_', 'Job_Name', 'Branch_Profit_Margin_%'] + valid_issue_cols
+            display_cols = ['Production_', 'Job_Name', 'Branch_Profit_Margin_%', 'Shop_Profit_Margin_%'] + valid_issue_cols
             st.dataframe(
                 jobs_with_issues[[c for c in display_cols if c in jobs_with_issues.columns]]
             )
