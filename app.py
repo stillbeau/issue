@@ -362,15 +362,14 @@ def render_rework_tab(df: pd.DataFrame):
         else:
             st.info("Profit variance data not available.")
 
-def render_pipeline_issues_tab(df: pd.DataFrame):
-    """Renders the 'Pipeline & Issues' tab."""
+def render_pipeline_issues_tab(df: pd.DataFrame, today: pd.Timestamp):
+    """Renders the 'Pipeline & Issues' tab, using a specific date as 'today'."""
     st.header("🚧 Job Pipeline & Issues")
 
     # --- Section for Jobs Awaiting RTF ---
     st.subheader("Jobs Awaiting Ready-to-Fab")
-    st.markdown("Jobs that have been templated but are not yet marked as 'Ready to Fab'.")
+    st.markdown("Jobs that have been templated but are not yet marked as 'Ready to Fab' as of the selected date.")
 
-    today = pd.to_datetime('today').normalize()
     stuck_jobs = df[
         (df['Template_Date'].notna()) & (df['Template_Date'] <= today) & (df['Ready_to_Fab_Date'].isna())
     ].copy()
@@ -395,7 +394,7 @@ def render_pipeline_issues_tab(df: pd.DataFrame):
 
     st.markdown("---")
     
-    # --- NEW Section for Missing Plant Invoice ---
+    # --- Section for Missing Plant Invoice ---
     st.subheader("Jobs with Missing Plant Invoice $")
     st.markdown("Jobs created recently that are missing the 'Phase Dollars - Plant Invoice $' amount.")
     
@@ -617,58 +616,36 @@ def main():
         st.error(f"Failed to load or process data: {e}")
         st.exception(e) # Provides a full traceback for debugging
         st.stop()
+    
+    # --- Sidebar Configuration ---
+    st.sidebar.header("🗓️ Date Selection")
+    today_date = st.sidebar.date_input(
+        "Select 'Today's' Date for Calculations",
+        value=datetime.now().date(),
+        help="This date is used to calculate pipeline metrics like 'Days Since Template'."
+    )
+    # Convert the selected date to a pandas Timestamp for consistent calculations
+    today_dt = pd.to_datetime(today_date)
 
-    st.sidebar.header("📊 Filters")
-    if 'Job_Creation' in df_full.columns and not df_full['Job_Creation'].dropna().empty:
-        min_date = df_full['Job_Creation'].min().date()
-        max_date = df_full['Job_Creation'].max().date()
-
-        # Default to the last 12 months if the date range is very large
-        default_start = max_date - relativedelta(months=12)
-        if default_start < min_date:
-            default_start = min_date
-
-        start_date, end_date = st.sidebar.date_input(
-            "Filter by Job Creation Date", value=[default_start, max_date],
-            min_value=min_date, max_value=max_date
-        )
-        df_filtered = df_full[
-            (df_full['Job_Creation'].dt.date >= start_date) &
-            (df_full['Job_Creation'].dt.date <= end_date)
-        ]
-    else:
-        df_filtered = df_full
-
-    def get_unique_options(df, col_name):
-        return sorted(df[col_name].dropna().unique()) if col_name in df else []
-
-    filter_cols = {'Salesperson': 'Salesperson', 'Customer_Category': 'Customer Category',
-                   'Material_Brand': 'Material Brand', 'City': 'City'}
-    for col, label in filter_cols.items():
-        if col in df_filtered:
-            options = get_unique_options(df_filtered, col)
-            # Use a key for multiselect to prevent state issues on rerun
-            selected = st.sidebar.multiselect(label, options, default=options, key=f"select_{col}")
-            if selected:
-                df_filtered = df_filtered[df_filtered[col].isin(selected)]
-
-    if df_filtered.empty:
-        st.warning("No data matches the current filter selection.")
+    if df_full.empty:
+        st.warning("No data was loaded from the Google Sheet.")
         st.stop()
 
     tab_names = [
-        "📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "� Rework & Variance",
+        "📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "🔬 Rework & Variance",
         "🚧 Pipeline & Issues", "👷 Field Workload", "🔮 Forecasting & Trends"
     ]
     tabs = st.tabs(tab_names)
 
-    with tabs[0]: render_overview_tab(df_filtered)
-    with tabs[1]: render_detailed_data_tab(df_filtered)
-    with tabs[2]: render_profit_drivers_tab(df_filtered)
-    with tabs[3]: render_rework_tab(df_filtered)
-    with tabs[4]: render_pipeline_issues_tab(df_filtered)
-    with tabs[5]: render_field_workload_tab(df_filtered)
-    with tabs[6]: render_forecasting_tab(df_filtered)
+    # Pass the full, unfiltered dataframe to all tabs
+    with tabs[0]: render_overview_tab(df_full)
+    with tabs[1]: render_detailed_data_tab(df_full)
+    with tabs[2]: render_profit_drivers_tab(df_full)
+    with tabs[3]: render_rework_tab(df_full)
+    # Pass the selected 'today' date to the pipeline tab for its calculations
+    with tabs[4]: render_pipeline_issues_tab(df_full, today_dt)
+    with tabs[5]: render_field_workload_tab(df_full)
+    with tabs[6]: render_forecasting_tab(df_full)
 
 if __name__ == "__main__":
     main()
