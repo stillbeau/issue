@@ -245,6 +245,7 @@ def render_detailed_data_tab(df: pd.DataFrame):
     column_config = {
         "Link": st.column_config.LinkColumn("Prod #", help="Click to search in Moraware", display_text=r".*search=(.*)"),
         "Production_": None, # Hide original column
+        "Next_Sched_Activity": "Next Activity",
         "Revenue": st.column_config.NumberColumn(format='$%.2f'),
         "Total_Job_SqFt": st.column_config.NumberColumn("SqFt", format='%.2f'),
         "Cost_From_Plant": st.column_config.NumberColumn("Production Cost", format='$%.2f'),
@@ -256,9 +257,10 @@ def render_detailed_data_tab(df: pd.DataFrame):
         "Shop_Profit_Margin_%": st.column_config.ProgressColumn("Shop Profit Margin", format='%.2f%%', min_value=-100, max_value=100),
     }
     
+    # ADDED 'Next_Sched_Activity' to the column order
     column_order = [
-        'Link', 'Job_Name', 'Revenue', 'Total_Job_SqFt', 'Cost_From_Plant',
-        'Install_Cost', 'Total_Branch_Cost', 'Branch_Profit',
+        'Link', 'Job_Name', 'Next_Sched_Activity', 'Revenue', 'Total_Job_SqFt', 
+        'Cost_From_Plant', 'Install_Cost', 'Total_Branch_Cost', 'Branch_Profit',
         'Branch_Profit_Margin_%', 'Shop_Profit_Margin_%', 'Profit_Variance'
     ]
     # Ensure we only try to display columns that actually exist in the dataframe
@@ -343,12 +345,16 @@ def render_rework_tab(df: pd.DataFrame):
                 st.write("**Jobs with Largest Profit Variance**")
                 if 'Production_' in variance_jobs.columns:
                     variance_jobs['Link'] = variance_jobs['Production_'].apply(lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None)
-                variance_display_cols = ['Link', 'Job_Name', 'Original_GM', 'Branch_Profit', 'Profit_Variance']
+                
+                # ADDED 'Next_Sched_Activity' to the display columns
+                variance_display_cols = ['Link', 'Job_Name', 'Next_Sched_Activity', 'Original_GM', 'Branch_Profit', 'Profit_Variance']
+                
                 st.dataframe(
                     variance_jobs[[c for c in variance_display_cols if c in variance_jobs.columns]].sort_values(by='Profit_Variance', key=abs, ascending=False).head(20),
                     use_container_width=True,
                     column_config={
                         "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)"),
+                        "Next_Sched_Activity": "Next Activity",
                         "Original_GM": st.column_config.NumberColumn("Est. Profit", format='$%.2f'),
                         "Branch_Profit": st.column_config.NumberColumn("Actual Profit", format='$%.2f'),
                         "Profit_Variance": st.column_config.NumberColumn("Variance", format='$%.2f'),
@@ -382,12 +388,16 @@ def render_pipeline_issues_tab(df: pd.DataFrame, today: pd.Timestamp):
             stuck_jobs['Days_Since_Template'] = (today - stuck_jobs['Template_Date']).dt.days
             if 'Production_' in stuck_jobs.columns:
                 stuck_jobs['Link'] = stuck_jobs['Production_'].apply(lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None)
-            display_cols = ['Link', 'Job_Name', 'Salesperson', 'Template_Date', 'Days_Since_Template']
+            
+            # ADDED 'Next_Sched_Activity' to the display columns
+            display_cols = ['Link', 'Job_Name', 'Next_Sched_Activity', 'Salesperson', 'Template_Date', 'Days_Since_Template']
+            
             st.dataframe(
                 stuck_jobs[[c for c in display_cols if c in stuck_jobs.columns]].sort_values(by='Days_Since_Template', ascending=False),
                 use_container_width=True,
                 column_config={
                     "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)"),
+                    "Next_Sched_Activity": "Next Activity",
                     "Template_Date": st.column_config.DateColumn("Template Date", format="YYYY-MM-DD")
                 }
             )
@@ -407,12 +417,16 @@ def render_pipeline_issues_tab(df: pd.DataFrame, today: pd.Timestamp):
         if not missing_invoice_jobs.empty:
             if 'Production_' in missing_invoice_jobs.columns:
                 missing_invoice_jobs['Link'] = missing_invoice_jobs['Production_'].apply(lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None)
-            display_cols = ['Link', 'Job_Name', 'Salesperson', 'Job_Creation']
+            
+            # ADDED 'Next_Sched_Activity' to the display columns
+            display_cols = ['Link', 'Job_Name', 'Next_Sched_Activity', 'Salesperson', 'Job_Creation']
+            
             st.dataframe(
                 missing_invoice_jobs[[c for c in display_cols if c in missing_invoice_jobs.columns]].sort_values(by='Job_Creation', ascending=False),
                 use_container_width=True,
                 column_config={
                     "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)"),
+                    "Next_Sched_Activity": "Next Activity",
                     "Job_Creation": st.column_config.DateColumn("Job Creation Date", format="YYYY-MM-DD")
                 }
             )
