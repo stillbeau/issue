@@ -30,7 +30,7 @@ except ImportError:
     MATPLOTLIB_AVAILABLE = False
 
 # --- Page & App Configuration ---
-st.set_page_config(layout="wide", page_title="Profitability Dashboard", page_icon="�")
+st.set_page_config(layout="wide", page_title="Profitability Dashboard", page_icon="💰")
 
 # --- Constants & Global Configuration ---
 SPREADSHEET_ID = "1iToy3C-Bfn06bjuEM_flHNHwr2k1zMCV1wX9MNKzj38"
@@ -87,7 +87,8 @@ def _parse_date_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Parses all known date columns to datetime objects."""
     date_cols = [
         'Template_Date', 'Ready_to_Fab_Date', 'Ship_Date', 'Install_Date',
-        'Service_Date', 'Delivery_Date', 'Job_Creation', 'Next_Sched_Date'
+        'Service_Date', 'Delivery_Date', 'Job_Creation', 'Next_Sched_Date',
+        'Product_Rcvd_Date', 'Pick_Up_Date' # Added new dates
     ]
     for col in date_cols:
         if col in df.columns:
@@ -495,6 +496,54 @@ def render_pipeline_issues_tab(df: pd.DataFrame, today: pd.Timestamp):
             st.success("✅ No jobs with missing plant invoices in the current selection.")
     else:
         st.warning("Could not check for missing invoices. Required columns not found.")
+        
+    st.markdown("---")
+
+    # --- NEW SECTION: Jobs with Scheduling Conflicts ---
+    st.subheader("Jobs with Scheduling Conflicts")
+    st.markdown("Jobs where the Install, Service, Pick Up, or Delivery date is scheduled *before* the product has been marked as received.")
+
+    # Define the necessary columns
+    activity_cols = ['Install_Date', 'Service_Date', 'Pick_Up_Date', 'Delivery_Date']
+    product_received_col = 'Product_Rcvd_Date'
+    
+    # Check if all required columns exist in the DataFrame
+    required_cols_exist = all(col in df.columns for col in activity_cols + [product_received_col])
+    
+    if required_cols_exist:
+        # Create boolean masks for each condition where the activity date is before the product received date
+        conflict_conditions = (
+            (df['Install_Date'].notna() & (df['Install_Date'] < df[product_received_col])) |
+            (df['Service_Date'].notna() & (df['Service_Date'] < df[product_received_col])) |
+            (df['Pick_Up_Date'].notna() & (df['Pick_Up_Date'] < df[product_received_col])) |
+            (df['Delivery_Date'].notna() & (df['Delivery_Date'] < df[product_received_col]))
+        )
+        
+        conflict_jobs = df[conflict_conditions].copy()
+
+        if not conflict_jobs.empty:
+            if 'Production_' in conflict_jobs.columns:
+                conflict_jobs['Link'] = conflict_jobs['Production_'].apply(lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None)
+            
+            display_cols = ['Link', 'Job_Name', 'Product_Rcvd_Date', 'Install_Date', 'Service_Date', 'Pick_Up_Date', 'Delivery_Date']
+            
+            st.dataframe(
+                conflict_jobs[[c for c in display_cols if c in conflict_jobs.columns]].sort_values(by='Product_Rcvd_Date', ascending=False),
+                use_container_width=True,
+                column_config={
+                    "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)"),
+                    "Product_Rcvd_Date": st.column_config.DateColumn("Product Received", format="YYYY-MM-DD"),
+                    "Install_Date": st.column_config.DateColumn("Install Date", format="YYYY-MM-DD"),
+                    "Service_Date": st.column_config.DateColumn("Service Date", format="YYYY-MM-DD"),
+                    "Pick_Up_Date": st.column_config.DateColumn("Pick Up Date", format="YYYY-MM-DD"),
+                    "Delivery_Date": st.column_config.DateColumn("Delivery Date", format="YYYY-MM-DD"),
+                }
+            )
+        else:
+            st.success("✅ No scheduling conflicts found (e.g., Install date before Product Received date).")
+    else:
+        st.warning(f"Could not perform scheduling conflict analysis. Please ensure your sheet has the following columns: Product Rcvd - Date, Install - Date, Service - Date, Pick Up - Date, Delivery - Date.")
+
 
 def render_field_workload_tab(df: pd.DataFrame):
     """Renders the enhanced tab for Template, Install, and Service workloads."""
