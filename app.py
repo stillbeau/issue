@@ -257,35 +257,25 @@ def render_overview_tab(df: pd.DataFrame):
         sales_profit = df.groupby('Salesperson')['Branch_Profit'].sum().sort_values(ascending=False)
         st.bar_chart(sales_profit)
 
-def render_detailed_data_tab(df: pd.DataFrame):
-    """Renders the 'Detailed Data' tab with filtering and conditional formatting."""
-    st.header("📋 Detailed Data View")
-
-    df_display = df.copy()
-
+def _display_data_table(df_display: pd.DataFrame):
+    """A helper function to render a data table with filters and styling."""
+    
+    # Use the product type as a unique suffix for widget keys to prevent errors
+    key_suffix = df_display['Product_Type'].iloc[0] if not df_display.empty else 'default'
+    
     # --- Add filter widgets ---
     st.markdown("#### Filters")
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     with col1:
-        job_name_filter = st.text_input("Filter by Job Name (contains)", key="job_name_filter")
+        job_name_filter = st.text_input("Filter by Job Name (contains)", key=f"job_name_filter_{key_suffix}")
     with col2:
-        prod_num_filter = st.text_input("Filter by Production # (contains)", key="prod_num_filter")
-    with col3:
-        product_type_filter = st.selectbox(
-            "Filter by Product Type",
-            options=['All Jobs', 'Stone/Quartz Only', 'Laminate Only'],
-            index=0
-        )
+        prod_num_filter = st.text_input("Filter by Production # (contains)", key=f"prod_num_filter_{key_suffix}")
 
     # Apply filters
     if job_name_filter and 'Job_Name' in df_display.columns:
         df_display = df_display[df_display['Job_Name'].str.contains(job_name_filter, case=False, na=False)]
     if prod_num_filter and 'Production_' in df_display.columns:
         df_display = df_display[df_display['Production_'].str.contains(prod_num_filter, case=False, na=False)]
-    if product_type_filter == 'Stone/Quartz Only':
-        df_display = df_display[df_display['Product_Type'] == 'Stone/Quartz']
-    elif product_type_filter == 'Laminate Only':
-        df_display = df_display[df_display['Product_Type'] == 'Laminate']
 
     st.markdown("---")
 
@@ -294,9 +284,7 @@ def render_detailed_data_tab(df: pd.DataFrame):
         return
 
     if 'Production_' in df_display.columns:
-        df_display['Link'] = df_display['Production_'].apply(
-            lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None
-        )
+        df_display['Link'] = df_display['Production_'].apply(lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None)
 
     def color_days_behind(val):
         if pd.isna(val): return ''
@@ -313,7 +301,7 @@ def render_detailed_data_tab(df: pd.DataFrame):
 
     column_config = {
         "Link": st.column_config.LinkColumn("Prod #", help="Click to search in Moraware", display_text=r".*search=(.*)"),
-        "Production_": None, "Product_Type": "Product Type",
+        "Production_": None, "Product_Type": None, # Hide Product Type as it's in the tab title
         "Days_Behind": st.column_config.NumberColumn("Days Behind/Ahead", help="Positive: Behind Schedule. Negative: Ahead."),
         "Revenue": st.column_config.NumberColumn(format='$%.2f'), "Total_Job_SqFt": st.column_config.NumberColumn("SqFt", format='%.2f'),
         "Cost_From_Plant": st.column_config.NumberColumn("Production Cost", format='$%.2f'),
@@ -324,13 +312,34 @@ def render_detailed_data_tab(df: pd.DataFrame):
     }
 
     column_order = [
-        'Link', 'Job_Name', 'Product_Type', 'Next_Sched_Activity', 'Days_Behind', 'Revenue', 'Total_Job_SqFt',
+        'Link', 'Job_Name', 'Next_Sched_Activity', 'Days_Behind', 'Revenue', 'Total_Job_SqFt',
         'Cost_From_Plant', 'Install_Cost', 'Total_Branch_Cost', 'Branch_Profit',
         'Branch_Profit_Margin_%', 'Shop_Profit_Margin_%', 'Profit_Variance'
     ]
     final_column_order = [c for c in column_order if c in df_display.columns]
     styled_df.hide(axis="index")
     st.dataframe(styled_df, use_container_width=True, column_config=column_config, column_order=final_column_order)
+
+def render_detailed_data_tab(df: pd.DataFrame):
+    """Renders the 'Detailed Data' tab with separate sub-tabs for each division."""
+    st.header("📋 Detailed Data View")
+
+    if 'Product_Type' not in df.columns or df['Product_Type'].nunique() <= 1:
+        st.write("Displaying all jobs.")
+        _display_data_table(df)
+        return
+
+    product_types = sorted(df['Product_Type'].unique())
+    
+    # Create a tab for each product type
+    tabs = st.tabs(product_types)
+
+    for i, product_type in enumerate(product_types):
+        with tabs[i]:
+            # Filter the dataframe for the current tab's product type
+            df_filtered = df[df['Product_Type'] == product_type].copy()
+            # Call the helper function to display the table
+            _display_data_table(df_filtered)
 
 def render_profit_drivers_tab(df: pd.DataFrame):
     """Renders the 'Profit Drivers' tab."""
@@ -669,4 +678,4 @@ def main():
     with tabs[6]: render_forecasting_tab(df_full)
 
 if __name__ == "__main__":
-    mai
+    main()
