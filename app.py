@@ -160,6 +160,7 @@ def _calculate_days_behind(df: pd.DataFrame, today: pd.Timestamp) -> pd.DataFram
         # Calculate the difference in days. Positive means behind, negative means ahead.
         df['Days_Behind'] = (today - df['Next_Sched_Date']).dt.days
     else:
+        # If the column doesn't exist, create it with NaN values so other parts of the app don't break
         df['Days_Behind'] = np.nan
     return df
 
@@ -241,7 +242,7 @@ def render_overview_tab(df: pd.DataFrame):
         st.bar_chart(sales_profit)
 
 def render_detailed_data_tab(df: pd.DataFrame):
-    """Renders the 'Detailed Data' tab with filtering options."""
+    """Renders the 'Detailed Data' tab with filtering and conditional formatting."""
     st.header("📋 Detailed Data View")
 
     df_display = df.copy()
@@ -268,10 +269,37 @@ def render_detailed_data_tab(df: pd.DataFrame):
         return
 
     # Create a new column containing the full URL for the link.
-    if 'Production_' in df.columns:
+    if 'Production_' in df_display.columns:
         df_display['Link'] = df_display['Production_'].apply(
             lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None
         )
+
+    # --- Styling Function for Days Behind ---
+    def color_days_behind(val):
+        """Applies color to the 'Days_Behind' column based on its value."""
+        if pd.isna(val):
+            return '' # No color for empty values
+        color = 'red' if val > 0 else 'green' if val < 0 else '#F39C12' # Yellow for on-time
+        return f'background-color: {color}; color: white;'
+
+    # Apply the styling
+    styled_df = df_display.style.applymap(color_days_behind, subset=['Days_Behind'])
+
+    # Format other columns
+    styled_df.format({
+        'Revenue': '${:,.2f}',
+        'Total_Job_SqFt': '{:.2f}',
+        'Cost_From_Plant': '${:,.2f}',
+        'Install_Cost': '${:,.2f}',
+        'Total_Branch_Cost': '${:,.2f}',
+        'Branch_Profit': '${:,.2f}',
+        'Profit_Variance': '${:,.2f}',
+        'Days_Behind': '{:.0f}',
+    })
+
+    # Add progress bars
+    styled_df.bar(subset=['Branch_Profit_Margin_%'], align='mid', color=['#d65f5f', '#5fba7d'])
+    styled_df.bar(subset=['Shop_Profit_Margin_%'], align='mid', color=['#d65f5f', '#5fba7d'])
 
     column_config = {
         "Link": st.column_config.LinkColumn("Prod #", help="Click to search in Moraware", display_text=r".*search=(.*)"),
@@ -289,17 +317,19 @@ def render_detailed_data_tab(df: pd.DataFrame):
         "Shop_Profit_Margin_%": st.column_config.ProgressColumn("Shop Profit Margin", format='%.2f%%', min_value=-100, max_value=100),
     }
 
-    # Column order now includes 'Days_Behind'
     column_order = [
         'Link', 'Job_Name', 'Next_Sched_Activity', 'Days_Behind', 'Revenue', 'Total_Job_SqFt',
         'Cost_From_Plant', 'Install_Cost', 'Total_Branch_Cost', 'Branch_Profit',
         'Branch_Profit_Margin_%', 'Shop_Profit_Margin_%', 'Profit_Variance'
     ]
-    # Ensure we only try to display columns that actually exist in the dataframe
     final_column_order = [c for c in column_order if c in df_display.columns]
+    
+    # Hide the original index
+    styled_df.hide(axis="index")
 
+    # Display the styled DataFrame
     st.dataframe(
-        df_display,
+        styled_df,
         use_container_width=True,
         column_config=column_config,
         column_order=final_column_order
@@ -609,7 +639,7 @@ def main():
     today_date = st.sidebar.date_input(
         "Select 'Today's' Date for Pipeline Calculations",
         value=datetime.now().date(),
-        help="This date is used to calculate metrics like 'Days Since Template' and 'Days on Current Activity'."
+        help="This date is used to calculate metrics like 'Days Since Template' and 'Days Behind'."
     )
     today_dt = pd.to_datetime(today_date)
 
