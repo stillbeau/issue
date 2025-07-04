@@ -3,8 +3,8 @@
 A Streamlit dashboard for analyzing job profitability data from a Google Sheet.
 
 This version creates two separate, dedicated dashboards for Stone/Quartz and
-Laminate divisions, each with its own tailored calculations and views. All
-previous analytical tabs have been restored.
+Laminate divisions, plus a new Company-Wide dashboard for combined forecasting
+and workload analysis.
 """
 
 import streamlit as st
@@ -182,9 +182,11 @@ def load_and_process_data(creds_dict: dict, today: pd.Timestamp) -> tuple[pd.Dat
     if 'Division' not in df.columns:
         st.error("Your Google Sheet must have a 'Division' column to separate Stone and Laminate jobs.")
         st.stop()
+    
+    df['Product_Type'] = df['Division'].apply(lambda x: 'Laminate' if 'laminate' in str(x).lower() else 'Stone/Quartz')
 
-    df_stone = df[df['Division'].str.contains("Stone/Quartz", na=False)].copy()
-    df_laminate = df[df['Division'].str.contains("Laminate", na=False)].copy()
+    df_stone = df[df['Product_Type'] == 'Stone/Quartz'].copy()
+    df_laminate = df[df['Product_Type'] == 'Laminate'].copy()
 
     df_stone_processed = process_stone_data(df_stone)
     df_laminate_processed = process_laminate_data(df_laminate)
@@ -396,6 +398,102 @@ def render_forecasting_tab(df: pd.DataFrame, division_name: str):
     st.line_chart(monthly_summary[['Revenue', 'Branch_Profit']])
     st.bar_chart(monthly_summary['Job_Count'])
 
+# --- NEW: Company-Wide Rendering Functions ---
+
+def render_company_workload_tab(df_combined: pd.DataFrame):
+    st.header("👷 Company-Wide Field Workload")
+    if df_combined.empty:
+        st.warning("No data available to display workload.")
+        return
+
+    # Filter by division
+    divisions = df_combined['Product_Type'].unique()
+    selected_divisions = st.multiselect("Filter by Division:", options=divisions, default=list(divisions))
+    
+    if not selected_divisions:
+        st.warning("Please select at least one division.")
+        return
+        
+    df_filtered = df_combined[df_combined['Product_Type'].isin(selected_divisions)]
+
+    def render_workload_analysis(df_workload: pd.DataFrame, activity_name: str, date_col: str, assignee_col: str):
+        st.subheader(activity_name)
+        if date_col not in df_workload.columns or assignee_col not in df_workload.columns:
+            st.warning(f"Required columns for {activity_name} analysis not found.")
+            return
+        activity_df = df_workload.dropna(subset=[date_col, assignee_col]).copy()
+        if activity_df.empty:
+            st.info(f"No {activity_name.lower()} data available.")
+            return
+        assignees = sorted([name for name in activity_df[assignee_col].unique() if name and str(name).strip()])
+        for assignee in assignees:
+            with st.expander(f"**{assignee}**"):
+                assignee_df = activity_df[activity_df[assignee_col] == assignee].copy()
+                weekly_summary = assignee_df.set_index(date_col).resample('W-Mon', label='left', closed='left').agg(Jobs=('Production_', 'count'), Total_SqFt=('Total_Job_SqFt', 'sum')).reset_index()
+                weekly_summary = weekly_summary[weekly_summary['Jobs'] > 0]
+                if not weekly_summary.empty:
+                    st.dataframe(weekly_summary.rename(columns={date_col: 'Week_Start_Date'}), use_container_width=True)
+                else:
+                    st.write("No scheduled work for this person.")
+
+    render_workload_analysis(df_filtered, "Templates", "Template_Date", "Template_Assigned_To")
+    render_workload_analysis(df_filtered, "Installs", "Install_Date", "Install_Assigned_To")
+
+def render_company_forecasting_tab(df_combined: pd.DataFrame):
+    st.header("🔮 Company-Wide Forecasting & Trends")
+    if not SKLEARN_AVAILABLE or not MATPLOTLIB_AVAILABLE:
+        st.error("Forecasting features require scikit-learn and matplotlib.")
+        return
+    if 'Job_Creation' not in df_combined.columns or df_combined['Job_Creation'].isnull().all():
+        st.warning("Job Creation date column is required for trend analysis.")
+        return
+    if df_combined.empty or len(df_combined) < 2:
+        st.warning("Not enough data to create a forecast.")
+        return
+
+    df_trends = df_combined.copy().set_index('Job_Creation')
+    
+    # Resample for combined and individual trends
+    monthly_combined = df_trends.resample('M').agg({'Revenue': 'sum'}).rename(columns={'Revenue': 'Total Revenue'})
+    monthly_by_division = df_trends.groupby('Product_Type').resample('M').agg({'Revenue': 'sum'}).unstack(level=0)
+    monthly_by_division.columns = monthly_by_division.columns.droplevel(0) # Clean up multi-index
+    
+    # Merge for plotting
+    plot_df = pd.concat([monthly_combined, monthly_by_division], axis=1).fillna(0)
+
+    st.subheader("Monthly Revenue Trends by Division")
+    st.line_chart(plot_df)
+
+    st.subheader("Total Company Revenue Forecast")
+    forecast_df = monthly_combined.reset_index()
+    forecast_df['Time'] = np.arange(len(forecast_df.index))
+    
+    if len(forecast_df) < 2:
+        st.info("Not enough historical data to generate a forecast.")
+        return
+
+    model = LinearRegression()
+    X = forecast_df[['Time']]
+    y = forecast_df['Total Revenue']
+    model.fit(X, y)
+
+    future_periods = st.slider("Months to Forecast:", 1, 12, 3, key="company_forecast_slider")
+    last_time = forecast_df['Time'].max()
+    last_date = forecast_df['Job_Creation'].max()
+
+    future_dates = pd.to_datetime([last_date + pd.DateOffset(months=i) for i in range(1, future_periods + 1)])
+    future_df = pd.DataFrame({'Job_Creation': future_dates, 'Time': np.arange(last_time + 1, last_time + 1 + future_periods)})
+    future_df['Forecast'] = model.predict(future_df[['Time']])
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(forecast_df['Job_Creation'], forecast_df['Total Revenue'], label='Actual Revenue', marker='o')
+    ax.plot(future_df['Job_Creation'], future_df['Forecast'], label='Forecasted Revenue', linestyle='--', marker='o')
+    ax.set_title('Total Company Monthly Revenue and Forecast')
+    ax.set_ylabel('Revenue ($)')
+    ax.legend()
+    plt.grid(True, which='both', linestyle='--', linewidth=0.5)
+    st.pyplot(fig)
+
 # --- Main Application Logic ---
 
 def main():
@@ -418,13 +516,23 @@ def main():
 
     try:
         df_stone, df_laminate = load_and_process_data(creds, today_dt)
+        df_combined = pd.concat([df_stone, df_laminate], ignore_index=True)
     except Exception as e:
         st.error(f"Failed to load or process data: {e}")
         st.exception(e)
         st.stop()
 
-    division_tabs = st.tabs(["Stone/Quartz Dashboard", "Laminate Dashboard"])
-    with division_tabs[0]:
+    # --- Main Dashboard Tabs ---
+    main_tabs = st.tabs(["🏢 Company-Wide", "💎 Stone/Quartz Dashboard", "🪵 Laminate Dashboard"])
+
+    with main_tabs[0]: # Company-Wide Dashboard
+        company_sub_tabs = st.tabs(["👷 Field Workload", "🔮 Forecasting"])
+        with company_sub_tabs[0]:
+            render_company_workload_tab(df_combined)
+        with company_sub_tabs[1]:
+            render_company_forecasting_tab(df_combined)
+
+    with main_tabs[1]: # Stone Dashboard
         stone_sub_tabs = st.tabs(["📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "🔬 Rework & Variance", "🚧 Pipeline & Issues", "👷 Field Workload", "🔮 Forecasting"])
         with stone_sub_tabs[0]: render_overview_tab(df_stone, "Stone/Quartz")
         with stone_sub_tabs[1]: render_detailed_data_tab(df_stone, "Stone/Quartz")
@@ -433,7 +541,8 @@ def main():
         with stone_sub_tabs[4]: render_pipeline_issues_tab(df_stone, "Stone/Quartz", today_dt)
         with stone_sub_tabs[5]: render_field_workload_tab(df_stone, "Stone/Quartz")
         with stone_sub_tabs[6]: render_forecasting_tab(df_stone, "Stone/Quartz")
-    with division_tabs[1]:
+
+    with main_tabs[2]: # Laminate Dashboard
         laminate_sub_tabs = st.tabs(["📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "🔬 Rework & Variance", "🚧 Pipeline & Issues", "👷 Field Workload", "🔮 Forecasting"])
         with laminate_sub_tabs[0]: render_overview_tab(df_laminate, "Laminate")
         with laminate_sub_tabs[1]: render_detailed_data_tab(df_laminate, "Laminate")
