@@ -348,34 +348,60 @@ def render_pipeline_issues_tab(df: pd.DataFrame, division_name: str, today: pd.T
     else:
         st.warning("Could not perform scheduling conflict analysis. Required columns are missing.")
 
+def render_workload_card(df_filtered: pd.DataFrame, activity_name: str, date_col: str, assignee_col: str):
+    """Helper function to display a workload card for a given activity."""
+    st.subheader(activity_name)
+    
+    # Ensure necessary columns exist
+    if date_col not in df_filtered.columns or assignee_col not in df_filtered.columns:
+        st.warning(f"Required columns for {activity_name} analysis not found.")
+        return
+        
+    activity_df = df_filtered.dropna(subset=[date_col, assignee_col]).copy()
+    if activity_df.empty:
+        st.info(f"No {activity_name.lower()} data available.")
+        return
+
+    assignees = sorted([name for name in activity_df[assignee_col].unique() if name and str(name).strip()])
+    
+    for assignee in assignees:
+        with st.container(border=True):
+            assignee_df = activity_df[activity_df[assignee_col] == assignee]
+            
+            # Calculate summary metrics for the entire period
+            total_jobs = len(assignee_df)
+            total_sqft = assignee_df['Total_Job_SqFt'].sum()
+
+            # Display summary metrics at the top of the card
+            col1, col2 = st.columns(2)
+            col1.metric(f"{assignee} - Total Jobs", f"{total_jobs}")
+            col2.metric(f"{assignee} - Total SqFt", f"{total_sqft:,.2f}")
+
+            # Use an expander for the detailed weekly breakdown
+            with st.expander("View Weekly Breakdown"):
+                weekly_summary = assignee_df.set_index(date_col).resample('W-Mon', label='left', closed='left').agg(
+                    Jobs=('Production_', 'count'),
+                    Total_SqFt=('Total_Job_SqFt', 'sum')
+                ).reset_index()
+                weekly_summary = weekly_summary[weekly_summary['Jobs'] > 0]
+                
+                if not weekly_summary.empty:
+                    st.dataframe(weekly_summary.rename(columns={date_col: 'Week_Start_Date'}), use_container_width=True)
+                else:
+                    st.write("No scheduled work for this person in the selected period.")
+
 def render_field_workload_tab(df: pd.DataFrame, division_name: str):
+    """Renders the enhanced tab for Template, Install, and Service workloads."""
     st.header(f"👷 {division_name} Field Workload Planner")
     if df.empty:
         st.warning(f"No {division_name} data available.")
         return
-
-    def render_workload_analysis(df_filtered: pd.DataFrame, activity_name: str, date_col: str, assignee_col: str):
-        st.subheader(activity_name)
-        if date_col not in df_filtered.columns or assignee_col not in df_filtered.columns:
-            st.warning(f"Required columns for {activity_name} analysis not found.")
-            return
-        activity_df = df_filtered.dropna(subset=[date_col, assignee_col]).copy()
-        if activity_df.empty:
-            st.info(f"No {activity_name.lower()} data available.")
-            return
-        assignees = sorted([name for name in activity_df[assignee_col].unique() if name and str(name).strip()])
-        for assignee in assignees:
-            with st.expander(f"**{assignee}**"):
-                assignee_df = activity_df[activity_df[assignee_col] == assignee].copy()
-                weekly_summary = assignee_df.set_index(date_col).resample('W-Mon', label='left', closed='left').agg(Jobs=('Production_', 'count'), Total_SqFt=('Total_Job_SqFt', 'sum')).reset_index()
-                weekly_summary = weekly_summary[weekly_summary['Jobs'] > 0]
-                if not weekly_summary.empty:
-                    st.dataframe(weekly_summary.rename(columns={date_col: 'Week_Start_Date'}), use_container_width=True)
-                else:
-                    st.write("No scheduled work for this person.")
-
-    render_workload_analysis(df, "Templates", "Template_Date", "Template_Assigned_To")
-    render_workload_analysis(df, "Installs", "Install_Date", "Install_Assigned_To")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        render_workload_card(df, "Templates", "Template_Date", "Template_Assigned_To")
+    with col2:
+        render_workload_card(df, "Installs", "Install_Date", "Install_Assigned_To")
 
 def render_forecasting_tab(df: pd.DataFrame, division_name: str):
     st.header(f"🔮 {division_name} Forecasting & Trends")
@@ -406,8 +432,7 @@ def render_company_workload_tab(df_combined: pd.DataFrame):
         st.warning("No data available to display workload.")
         return
 
-    # Filter by division
-    divisions = df_combined['Product_Type'].unique()
+    divisions = sorted(df_combined['Product_Type'].unique())
     selected_divisions = st.multiselect("Filter by Division:", options=divisions, default=list(divisions))
     
     if not selected_divisions:
@@ -416,28 +441,11 @@ def render_company_workload_tab(df_combined: pd.DataFrame):
         
     df_filtered = df_combined[df_combined['Product_Type'].isin(selected_divisions)]
 
-    def render_workload_analysis(df_workload: pd.DataFrame, activity_name: str, date_col: str, assignee_col: str):
-        st.subheader(activity_name)
-        if date_col not in df_workload.columns or assignee_col not in df_workload.columns:
-            st.warning(f"Required columns for {activity_name} analysis not found.")
-            return
-        activity_df = df_workload.dropna(subset=[date_col, assignee_col]).copy()
-        if activity_df.empty:
-            st.info(f"No {activity_name.lower()} data available.")
-            return
-        assignees = sorted([name for name in activity_df[assignee_col].unique() if name and str(name).strip()])
-        for assignee in assignees:
-            with st.expander(f"**{assignee}**"):
-                assignee_df = activity_df[activity_df[assignee_col] == assignee].copy()
-                weekly_summary = assignee_df.set_index(date_col).resample('W-Mon', label='left', closed='left').agg(Jobs=('Production_', 'count'), Total_SqFt=('Total_Job_SqFt', 'sum')).reset_index()
-                weekly_summary = weekly_summary[weekly_summary['Jobs'] > 0]
-                if not weekly_summary.empty:
-                    st.dataframe(weekly_summary.rename(columns={date_col: 'Week_Start_Date'}), use_container_width=True)
-                else:
-                    st.write("No scheduled work for this person.")
-
-    render_workload_analysis(df_filtered, "Templates", "Template_Date", "Template_Assigned_To")
-    render_workload_analysis(df_filtered, "Installs", "Install_Date", "Install_Assigned_To")
+    col1, col2 = st.columns(2)
+    with col1:
+        render_workload_card(df_filtered, "Templates", "Template_Date", "Template_Assigned_To")
+    with col2:
+        render_workload_card(df_filtered, "Installs", "Install_Date", "Install_Assigned_To")
 
 def render_company_forecasting_tab(df_combined: pd.DataFrame):
     st.header("🔮 Company-Wide Forecasting & Trends")
@@ -453,12 +461,10 @@ def render_company_forecasting_tab(df_combined: pd.DataFrame):
 
     df_trends = df_combined.copy().set_index('Job_Creation')
     
-    # Resample for combined and individual trends
     monthly_combined = df_trends.resample('M').agg({'Revenue': 'sum'}).rename(columns={'Revenue': 'Total Revenue'})
     monthly_by_division = df_trends.groupby('Product_Type').resample('M').agg({'Revenue': 'sum'}).unstack(level=0)
-    monthly_by_division.columns = monthly_by_division.columns.droplevel(0) # Clean up multi-index
+    monthly_by_division.columns = monthly_by_division.columns.droplevel(0)
     
-    # Merge for plotting
     plot_df = pd.concat([monthly_combined, monthly_by_division], axis=1).fillna(0)
 
     st.subheader("Monthly Revenue Trends by Division")
