@@ -151,6 +151,27 @@ def _calculate_durations(df: pd.DataFrame) -> pd.DataFrame:
         df.loc[df['Days_Ship_to_Install'] < 0, 'Days_Ship_to_Install'] = np.nan
     return df
 
+def _calculate_current_activity_duration(df: pd.DataFrame, today: pd.Timestamp) -> pd.DataFrame:
+    """Calculates how long a job has been in its current state."""
+    # Define the columns that represent a completed activity date
+    activity_date_cols = [
+        'Job_Creation', 'Template_Date', 'Ready_to_Fab_Date', 'Ship_Date',
+        'Install_Date', 'Service_Date', 'Delivery_Date'
+    ]
+    # Ensure all relevant date columns exist, filling with NaT if not
+    for col in activity_date_cols:
+        if col not in df.columns:
+            df[col] = pd.NaT
+
+    # Find the most recent activity date for each job
+    df['Last_Activity_Date'] = df[activity_date_cols].max(axis=1)
+
+    # Calculate the number of days since the last activity
+    df['Days_On_Current_Activity'] = (today - df['Last_Activity_Date']).dt.days
+    df['Days_On_Current_Activity'] = df['Days_On_Current_Activity'].fillna(np.nan)
+
+    return df
+
 def _enrich_data(df: pd.DataFrame) -> pd.DataFrame:
     """Adds supplementary data like material parsing and geocoding."""
     # Parse material information
@@ -168,7 +189,7 @@ def _enrich_data(df: pd.DataFrame) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=300)
-def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
+def load_and_process_data(creds_dict: dict, today: pd.Timestamp) -> pd.DataFrame:
     """Main data pipeline: Loads, cleans, and processes data from Google Sheets."""
     # 1. Load data from Google Sheets
     creds = Credentials.from_service_account_info(creds_dict, scopes=['https://www.googleapis.com/auth/spreadsheets'])
@@ -192,6 +213,7 @@ def load_and_process_data(creds_dict: dict) -> pd.DataFrame:
     df = _clean_numeric_columns(df)
     df = _calculate_profitability_metrics(df)
     df = _calculate_durations(df)
+    df = _calculate_current_activity_duration(df, today) # New function call
     df = _enrich_data(df)
 
     # 4. Final cleaning
@@ -264,6 +286,7 @@ def render_detailed_data_tab(df: pd.DataFrame):
         "Link": st.column_config.LinkColumn("Prod #", help="Click to search in Moraware", display_text=r".*search=(.*)"),
         "Production_": None, # Hide original column
         "Next_Sched_Activity": "Next Activity",
+        "Days_On_Current_Activity": st.column_config.NumberColumn("Days on Activity", format='%d days'),
         "Revenue": st.column_config.NumberColumn(format='$%.2f'),
         "Total_Job_SqFt": st.column_config.NumberColumn("SqFt", format='%.2f'),
         "Cost_From_Plant": st.column_config.NumberColumn("Production Cost", format='$%.2f'),
@@ -275,9 +298,9 @@ def render_detailed_data_tab(df: pd.DataFrame):
         "Shop_Profit_Margin_%": st.column_config.ProgressColumn("Shop Profit Margin", format='%.2f%%', min_value=-100, max_value=100),
     }
 
-    # Column order now includes 'Next_Sched_Activity'
+    # Column order now includes 'Days_On_Current_Activity'
     column_order = [
-        'Link', 'Job_Name', 'Next_Sched_Activity', 'Revenue', 'Total_Job_SqFt',
+        'Link', 'Job_Name', 'Next_Sched_Activity', 'Days_On_Current_Activity', 'Revenue', 'Total_Job_SqFt',
         'Cost_From_Plant', 'Install_Cost', 'Total_Branch_Cost', 'Branch_Profit',
         'Branch_Profit_Margin_%', 'Shop_Profit_Margin_%', 'Profit_Variance'
     ]
@@ -364,7 +387,7 @@ def render_rework_tab(df: pd.DataFrame):
                 if 'Production_' in variance_jobs.columns:
                     variance_jobs['Link'] = variance_jobs['Production_'].apply(lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None)
                 
-                variance_display_cols = ['Link', 'Job_Name', 'Next_Sched_Activity', 'Original_GM', 'Branch_Profit', 'Profit_Variance']
+                variance_display_cols = ['Link', 'Job_Name', 'Next_Sched_Activity', 'Days_On_Current_Activity', 'Original_GM', 'Branch_Profit', 'Profit_Variance']
                 
                 st.dataframe(
                     variance_jobs[[c for c in variance_display_cols if c in variance_jobs.columns]].sort_values(by='Profit_Variance', key=abs, ascending=False).head(20),
@@ -372,6 +395,7 @@ def render_rework_tab(df: pd.DataFrame):
                     column_config={
                         "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)"),
                         "Next_Sched_Activity": "Next Activity",
+                        "Days_On_Current_Activity": st.column_config.NumberColumn("Days on Activity", format='%d days'),
                         "Original_GM": st.column_config.NumberColumn("Est. Profit", format='$%.2f'),
                         "Branch_Profit": st.column_config.NumberColumn("Actual Profit", format='$%.2f'),
                         "Profit_Variance": st.column_config.NumberColumn("Variance", format='$%.2f'),
@@ -405,7 +429,7 @@ def render_pipeline_issues_tab(df: pd.DataFrame, today: pd.Timestamp):
             if 'Production_' in stuck_jobs.columns:
                 stuck_jobs['Link'] = stuck_jobs['Production_'].apply(lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None)
             
-            display_cols = ['Link', 'Job_Name', 'Next_Sched_Activity', 'Salesperson', 'Template_Date', 'Days_Since_Template']
+            display_cols = ['Link', 'Job_Name', 'Next_Sched_Activity', 'Days_On_Current_Activity', 'Salesperson', 'Template_Date', 'Days_Since_Template']
             
             st.dataframe(
                 stuck_jobs[[c for c in display_cols if c in stuck_jobs.columns]].sort_values(by='Days_Since_Template', ascending=False),
@@ -413,6 +437,7 @@ def render_pipeline_issues_tab(df: pd.DataFrame, today: pd.Timestamp):
                 column_config={
                     "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)"),
                     "Next_Sched_Activity": "Next Activity",
+                    "Days_On_Current_Activity": st.column_config.NumberColumn("Days on Activity", format='%d days'),
                     "Template_Date": st.column_config.DateColumn("Template Date", format="YYYY-MM-DD")
                 }
             )
@@ -433,7 +458,7 @@ def render_pipeline_issues_tab(df: pd.DataFrame, today: pd.Timestamp):
             if 'Production_' in missing_invoice_jobs.columns:
                 missing_invoice_jobs['Link'] = missing_invoice_jobs['Production_'].apply(lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None)
             
-            display_cols = ['Link', 'Job_Name', 'Next_Sched_Activity', 'Salesperson', 'Job_Creation']
+            display_cols = ['Link', 'Job_Name', 'Next_Sched_Activity', 'Days_On_Current_Activity', 'Salesperson', 'Job_Creation']
             
             st.dataframe(
                 missing_invoice_jobs[[c for c in display_cols if c in missing_invoice_jobs.columns]].sort_values(by='Job_Creation', ascending=False),
@@ -441,6 +466,7 @@ def render_pipeline_issues_tab(df: pd.DataFrame, today: pd.Timestamp):
                 column_config={
                     "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)"),
                     "Next_Sched_Activity": "Next Activity",
+                    "Days_On_Current_Activity": st.column_config.NumberColumn("Days on Activity", format='%d days'),
                     "Job_Creation": st.column_config.DateColumn("Job Creation Date", format="YYYY-MM-DD")
                 }
             )
@@ -587,9 +613,18 @@ def main():
         st.sidebar.error("Please provide Google credentials to load data.")
         st.stop()
 
+    # --- Sidebar: Date Selection for Pipeline ---
+    st.sidebar.header("🗓️ Date Selection")
+    today_date = st.sidebar.date_input(
+        "Select 'Today's' Date for Pipeline Calculations",
+        value=datetime.now().date(),
+        help="This date is used to calculate metrics like 'Days Since Template' and 'Days on Current Activity'."
+    )
+    today_dt = pd.to_datetime(today_date)
+
     # --- Data Loading ---
     try:
-        df_full = load_and_process_data(creds)
+        df_full = load_and_process_data(creds, today_dt)
     except Exception as e:
         st.error(f"Failed to load or process data: {e}")
         st.exception(e)
@@ -599,18 +634,9 @@ def main():
         st.warning("No data was loaded from the Google Sheet.")
         st.stop()
 
-    # --- Sidebar: Date Selection for Pipeline ---
-    st.sidebar.header("🗓️ Date Selection")
-    today_date = st.sidebar.date_input(
-        "Select 'Today's' Date for Pipeline Calculations",
-        value=datetime.now().date(),
-        help="This date is used to calculate metrics like 'Days Since Template'."
-    )
-    today_dt = pd.to_datetime(today_date)
-
     # --- Main Content: Tabs ---
     tab_names = [
-        "📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "� Rework & Variance",
+        "📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "🔬 Rework & Variance",
         "🚧 Pipeline & Issues", "👷 Field Workload", "🔮 Forecasting & Trends"
     ]
     tabs = st.tabs(tab_names)
