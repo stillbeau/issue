@@ -228,14 +228,32 @@ def render_overview_tab(df: pd.DataFrame):
         st.bar_chart(sales_profit)
 
 def render_detailed_data_tab(df: pd.DataFrame):
-    """Renders the 'Detailed Data' tab."""
+    """Renders the 'Detailed Data' tab with filtering options."""
     st.header("📋 Detailed Data View")
-    if df.empty:
+
+    df_display = df.copy()
+
+    # --- Add filter widgets ---
+    st.markdown("#### Filters")
+    col1, col2 = st.columns(2)
+    with col1:
+        job_name_filter = st.text_input("Filter by Job Name (contains)", key="job_name_filter")
+    with col2:
+        prod_num_filter = st.text_input("Filter by Production # (contains)", key="prod_num_filter")
+
+    # Apply filters if they are not empty
+    if job_name_filter and 'Job_Name' in df_display.columns:
+        df_display = df_display[df_display['Job_Name'].str.contains(job_name_filter, case=False, na=False)]
+
+    if prod_num_filter and 'Production_' in df_display.columns:
+        df_display = df_display[df_display['Production_'].str.contains(prod_num_filter, case=False, na=False)]
+
+    st.markdown("---")
+
+    if df_display.empty:
         st.warning("No data available for the selected filters.")
         return
 
-    df_display = df.copy()
-    
     # Create a new column containing the full URL for the link.
     if 'Production_' in df.columns:
         df_display['Link'] = df_display['Production_'].apply(
@@ -256,10 +274,10 @@ def render_detailed_data_tab(df: pd.DataFrame):
         "Branch_Profit_Margin_%": st.column_config.ProgressColumn("Branch Profit Margin", format='%.2f%%', min_value=-100, max_value=100),
         "Shop_Profit_Margin_%": st.column_config.ProgressColumn("Shop Profit Margin", format='%.2f%%', min_value=-100, max_value=100),
     }
-    
-    # ADDED 'Next_Sched_Activity' to the column order
+
+    # Column order now includes 'Next_Sched_Activity'
     column_order = [
-        'Link', 'Job_Name', 'Next_Sched_Activity', 'Revenue', 'Total_Job_SqFt', 
+        'Link', 'Job_Name', 'Next_Sched_Activity', 'Revenue', 'Total_Job_SqFt',
         'Cost_From_Plant', 'Install_Cost', 'Total_Branch_Cost', 'Branch_Profit',
         'Branch_Profit_Margin_%', 'Shop_Profit_Margin_%', 'Profit_Variance'
     ]
@@ -346,7 +364,6 @@ def render_rework_tab(df: pd.DataFrame):
                 if 'Production_' in variance_jobs.columns:
                     variance_jobs['Link'] = variance_jobs['Production_'].apply(lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None)
                 
-                # ADDED 'Next_Sched_Activity' to the display columns
                 variance_display_cols = ['Link', 'Job_Name', 'Next_Sched_Activity', 'Original_GM', 'Branch_Profit', 'Profit_Variance']
                 
                 st.dataframe(
@@ -376,7 +393,6 @@ def render_pipeline_issues_tab(df: pd.DataFrame, today: pd.Timestamp):
     st.markdown("Jobs that have been templated but are not yet marked as 'Ready to Fab' as of the selected date. This view ignores the sidebar filters.")
     
     if 'Ready_to_Fab_Status' in df.columns:
-        # Base condition: Templated on or before the selected date and RTF status is not 'complete'.
         conditions = (
             (df['Template_Date'].notna()) &
             (df['Template_Date'] <= today) &
@@ -389,7 +405,6 @@ def render_pipeline_issues_tab(df: pd.DataFrame, today: pd.Timestamp):
             if 'Production_' in stuck_jobs.columns:
                 stuck_jobs['Link'] = stuck_jobs['Production_'].apply(lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None)
             
-            # ADDED 'Next_Sched_Activity' to the display columns
             display_cols = ['Link', 'Job_Name', 'Next_Sched_Activity', 'Salesperson', 'Template_Date', 'Days_Since_Template']
             
             st.dataframe(
@@ -418,7 +433,6 @@ def render_pipeline_issues_tab(df: pd.DataFrame, today: pd.Timestamp):
             if 'Production_' in missing_invoice_jobs.columns:
                 missing_invoice_jobs['Link'] = missing_invoice_jobs['Production_'].apply(lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None)
             
-            # ADDED 'Next_Sched_Activity' to the display columns
             display_cols = ['Link', 'Job_Name', 'Next_Sched_Activity', 'Salesperson', 'Job_Creation']
             
             st.dataframe(
@@ -596,7 +610,7 @@ def main():
 
     # --- Main Content: Tabs ---
     tab_names = [
-        "📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "🔬 Rework & Variance",
+        "📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "� Rework & Variance",
         "🚧 Pipeline & Issues", "👷 Field Workload", "🔮 Forecasting & Trends"
     ]
     tabs = st.tabs(tab_names)
@@ -611,3 +625,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+�
