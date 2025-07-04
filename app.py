@@ -237,7 +237,7 @@ def render_detailed_data_tab(df: pd.DataFrame):
     df_display = df.copy()
     
     # Create a new column containing the full URL for the link.
-    if 'Production_' in df_display.columns:
+    if 'Production_' in df.columns:
         df_display['Link'] = df_display['Production_'].apply(
             lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None
         )
@@ -369,38 +369,33 @@ def render_pipeline_issues_tab(df: pd.DataFrame, today: pd.Timestamp):
     st.subheader("Jobs Awaiting Ready-to-Fab")
     st.markdown("Jobs that have been templated but are not yet marked as 'Ready to Fab' as of the selected date. This view ignores the sidebar filters.")
     
-    # Base condition: Templated on or before the selected date.
-    conditions = (
-        (df['Template_Date'].notna()) &
-        (df['Template_Date'] <= today)
-    )
-
-    # A job is considered "stuck" if the RTF status column exists and is not 'Complete',
-    # or if the status column doesn't exist, we fall back to checking if the RTF date is missing.
     if 'Ready_to_Fab_Status' in df.columns:
-        # Treat NaN or any string other than 'complete' (case-insensitive) as not complete.
-        conditions &= (df['Ready_to_Fab_Status'].fillna('').str.lower() != 'complete')
-    else:
-        # Fallback if the status column isn't present, check for the date
-        conditions &= (df['Ready_to_Fab_Date'].isna())
-        
-    stuck_jobs = df[conditions].copy()
-
-    if not stuck_jobs.empty:
-        stuck_jobs['Days_Since_Template'] = (today - stuck_jobs['Template_Date']).dt.days
-        if 'Production_' in stuck_jobs.columns:
-            stuck_jobs['Link'] = stuck_jobs['Production_'].apply(lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None)
-        display_cols = ['Link', 'Job_Name', 'Salesperson', 'Template_Date', 'Days_Since_Template']
-        st.dataframe(
-            stuck_jobs[[c for c in display_cols if c in stuck_jobs.columns]].sort_values(by='Days_Since_Template', ascending=False),
-            use_container_width=True,
-            column_config={
-                "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)"),
-                "Template_Date": st.column_config.DateColumn("Template Date", format="YYYY-MM-DD")
-            }
+        # Base condition: Templated on or before the selected date and RTF status is not 'complete'.
+        conditions = (
+            (df['Template_Date'].notna()) &
+            (df['Template_Date'] <= today) &
+            (df['Ready_to_Fab_Status'].fillna('').str.lower() != 'complete')
         )
+        stuck_jobs = df[conditions].copy()
+
+        if not stuck_jobs.empty:
+            stuck_jobs['Days_Since_Template'] = (today - stuck_jobs['Template_Date']).dt.days
+            if 'Production_' in stuck_jobs.columns:
+                stuck_jobs['Link'] = stuck_jobs['Production_'].apply(lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None)
+            display_cols = ['Link', 'Job_Name', 'Salesperson', 'Template_Date', 'Days_Since_Template']
+            st.dataframe(
+                stuck_jobs[[c for c in display_cols if c in stuck_jobs.columns]].sort_values(by='Days_Since_Template', ascending=False),
+                use_container_width=True,
+                column_config={
+                    "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)"),
+                    "Template_Date": st.column_config.DateColumn("Template Date", format="YYYY-MM-DD")
+                }
+            )
+        else:
+            st.success("✅ No jobs are currently stuck between Template and Ready to Fab.")
     else:
-        st.success("✅ No jobs are currently stuck between Template and Ready to Fab.")
+        st.warning("Could not find a 'Ready_to_Fab_Status' column in the data. This section requires that column to function.")
+
 
     st.markdown("---")
     
