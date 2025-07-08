@@ -2,9 +2,9 @@
 """
 A Streamlit dashboard for analyzing job profitability data from a Google Sheet.
 
-This refactored version incorporates best practices such as centralized constants,
-DRY (Don't Repeat Yourself) principles for UI generation, and more granular
-error handling to create a more robust and maintainable application.
+This refactored version consolidates data processing logic, centralizes
+configuration, and improves performance and maintainability. It retains the
+three-dashboard structure: Stone/Quartz, Laminate, and a Company-Wide view.
 """
 
 import streamlit as st
@@ -36,83 +36,47 @@ st.set_page_config(layout="wide", page_title="Profitability Dashboard", page_ico
 SPREADSHEET_ID = "1iToy3C-Bfn06bjuEM_flHNHwr2k1zMCV1wX9MNKzj38"
 WORKSHEET_NAME = "jobs"
 MORAWARE_SEARCH_URL = "https://floformcountertops.moraware.net/sys/search?&search="
-INSTALL_COST_PER_SQFT = 15.0
 
-# --- REFACTOR: Centralized Column Name Constants ---
-# Using a class to hold column names makes the code more robust.
-# If a column name changes in the source data, you only need to update it here.
-class COLS:
-    # Input Columns (from Google Sheet, after cleaning)
-    DIVISION = 'Division'
-    JOB_NAME = 'Job_Name'
-    PRODUCTION_NUM = 'Production_'
-    SALESPERSON = 'Salesperson'
-    JOB_TYPE = 'Job_Type'
-    ORDER_TYPE = 'Order_Type'
-    LEAD_SOURCE = 'Lead_Source'
-    JOB_MATERIAL = 'Job_Material'
-    REWORK_REASON = 'Rework_Stone_Shop_Reason'
-    RTF_STATUS = 'Ready_to_Fab_Status'
-    NEXT_SCHED_ACTIVITY = 'Next_Sched_Activity'
+# --- Division-Specific Processing Configuration ---
+# Centralizing configuration makes the code cleaner and easier to update.
+STONE_CONFIG = {
+    "name": "Stone/Quartz",
+    "numeric_map": {
+        'Total_Job_Price_': 'Revenue',
+        'Phase_Dollars_Plant_Invoice_': 'Cost_From_Plant',
+        'Total_Job_SqFT': 'Total_Job_SqFt',
+        'Job_Throughput_Job_GM_original': 'Original_GM',
+        'Rework_Stone_Shop_Rework_Price': 'Rework_Price',
+        'Job_Throughput_Rework_COGS': 'Rework_COGS',
+        'Job_Throughput_Rework_Job_Labor': 'Rework_Labor',
+        'Job_Throughput_Total_COGS': 'Total_COGS'
+    },
+    "cost_components": ['Cost_From_Plant', 'Install_Cost', 'Total_Rework_Cost'],
+    "rework_components": ['Rework_Price', 'Rework_COGS', 'Rework_Labor'],
+    "has_shop_profit": True
+}
 
-    # Date Columns
-    TEMPLATE_DATE = 'Template_Date'
-    RTF_DATE = 'Ready_to_Fab_Date'
-    SHIP_DATE = 'Ship_Date'
-    INSTALL_DATE = 'Install_Date'
-    SERVICE_DATE = 'Service_Date'
-    DELIVERY_DATE = 'Delivery_Date'
-    JOB_CREATION_DATE = 'Job_Creation'
-    NEXT_SCHED_DATE = 'Next_Sched_Date'
-    PRODUCT_RCVD_DATE = 'Product_Rcvd_Date'
-    PICK_UP_DATE = 'Pick_Up_Date'
-    
-    # Assignee Columns
-    TEMPLATE_ASSIGNEE = 'Template_Assigned_To'
-    INSTALL_ASSIGNEE = 'Install_Assigned_To'
-
-    # Raw Numeric/Financial Columns (pre-calculation)
-    RAW_REVENUE = 'Total_Job_Price_'
-    RAW_COST_PLANT = 'Phase_Dollars_Plant_Invoice_' # Stone
-    RAW_SHOP_COST = 'Branch_INV_' # Laminate
-    RAW_MATERIAL_COST = 'Plant_INV_' # Laminate
-    RAW_SQFT = 'Total_Job_SqFT'
-    RAW_ORIGINAL_GM = 'Job_Throughput_Job_GM_original'
-    RAW_REWORK_PRICE = 'Rework_Stone_Shop_Rework_Price'
-    RAW_REWORK_COGS = 'Job_Throughput_Rework_COGS'
-    RAW_REWORK_LABOR = 'Job_Throughput_Rework_Job_Labor'
-    RAW_TOTAL_COGS = 'Job_Throughput_Total_COGS'
-
-    # Calculated Columns (created during processing)
-    PRODUCT_TYPE = 'Product_Type'
-    DAYS_BEHIND = 'Days_Behind'
-    MATERIAL_BRAND = 'Material_Brand'
-    MATERIAL_COLOR = 'Material_Color'
-    REVENUE = 'Revenue'
-    COST_FROM_PLANT = 'Cost_From_Plant'
-    SHOP_COST = 'Shop_Cost'
-    MATERIAL_COST = 'Material_Cost'
-    TOTAL_SQFT = 'Total_Job_SqFt'
-    ORIGINAL_GM = 'Original_GM'
-    REWORK_PRICE = 'Rework_Price'
-    REWORK_COGS = 'Rework_COGS'
-    REWORK_LABOR = 'Rework_Labor'
-    TOTAL_COGS = 'Total_COGS'
-    INSTALL_COST = 'Install_Cost'
-    TOTAL_REWORK_COST = 'Total_Rework_Cost'
-    TOTAL_BRANCH_COST = 'Total_Branch_Cost'
-    BRANCH_PROFIT = 'Branch_Profit'
-    BRANCH_PROFIT_MARGIN = 'Branch_Profit_Margin_%'
-    PROFIT_VARIANCE = 'Profit_Variance'
-    SHOP_PROFIT = 'Shop_Profit'
-    SHOP_PROFIT_MARGIN = 'Shop_Profit_Margin_%'
-    LINK = 'Link'
+LAMINATE_CONFIG = {
+    "name": "Laminate",
+    "numeric_map": {
+        'Total_Job_Price_': 'Revenue',
+        'Branch_INV_': 'Shop_Cost',
+        'Plant_INV_': 'Material_Cost',
+        'Total_Job_SqFT': 'Total_Job_SqFt',
+        'Job_Throughput_Job_GM_original': 'Original_GM',
+        'Rework_Stone_Shop_Rework_Price': 'Rework_Price',
+    },
+    "cost_components": ['Shop_Cost', 'Material_Cost', 'Install_Cost', 'Total_Rework_Cost'],
+    "rework_components": ['Rework_Price'],
+    "has_shop_profit": False
+}
 
 
 # --- Helper Functions ---
 
 def parse_material(s: str) -> tuple[str, str]:
     """Parses a material description string to extract brand and color."""
+    # This regex is complex; ensure it matches your data format reliably.
     brand_match = re.search(r'-\s*,\d+\s*-\s*([A-Za-z0-9 ]+?)\s*\(', s)
     color_match = re.search(r'\)\s*([^()]+?)\s*\(', s)
     brand = brand_match.group(1).strip() if brand_match else "N/A"
@@ -129,9 +93,9 @@ def _clean_column_names(df: pd.DataFrame) -> pd.DataFrame:
 def _parse_date_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Parses all known date columns to datetime objects."""
     date_cols = [
-        COLS.TEMPLATE_DATE, COLS.RTF_DATE, COLS.SHIP_DATE, COLS.INSTALL_DATE,
-        COLS.SERVICE_DATE, COLS.DELIVERY_DATE, COLS.JOB_CREATION_DATE, COLS.NEXT_SCHED_DATE,
-        COLS.PRODUCT_RCVD_DATE, COLS.PICK_UP_DATE
+        'Template_Date', 'Ready_to_Fab_Date', 'Ship_Date', 'Install_Date',
+        'Service_Date', 'Delivery_Date', 'Job_Creation', 'Next_Sched_Date',
+        'Product_Rcvd_Date', 'Pick_Up_Date'
     ]
     for col in date_cols:
         if col in df.columns:
@@ -140,147 +104,141 @@ def _parse_date_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 def _calculate_days_behind(df: pd.DataFrame, today: pd.Timestamp) -> pd.DataFrame:
     """Calculates if a job is ahead or behind its next scheduled date."""
-    if COLS.NEXT_SCHED_DATE in df.columns:
-        df[COLS.DAYS_BEHIND] = (today - df[COLS.NEXT_SCHED_DATE]).dt.days
+    if 'Next_Sched_Date' in df.columns:
+        df['Days_Behind'] = (today - df['Next_Sched_Date']).dt.days
     else:
-        df[COLS.DAYS_BEHIND] = np.nan
+        df['Days_Behind'] = np.nan
     return df
 
 def _calculate_durations(df: pd.DataFrame) -> pd.DataFrame:
-    """Calculates durations between key process stages."""
-    if COLS.RTF_DATE in df.columns and COLS.TEMPLATE_DATE in df.columns:
-        df['Days_Template_to_RTF'] = (df[COLS.RTF_DATE] - df[COLS.TEMPLATE_DATE]).dt.days
-        df.loc[df['Days_Template_to_RTF'] < 0, 'Days_Template_to_RTF'] = np.nan
-    if COLS.SHIP_DATE in df.columns and COLS.RTF_DATE in df.columns:
-        df['Days_RTF_to_Ship'] = (df[COLS.SHIP_DATE] - df[COLS.RTF_DATE]).dt.days
-        df.loc[df['Days_RTF_to_Ship'] < 0, 'Days_RTF_to_Ship'] = np.nan
-    if COLS.INSTALL_DATE in df.columns and COLS.SHIP_DATE in df.columns:
-        df['Days_Ship_to_Install'] = (df[COLS.INSTALL_DATE] - df[COLS.SHIP_DATE]).dt.days
-        df.loc[df['Days_Ship_to_Install'] < 0, 'Days_Ship_to_Install'] = np.nan
+    """Calculates durations between key process stages, handling invalid dates."""
+    duration_pairs = {
+        'Days_Template_to_RTF': ('Ready_to_Fab_Date', 'Template_Date'),
+        'Days_RTF_to_Ship': ('Ship_Date', 'Ready_to_Fab_Date'),
+        'Days_Ship_to_Install': ('Install_Date', 'Ship_Date')
+    }
+    for new_col, (end_col, start_col) in duration_pairs.items():
+        if start_col in df.columns and end_col in df.columns:
+            duration = (df[end_col] - df[start_col]).dt.days
+            # Set negative durations (data errors) to NaN
+            df[new_col] = np.where(duration >= 0, duration, np.nan)
     return df
 
 def _enrich_data(df: pd.DataFrame) -> pd.DataFrame:
     """Adds supplementary data like material parsing."""
-    if COLS.JOB_MATERIAL in df.columns:
-        df[[COLS.MATERIAL_BRAND, COLS.MATERIAL_COLOR]] = df[COLS.JOB_MATERIAL].apply(lambda x: pd.Series(parse_material(str(x))))
+    if 'Job_Material' in df.columns:
+        df[['Material_Brand', 'Material_Color']] = df['Job_Material'].apply(lambda x: pd.Series(parse_material(str(x))))
     else:
-        df[COLS.MATERIAL_BRAND] = "N/A"
-        df[COLS.MATERIAL_COLOR] = "N/A"
+        df['Material_Brand'] = "N/A"
+        df['Material_Color'] = "N/A"
     return df
 
-# --- Division-Specific Processing Pipelines ---
+# --- NEW: Unified Division-Specific Processing Pipeline ---
 
-def process_stone_data(df: pd.DataFrame) -> pd.DataFrame:
-    """Processes the data specifically for Stone/Quartz jobs."""
-    df_stone = df.copy()
+def _process_division_data(df: pd.DataFrame, config: dict, install_cost_per_sqft: float) -> pd.DataFrame:
+    """
+    Processes data for a specific division using a configuration dictionary.
+    This function replaces the separate process_stone_data and process_laminate_data funcs.
+
+    Args:
+        df (pd.DataFrame): The dataframe for a single division.
+        config (dict): The configuration dictionary (STONE_CONFIG or LAMINATE_CONFIG).
+        install_cost_per_sqft (float): The user-defined cost for installation.
+
+    Returns:
+        pd.DataFrame: The processed dataframe with calculated financial metrics.
+    """
+    df_processed = df.copy()
     
-    numeric_map = {
-        COLS.RAW_REVENUE: COLS.REVENUE,
-        COLS.RAW_COST_PLANT: COLS.COST_FROM_PLANT,
-        COLS.RAW_SQFT: COLS.TOTAL_SQFT,
-        COLS.RAW_ORIGINAL_GM: COLS.ORIGINAL_GM,
-        COLS.RAW_REWORK_PRICE: COLS.REWORK_PRICE,
-        COLS.RAW_REWORK_COGS: COLS.REWORK_COGS,
-        COLS.RAW_REWORK_LABOR: COLS.REWORK_LABOR,
-        COLS.RAW_TOTAL_COGS: COLS.TOTAL_COGS
-    }
-    
-    # --- REFACTOR: Granular Error Handling ---
-    for original, new in numeric_map.items():
-        if original in df_stone.columns:
-            df_stone[new] = pd.to_numeric(df_stone[original].astype(str).str.replace(r'[$,%]', '', regex=True), errors='coerce').fillna(0)
+    # 1. Rename and convert numeric columns
+    for original, new in config["numeric_map"].items():
+        if original in df_processed.columns:
+            df_processed[new] = pd.to_numeric(
+                df_processed[original].astype(str).str.replace(r'[$,%]', '', regex=True),
+                errors='coerce'
+            ).fillna(0)
         else:
-            # If a critical column is missing, create it with zeros and warn the user.
-            st.warning(f"Missing critical data column '{original}' for Stone calculations. Results may be inaccurate.")
-            df_stone[new] = 0.0
+            df_processed[new] = 0.0 # Ensure column exists even if not in source
             
-    df_stone[COLS.INSTALL_COST] = df_stone.get(COLS.TOTAL_SQFT, 0) * INSTALL_COST_PER_SQFT
-    df_stone[COLS.TOTAL_REWORK_COST] = df_stone.get(COLS.REWORK_PRICE, 0) + df_stone.get(COLS.REWORK_COGS, 0) + df_stone.get(COLS.REWORK_LABOR, 0)
-    df_stone[COLS.TOTAL_BRANCH_COST] = df_stone.get(COLS.COST_FROM_PLANT, 0) + df_stone[COLS.INSTALL_COST] + df_stone[COLS.TOTAL_REWORK_COST]
-    df_stone[COLS.BRANCH_PROFIT] = df_stone.get(COLS.REVENUE, 0) - df_stone[COLS.TOTAL_BRANCH_COST]
-    df_stone[COLS.BRANCH_PROFIT_MARGIN] = df_stone.apply(
-        lambda row: (row[COLS.BRANCH_PROFIT] / row[COLS.REVENUE] * 100) if row.get(COLS.REVENUE) != 0 else 0, axis=1
-    )
-    df_stone[COLS.PROFIT_VARIANCE] = df_stone[COLS.BRANCH_PROFIT] - df_stone.get(COLS.ORIGINAL_GM, 0)
+    # 2. Calculate core costs
+    df_processed['Install_Cost'] = df_processed.get('Total_Job_SqFt', 0) * install_cost_per_sqft
     
-    # Shop Profitability
-    df_stone[COLS.SHOP_PROFIT] = df_stone.get(COLS.COST_FROM_PLANT, 0) - df_stone.get(COLS.TOTAL_COGS, 0)
-    df_stone[COLS.SHOP_PROFIT_MARGIN] = df_stone.apply(
-        lambda row: (row[COLS.SHOP_PROFIT] / row[COLS.COST_FROM_PLANT] * 100) if row.get(COLS.COST_FROM_PLANT) != 0 else 0, axis=1
+    # Sum up all rework components defined in the config
+    rework_costs = [df_processed.get(c, 0) for c in config["rework_components"]]
+    df_processed['Total_Rework_Cost'] = sum(rework_costs)
+    
+    # Sum up all branch cost components defined in the config
+    branch_costs = [df_processed.get(c, 0) for c in config["cost_components"]]
+    df_processed['Total_Branch_Cost'] = sum(branch_costs)
+
+    # 3. Calculate Branch Profitability
+    revenue = df_processed.get('Revenue', 0)
+    df_processed['Branch_Profit'] = revenue - df_processed['Total_Branch_Cost']
+    
+    # Vectorized profit margin calculation (more efficient than df.apply)
+    df_processed['Branch_Profit_Margin_%'] = np.where(
+        revenue != 0, (df_processed['Branch_Profit'] / revenue * 100), 0
     )
     
-    return df_stone
+    df_processed['Profit_Variance'] = df_processed['Branch_Profit'] - df_processed.get('Original_GM', 0)
 
-def process_laminate_data(df: pd.DataFrame) -> pd.DataFrame:
-    """Processes the data specifically for Laminate jobs."""
-    df_lam = df.copy()
-
-    numeric_map = {
-        COLS.RAW_REVENUE: COLS.REVENUE,
-        COLS.RAW_SHOP_COST: COLS.SHOP_COST,
-        COLS.RAW_MATERIAL_COST: COLS.MATERIAL_COST,
-        COLS.RAW_SQFT: COLS.TOTAL_SQFT,
-        COLS.RAW_ORIGINAL_GM: COLS.ORIGINAL_GM,
-        COLS.RAW_REWORK_PRICE: COLS.REWORK_PRICE,
-    }
-
-    # --- REFACTOR: Granular Error Handling ---
-    for original, new in numeric_map.items():
-        if original in df_lam.columns:
-            df_lam[new] = pd.to_numeric(df_lam[original].astype(str).str.replace(r'[$,%]', '', regex=True), errors='coerce').fillna(0)
-        else:
-            st.warning(f"Missing critical data column '{original}' for Laminate calculations. Results may be inaccurate.")
-            df_lam[new] = 0.0
-
-    df_lam[COLS.INSTALL_COST] = df_lam.get(COLS.TOTAL_SQFT, 0) * INSTALL_COST_PER_SQFT
-    df_lam[COLS.TOTAL_REWORK_COST] = df_lam.get(COLS.REWORK_PRICE, 0)
-    df_lam[COLS.TOTAL_BRANCH_COST] = df_lam.get(COLS.SHOP_COST, 0) + df_lam.get(COLS.MATERIAL_COST, 0) + df_lam[COLS.INSTALL_COST] + df_lam[COLS.TOTAL_REWORK_COST]
-    df_lam[COLS.BRANCH_PROFIT] = df_lam.get(COLS.REVENUE, 0) - df_lam[COLS.TOTAL_BRANCH_COST]
-    df_lam[COLS.BRANCH_PROFIT_MARGIN] = df_lam.apply(
-        lambda row: (row[COLS.BRANCH_PROFIT] / row[COLS.REVENUE] * 100) if row.get(COLS.REVENUE) != 0 else 0, axis=1
-    )
-    df_lam[COLS.PROFIT_VARIANCE] = df_lam[COLS.BRANCH_PROFIT] - df_lam.get(COLS.ORIGINAL_GM, 0)
-    return df_lam
+    # 4. Calculate Shop Profitability (if applicable)
+    if config["has_shop_profit"]:
+        cost_from_plant = df_processed.get('Cost_From_Plant', 0)
+        total_cogs = df_processed.get('Total_COGS', 0)
+        df_processed['Shop_Profit'] = cost_from_plant - total_cogs
+        df_processed['Shop_Profit_Margin_%'] = np.where(
+            cost_from_plant != 0, (df_processed['Shop_Profit'] / cost_from_plant * 100), 0
+        )
+        
+    return df_processed
 
 @st.cache_data(ttl=300)
-def load_and_process_data(creds_dict: dict, today: pd.Timestamp) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Loads data and splits it into two processed dataframes for each division."""
+def load_and_process_data(creds_dict: dict, today: pd.Timestamp, install_cost: float) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Loads data from Google Sheets, performs universal processing, and then
+    delegates to the division-specific processor.
+    """
     creds = Credentials.from_service_account_info(creds_dict, scopes=['https://www.googleapis.com/auth/spreadsheets'])
     gc = gspread.authorize(creds)
     worksheet = gc.open_by_key(SPREADSHEET_ID).worksheet(WORKSHEET_NAME)
     df = pd.DataFrame(worksheet.get_all_records())
 
+    # --- Universal Processing Steps ---
     df = _clean_column_names(df)
     df = _parse_date_columns(df)
     df = _calculate_days_behind(df, today)
     df = _calculate_durations(df)
     df = _enrich_data(df)
 
-    if COLS.DIVISION not in df.columns:
-        st.error(f"Your Google Sheet must have a '{COLS.DIVISION}' column to separate Stone and Laminate jobs.")
+    if 'Division' not in df.columns:
+        st.error("Your Google Sheet must have a 'Division' column to separate Stone and Laminate jobs.")
         st.stop()
     
-    df[COLS.PRODUCT_TYPE] = df[COLS.DIVISION].apply(lambda x: 'Laminate' if 'laminate' in str(x).lower() else 'Stone/Quartz')
+    # Determine product type based on 'Division' column
+    df['Product_Type'] = df['Division'].apply(lambda x: 'Laminate' if 'laminate' in str(x).lower() else 'Stone/Quartz')
 
-    df_stone = df[df[COLS.PRODUCT_TYPE] == 'Stone/Quartz'].copy()
-    df_laminate = df[df[COLS.PRODUCT_TYPE] == 'Laminate'].copy()
+    # --- Split and Process by Division ---
+    df_stone = df[df['Product_Type'] == 'Stone/Quartz']
+    df_laminate = df[df['Product_Type'] == 'Laminate']
 
-    df_stone_processed = process_stone_data(df_stone)
-    df_laminate_processed = process_laminate_data(df_laminate)
+    df_stone_processed = _process_division_data(df_stone, STONE_CONFIG, install_cost)
+    df_laminate_processed = _process_division_data(df_laminate, LAMINATE_CONFIG, install_cost)
 
     return df_stone_processed, df_laminate_processed
 
 
-# --- UI Rendering Functions ---
+# --- UI Rendering Functions (Largely unchanged, but with minor key fixes) ---
 
 def render_overview_tab(df: pd.DataFrame, division_name: str):
     st.header(f"📈 {division_name} Overview")
     if df.empty:
-        st.warning(f"No {division_name} data available.")
+        st.warning(f"No {division_name} data available for the selected period.")
         return
 
-    total_revenue = df[COLS.REVENUE].sum()
-    total_profit = df[COLS.BRANCH_PROFIT].sum()
+    total_revenue = df['Revenue'].sum()
+    total_profit = df['Branch_Profit'].sum()
+    # Safely calculate average margin
     avg_margin = (total_profit / total_revenue * 100) if total_revenue != 0 else 0
 
     c1, c2, c3 = st.columns(3)
@@ -290,14 +248,15 @@ def render_overview_tab(df: pd.DataFrame, division_name: str):
 
     st.markdown("---")
     st.subheader("Profit by Salesperson")
-    if COLS.SALESPERSON in df.columns and not df.empty:
-        sales_profit = df.groupby(COLS.SALESPERSON)[COLS.BRANCH_PROFIT].sum().sort_values(ascending=False)
+    if 'Salesperson' in df.columns and not df.empty:
+        sales_profit = df.groupby('Salesperson')['Branch_Profit'].sum().sort_values(ascending=False)
         st.bar_chart(sales_profit)
 
 def render_detailed_data_tab(df: pd.DataFrame, division_name: str):
     st.header(f"📋 {division_name} Detailed Data")
     df_display = df.copy()
 
+    # --- Filtering ---
     col1, col2 = st.columns(2)
     with col1:
         job_name_filter = st.text_input("Filter by Job Name", key=f"job_name_{division_name}")
@@ -305,43 +264,44 @@ def render_detailed_data_tab(df: pd.DataFrame, division_name: str):
         prod_num_filter = st.text_input("Filter by Production #", key=f"prod_num_{division_name}")
 
     if job_name_filter:
-        df_display = df_display[df_display[COLS.JOB_NAME].str.contains(job_name_filter, case=False, na=False)]
+        df_display = df_display[df_display['Job_Name'].str.contains(job_name_filter, case=False, na=False)]
     if prod_num_filter:
-        df_display = df_display[df_display[COLS.PRODUCTION_NUM].str.contains(prod_num_filter, case=False, na=False)]
+        df_display = df_display[df_display['Production_'].str.contains(prod_num_filter, case=False, na=False)]
 
     if df_display.empty:
         st.warning("No data matches the current filters.")
         return
 
-    if COLS.PRODUCTION_NUM in df_display.columns:
-        df_display[COLS.LINK] = df_display[COLS.PRODUCTION_NUM].apply(lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None)
+    # --- Link Generation and Column Ordering ---
+    if 'Production_' in df_display.columns:
+        df_display['Link'] = df_display['Production_'].apply(lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None)
 
-    column_order = [
-        COLS.LINK, COLS.JOB_NAME, COLS.NEXT_SCHED_ACTIVITY, COLS.DAYS_BEHIND, COLS.REVENUE, 
-        COLS.TOTAL_SQFT, COLS.TOTAL_BRANCH_COST, COLS.BRANCH_PROFIT, COLS.BRANCH_PROFIT_MARGIN
-    ]
+    base_cols = ['Link', 'Job_Name', 'Next_Sched_Activity', 'Days_Behind', 'Revenue', 'Total_Job_SqFt']
+    profit_cols = ['Total_Branch_Cost', 'Branch_Profit', 'Branch_Profit_Margin_%']
     
+    # Dynamically insert division-specific columns
     if division_name == 'Laminate':
-        column_order.insert(6, COLS.SHOP_COST)
-        column_order.insert(6, COLS.MATERIAL_COST)
-    else: # Stone
-        column_order.insert(6, COLS.COST_FROM_PLANT)
-        column_order.append(COLS.SHOP_PROFIT_MARGIN)
+        middle_cols = ['Material_Cost', 'Shop_Cost']
+    else: # Stone/Quartz
+        middle_cols = ['Cost_From_Plant']
+        profit_cols.append('Shop_Profit_Margin_%')
 
+    column_order = base_cols + middle_cols + profit_cols
     final_column_order = [c for c in column_order if c in df_display.columns]
+    
     st.dataframe(df_display[final_column_order], use_container_width=True,
         column_config={
-            COLS.LINK: st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)"),
-            COLS.DAYS_BEHIND: st.column_config.NumberColumn("Days Behind/Ahead", help="Positive: Behind. Negative: Ahead."),
-            COLS.REVENUE: st.column_config.NumberColumn(format='$%.2f'),
-            COLS.TOTAL_SQFT: st.column_config.NumberColumn("SqFt", format='%.2f'),
-            COLS.COST_FROM_PLANT: st.column_config.NumberColumn("Production Cost", format='$%.2f'),
-            COLS.MATERIAL_COST: st.column_config.NumberColumn("Material Cost", format='$%.2f'),
-            COLS.SHOP_COST: st.column_config.NumberColumn("Shop Cost", format='$%.2f'),
-            COLS.TOTAL_BRANCH_COST: st.column_config.NumberColumn(format='$%.2f'),
-            COLS.BRANCH_PROFIT: st.column_config.NumberColumn(format='$%.2f'),
-            COLS.BRANCH_PROFIT_MARGIN: st.column_config.ProgressColumn("Branch Profit %", format='%.2f%%', min_value=-50, max_value=100),
-            COLS.SHOP_PROFIT_MARGIN: st.column_config.ProgressColumn("Shop Profit %", format='%.2f%%', min_value=-50, max_value=100),
+            "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)"),
+            "Days_Behind": st.column_config.NumberColumn("Days Behind/Ahead", help="Positive: Behind. Negative: Ahead."),
+            "Revenue": st.column_config.NumberColumn(format='$%.2f'),
+            "Total_Job_SqFt": st.column_config.NumberColumn("SqFt", format='%.2f'),
+            "Cost_From_Plant": st.column_config.NumberColumn("Production Cost", format='$%.2f'),
+            "Material_Cost": st.column_config.NumberColumn("Material Cost", format='$%.2f'),
+            "Shop_Cost": st.column_config.NumberColumn("Shop Cost", format='$%.2f'),
+            "Total_Branch_Cost": st.column_config.NumberColumn(format='$%.2f'),
+            "Branch_Profit": st.column_config.NumberColumn(format='$%.2f'),
+            "Branch_Profit_Margin_%": st.column_config.ProgressColumn("Branch Profit %", format='%.2f%%', min_value=-50, max_value=100),
+            "Shop_Profit_Margin_%": st.column_config.ProgressColumn("Shop Profit %", format='%.2f%%', min_value=-50, max_value=100),
         }
     )
 
@@ -351,44 +311,57 @@ def render_profit_drivers_tab(df: pd.DataFrame, division_name: str):
         st.warning(f"No {division_name} data available.")
         return
 
-    driver_options = [COLS.JOB_TYPE, COLS.ORDER_TYPE, COLS.LEAD_SOURCE, COLS.SALESPERSON, COLS.MATERIAL_BRAND]
+    driver_options = ['Job_Type', 'Order_Type', 'Lead_Source', 'Salesperson', 'Material_Brand']
     valid_drivers = [d for d in driver_options if d in df.columns]
 
     if not valid_drivers:
-        st.warning("No valid columns found for this analysis.")
+        st.warning("No valid columns found for this analysis (e.g., 'Job_Type', 'Salesperson').")
         return
 
     selected_driver = st.selectbox("Analyze Profitability by:", valid_drivers, key=f"driver_{division_name}")
     if selected_driver:
-        agg_dict = {'Avg_Branch_Profit_Margin': (COLS.BRANCH_PROFIT_MARGIN, 'mean'), 'Total_Profit': (COLS.BRANCH_PROFIT, 'sum'), 'Job_Count': (COLS.JOB_NAME, 'count')}
+        agg_dict = {
+            'Avg_Branch_Profit_Margin': ('Branch_Profit_Margin_%', 'mean'),
+            'Total_Profit': ('Branch_Profit', 'sum'),
+            'Job_Count': ('Job_Name', 'count')
+        }
         driver_analysis = df.groupby(selected_driver).agg(**agg_dict).sort_values('Total_Profit', ascending=False)
-        st.dataframe(driver_analysis.style.format({'Avg_Branch_Profit_Margin': '{:.2f}%', 'Total_Profit': '${:,.2f}'}), use_container_width=True)
+        st.dataframe(driver_analysis.style.format({
+            'Avg_Branch_Profit_Margin': '{:.2f}%',
+            'Total_Profit': '${:,.2f}'
+        }), use_container_width=True)
 
 def render_rework_tab(df: pd.DataFrame, division_name: str):
     st.header(f"🔬 {division_name} Rework & Variance")
     c1, c2 = st.columns(2)
     with c1:
         st.subheader("Rework Analysis")
-        if COLS.TOTAL_REWORK_COST in df and COLS.REWORK_REASON in df.columns:
-            rework_jobs = df[df[COLS.TOTAL_REWORK_COST] > 0].copy()
+        if 'Total_Rework_Cost' in df and 'Rework_Stone_Shop_Reason' in df.columns:
+            rework_jobs = df[df['Total_Rework_Cost'] > 0].copy()
             if not rework_jobs.empty:
-                st.metric("Total Rework Cost", f"${rework_jobs[COLS.TOTAL_REWORK_COST].sum():,.2f}", f"{len(rework_jobs)} jobs affected")
-                agg_rework = rework_jobs.groupby(COLS.REWORK_REASON)[COLS.TOTAL_REWORK_COST].agg(['sum', 'count'])
+                st.metric("Total Rework Cost", f"${rework_jobs['Total_Rework_Cost'].sum():,.2f}", f"{len(rework_jobs)} jobs affected")
+                agg_rework = rework_jobs.groupby('Rework_Stone_Shop_Reason')['Total_Rework_Cost'].agg(['sum', 'count'])
                 agg_rework.columns = ['Total Rework Cost', 'Number of Jobs']
                 st.dataframe(agg_rework.sort_values('Total Rework Cost', ascending=False).style.format({'Total Rework Cost': '${:,.2f}'}))
             else:
                 st.info("No rework costs recorded.")
         else:
-            st.info("Rework data not available (missing Rework Cost or Rework Reason columns).")
+            st.info("Rework data not available.")
     with c2:
         st.subheader("Profit Variance Analysis")
-        if COLS.PROFIT_VARIANCE in df.columns and COLS.ORIGINAL_GM in df.columns:
-            variance_jobs = df[df[COLS.PROFIT_VARIANCE].abs() > 0.01].copy()
+        if 'Profit_Variance' in df.columns and 'Original_GM' in df.columns:
+            variance_jobs = df[df['Profit_Variance'].abs() > 0.01].copy()
             if not variance_jobs.empty:
                 st.metric("Jobs with Profit Variance", f"{len(variance_jobs)}")
-                display_cols = [COLS.JOB_NAME, COLS.ORIGINAL_GM, COLS.BRANCH_PROFIT, COLS.PROFIT_VARIANCE]
-                st.dataframe(variance_jobs[display_cols].sort_values(by=COLS.PROFIT_VARIANCE, key=abs, ascending=False).head(20),
-                    column_config={COLS.ORIGINAL_GM: st.column_config.NumberColumn("Est. Profit", format='$%.2f'), COLS.BRANCH_PROFIT: st.column_config.NumberColumn("Actual Profit", format='$%.2f'), COLS.PROFIT_VARIANCE: st.column_config.NumberColumn("Variance", format='$%.2f')})
+                display_cols = ['Job_Name', 'Original_GM', 'Branch_Profit', 'Profit_Variance']
+                st.dataframe(
+                    variance_jobs[display_cols].sort_values(by='Profit_Variance', key=abs, ascending=False).head(20),
+                    column_config={
+                        "Original_GM": st.column_config.NumberColumn("Est. Profit", format='$%.2f'),
+                        "Branch_Profit": st.column_config.NumberColumn("Actual Profit", format='$%.2f'),
+                        "Profit_Variance": st.column_config.NumberColumn("Variance", format='$%.2f')
+                    }
+                )
             else:
                 st.info("No significant profit variance found.")
         else:
@@ -398,12 +371,16 @@ def render_pipeline_issues_tab(df: pd.DataFrame, division_name: str, today: pd.T
     st.header(f"🚧 {division_name} Pipeline & Issues")
     
     st.subheader("Jobs Awaiting Ready-to-Fab")
-    if COLS.RTF_STATUS in df.columns and COLS.TEMPLATE_DATE in df.columns:
-        conditions = (df[COLS.TEMPLATE_DATE].notna() & (df[COLS.TEMPLATE_DATE] <= today) & (df[COLS.RTF_STATUS].fillna('').str.lower() != 'complete'))
+    if 'Ready_to_Fab_Status' in df.columns and 'Template_Date' in df.columns:
+        conditions = (
+            df['Template_Date'].notna() &
+            (df['Template_Date'] <= today) &
+            (df['Ready_to_Fab_Status'].fillna('').str.lower() != 'complete')
+        )
         stuck_jobs = df[conditions].copy()
         if not stuck_jobs.empty:
-            stuck_jobs['Days_Since_Template'] = (today - stuck_jobs[COLS.TEMPLATE_DATE]).dt.days
-            display_cols = [COLS.JOB_NAME, COLS.SALESPERSON, COLS.TEMPLATE_DATE, 'Days_Since_Template']
+            stuck_jobs['Days_Since_Template'] = (today - stuck_jobs['Template_Date']).dt.days
+            display_cols = ['Job_Name', 'Salesperson', 'Template_Date', 'Days_Since_Template']
             st.dataframe(stuck_jobs[display_cols].sort_values(by='Days_Since_Template', ascending=False), use_container_width=True)
         else:
             st.success("✅ No jobs are currently stuck between Template and Ready to Fab.")
@@ -412,25 +389,31 @@ def render_pipeline_issues_tab(df: pd.DataFrame, division_name: str, today: pd.T
 
     st.markdown("---")
     st.subheader("Jobs with Scheduling Conflicts")
-    activity_cols = [COLS.INSTALL_DATE, COLS.SERVICE_DATE, COLS.PICK_UP_DATE, COLS.DELIVERY_DATE]
-    product_received_col = COLS.PRODUCT_RCVD_DATE
+    activity_cols = ['Install_Date', 'Service_Date', 'Pick_Up_Date', 'Delivery_Date']
+    product_received_col = 'Product_Rcvd_Date'
     if all(col in df.columns for col in activity_cols + [product_received_col]):
-        conflict_conditions = ((df[COLS.INSTALL_DATE].notna() & (df[COLS.INSTALL_DATE] < df[product_received_col])) | (df[COLS.SERVICE_DATE].notna() & (df[COLS.SERVICE_DATE] < df[product_received_col])) | (df[COLS.PICK_UP_DATE].notna() & (df[COLS.PICK_UP_DATE] < df[product_received_col])) | (df[COLS.DELIVERY_DATE].notna() & (df[COLS.DELIVERY_DATE] < df[product_received_col])))
+        conflict_conditions = (
+            (df['Install_Date'].notna() & (df['Install_Date'] < df[product_received_col])) |
+            (df['Service_Date'].notna() & (df['Service_Date'] < df[product_received_col])) |
+            (df['Pick_Up_Date'].notna() & (df['Pick_Up_Date'] < df[product_received_col])) |
+            (df['Delivery_Date'].notna() & (df['Delivery_Date'] < df[product_received_col]))
+        )
         conflict_jobs = df[conflict_conditions].copy()
         if not conflict_jobs.empty:
-            display_cols = [COLS.JOB_NAME, COLS.PRODUCT_RCVD_DATE, COLS.INSTALL_DATE, COLS.SERVICE_DATE]
+            display_cols = ['Job_Name', 'Product_Rcvd_Date', 'Install_Date', 'Service_Date']
             st.dataframe(conflict_jobs[[c for c in display_cols if c in conflict_jobs.columns]], use_container_width=True)
         else:
             st.success("✅ No scheduling conflicts found.")
     else:
         st.warning("Could not perform scheduling conflict analysis. Required columns are missing.")
 
+
 def render_workload_card(df_filtered: pd.DataFrame, activity_name: str, date_col: str, assignee_col: str):
     """Helper function to display a workload card for a given activity."""
     st.subheader(activity_name)
     
     if date_col not in df_filtered.columns or assignee_col not in df_filtered.columns:
-        st.warning(f"Required columns ('{date_col}', '{assignee_col}') for {activity_name} analysis not found.")
+        st.warning(f"Required columns for {activity_name} analysis not found.")
         return
         
     activity_df = df_filtered.dropna(subset=[date_col, assignee_col]).copy()
@@ -445,7 +428,7 @@ def render_workload_card(df_filtered: pd.DataFrame, activity_name: str, date_col
             assignee_df = activity_df[activity_df[assignee_col] == assignee]
             
             total_jobs = len(assignee_df)
-            total_sqft = assignee_df[COLS.TOTAL_SQFT].sum()
+            total_sqft = assignee_df['Total_Job_SqFt'].sum()
 
             col1, col2 = st.columns(2)
             col1.metric(f"{assignee} - Total Jobs", f"{total_jobs}")
@@ -453,8 +436,8 @@ def render_workload_card(df_filtered: pd.DataFrame, activity_name: str, date_col
 
             with st.expander("View Weekly Breakdown"):
                 weekly_summary = assignee_df.set_index(date_col).resample('W-Mon', label='left', closed='left').agg(
-                    Jobs=(COLS.PRODUCTION_NUM, 'count'),
-                    Total_SqFt=(COLS.TOTAL_SQFT, 'sum')
+                    Jobs=('Production_', 'count'),
+                    Total_SqFt=('Total_Job_SqFt', 'sum')
                 ).reset_index()
                 weekly_summary = weekly_summary[weekly_summary['Jobs'] > 0]
                 
@@ -465,36 +448,36 @@ def render_workload_card(df_filtered: pd.DataFrame, activity_name: str, date_col
 
 def render_field_workload_tab(df: pd.DataFrame, division_name: str):
     """Renders the enhanced tab for Template, Install, and Service workloads."""
-    st.header(f"� {division_name} Field Workload Planner")
+    st.header(f"👷 {division_name} Field Workload Planner")
     if df.empty:
         st.warning(f"No {division_name} data available.")
         return
     
     col1, col2 = st.columns(2)
     with col1:
-        render_workload_card(df, "Templates", COLS.TEMPLATE_DATE, COLS.TEMPLATE_ASSIGNEE)
+        render_workload_card(df, "Templates", "Template_Date", "Template_Assigned_To")
     with col2:
-        render_workload_card(df, "Installs", COLS.INSTALL_DATE, COLS.INSTALL_ASSIGNEE)
+        render_workload_card(df, "Installs", "Install_Date", "Install_Assigned_To")
 
 def render_forecasting_tab(df: pd.DataFrame, division_name: str):
     st.header(f"🔮 {division_name} Forecasting & Trends")
     if not SKLEARN_AVAILABLE or not MATPLOTLIB_AVAILABLE:
-        st.error("Forecasting features require scikit-learn and matplotlib.")
+        st.error("Forecasting features require scikit-learn and matplotlib. Please install them.")
         return
-    if COLS.JOB_CREATION_DATE not in df.columns or df[COLS.JOB_CREATION_DATE].isnull().all():
-        st.warning(f"'{COLS.JOB_CREATION_DATE}' column is required for trend analysis.")
+    if 'Job_Creation' not in df.columns or df['Job_Creation'].isnull().all():
+        st.warning("Job Creation date column is required for trend analysis.")
         return
     if df.empty or len(df) < 2:
         st.warning(f"Not enough {division_name} data to create a forecast.")
         return
 
-    df_trends = df.copy().set_index(COLS.JOB_CREATION_DATE).sort_index()
+    df_trends = df.copy().set_index('Job_Creation').sort_index()
     st.subheader("Monthly Performance Trends")
-    monthly_summary = df_trends.resample('M').agg({COLS.REVENUE: 'sum', COLS.BRANCH_PROFIT: 'sum', COLS.JOB_NAME: 'count'}).rename(columns={COLS.JOB_NAME: 'Job_Count'})
+    monthly_summary = df_trends.resample('M').agg({'Revenue': 'sum', 'Branch_Profit': 'sum', 'Job_Name': 'count'}).rename(columns={'Job_Name': 'Job_Count'})
     if monthly_summary.empty:
         st.info("No data in the selected range to display monthly trends.")
         return
-    st.line_chart(monthly_summary[[COLS.REVENUE, COLS.BRANCH_PROFIT]])
+    st.line_chart(monthly_summary[['Revenue', 'Branch_Profit']])
     st.bar_chart(monthly_summary['Job_Count'])
 
 # --- NEW: Company-Wide Rendering Functions ---
@@ -505,37 +488,37 @@ def render_company_workload_tab(df_combined: pd.DataFrame):
         st.warning("No data available to display workload.")
         return
 
-    divisions = sorted(df_combined[COLS.PRODUCT_TYPE].unique())
-    selected_divisions = st.multiselect("Filter by Division:", options=divisions, default=list(divisions))
+    divisions = sorted(df_combined['Product_Type'].unique())
+    selected_divisions = st.multiselect("Filter by Division:", options=divisions, default=list(divisions), key="company_workload_filter")
     
     if not selected_divisions:
         st.warning("Please select at least one division.")
         return
         
-    df_filtered = df_combined[df_combined[COLS.PRODUCT_TYPE].isin(selected_divisions)]
+    df_filtered = df_combined[df_combined['Product_Type'].isin(selected_divisions)]
 
     col1, col2 = st.columns(2)
     with col1:
-        render_workload_card(df_filtered, "Templates", COLS.TEMPLATE_DATE, COLS.TEMPLATE_ASSIGNEE)
+        render_workload_card(df_filtered, "Templates", "Template_Date", "Template_Assigned_To")
     with col2:
-        render_workload_card(df_filtered, "Installs", COLS.INSTALL_DATE, COLS.INSTALL_ASSIGNEE)
+        render_workload_card(df_filtered, "Installs", "Install_Date", "Install_Assigned_To")
 
 def render_company_forecasting_tab(df_combined: pd.DataFrame):
     st.header("🔮 Company-Wide Forecasting & Trends")
     if not SKLEARN_AVAILABLE or not MATPLOTLIB_AVAILABLE:
         st.error("Forecasting features require scikit-learn and matplotlib.")
         return
-    if COLS.JOB_CREATION_DATE not in df_combined.columns or df_combined[COLS.JOB_CREATION_DATE].isnull().all():
-        st.warning(f"'{COLS.JOB_CREATION_DATE}' column is required for trend analysis.")
+    if 'Job_Creation' not in df_combined.columns or df_combined['Job_Creation'].isnull().all():
+        st.warning("Job Creation date column is required for trend analysis.")
         return
     if df_combined.empty or len(df_combined) < 2:
         st.warning("Not enough data to create a forecast.")
         return
 
-    df_trends = df_combined.copy().set_index(COLS.JOB_CREATION_DATE)
+    df_trends = df_combined.copy().set_index('Job_Creation')
     
-    monthly_combined = df_trends.resample('M').agg({COLS.REVENUE: 'sum'}).rename(columns={COLS.REVENUE: 'Total Revenue'})
-    monthly_by_division = df_trends.groupby(COLS.PRODUCT_TYPE).resample('M').agg({COLS.REVENUE: 'sum'}).unstack(level=0)
+    monthly_combined = df_trends.resample('M').agg({'Revenue': 'sum'}).rename(columns={'Revenue': 'Total Revenue'})
+    monthly_by_division = df_trends.groupby('Product_Type').resample('M').agg({'Revenue': 'sum'}).unstack(level=0)
     monthly_by_division.columns = monthly_by_division.columns.droplevel(0)
     
     plot_df = pd.concat([monthly_combined, monthly_by_division], axis=1).fillna(0)
@@ -558,41 +541,21 @@ def render_company_forecasting_tab(df_combined: pd.DataFrame):
 
     future_periods = st.slider("Months to Forecast:", 1, 12, 3, key="company_forecast_slider")
     last_time = forecast_df['Time'].max()
-    last_date = forecast_df[COLS.JOB_CREATION_DATE].max()
+    last_date = forecast_df['Job_Creation'].max()
 
     future_dates = pd.to_datetime([last_date + pd.DateOffset(months=i) for i in range(1, future_periods + 1)])
-    future_df = pd.DataFrame({COLS.JOB_CREATION_DATE: future_dates, 'Time': np.arange(last_time + 1, last_time + 1 + future_periods)})
+    future_df = pd.DataFrame({'Job_Creation': future_dates, 'Time': np.arange(last_time + 1, last_time + 1 + future_periods)})
     future_df['Forecast'] = model.predict(future_df[['Time']])
 
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(forecast_df[COLS.JOB_CREATION_DATE], forecast_df['Total Revenue'], label='Actual Revenue', marker='o')
-    ax.plot(future_df[COLS.JOB_CREATION_DATE], future_df['Forecast'], label='Forecasted Revenue', linestyle='--', marker='o')
+    ax.plot(forecast_df['Job_Creation'], forecast_df['Total Revenue'], label='Actual Revenue', marker='o')
+    ax.plot(future_df['Job_Creation'], future_df['Forecast'], label='Forecasted Revenue', linestyle='--', marker='o')
     ax.set_title('Total Company Monthly Revenue and Forecast')
     ax.set_ylabel('Revenue ($)')
     ax.legend()
     plt.grid(True, which='both', linestyle='--', linewidth=0.5)
     st.pyplot(fig)
 
-# --- REFACTOR: UI logic moved to a dedicated function to avoid repetition ---
-def build_division_dashboard(df: pd.DataFrame, division_name: str, today_dt: pd.Timestamp):
-    """Creates the set of tabs for a specific division dashboard."""
-    tabs = ["📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "🔬 Rework & Variance", "🚧 Pipeline & Issues", "👷 Field Workload", "🔮 Forecasting"]
-    overview_tab, data_tab, drivers_tab, rework_tab, pipeline_tab, workload_tab, forecast_tab = st.tabs(tabs)
-    
-    with overview_tab:
-        render_overview_tab(df, division_name)
-    with data_tab:
-        render_detailed_data_tab(df, division_name)
-    with drivers_tab:
-        render_profit_drivers_tab(df, division_name)
-    with rework_tab:
-        render_rework_tab(df, division_name)
-    with pipeline_tab:
-        render_pipeline_issues_tab(df, division_name, today_dt)
-    with workload_tab:
-        render_field_workload_tab(df, division_name)
-    with forecast_tab:
-        render_forecasting_tab(df, division_name)
 
 # --- Main Application Logic ---
 
@@ -600,6 +563,8 @@ def main():
     st.title("💰 Enhanced Job Profitability Dashboard")
     st.markdown("An interactive dashboard to analyze job data and drive profitability, separated by division.")
     st.sidebar.header("⚙️ Configuration")
+    
+    # --- Credentials Handling ---
     creds = None
     if "google_creds_json" in st.secrets:
         creds = json.loads(st.secrets["google_creds_json"])
@@ -611,11 +576,25 @@ def main():
         st.sidebar.error("Please provide Google credentials to load data.")
         st.stop()
 
-    today_date = st.sidebar.date_input("Select 'Today's' Date for Calculations", value=datetime.now().date(), help="This date is used for 'Days Behind' calculations.")
+    # --- User Inputs ---
+    today_date = st.sidebar.date_input(
+        "Select 'Today's' Date for Calculations",
+        value=datetime.now().date(),
+        help="This date is used for 'Days Behind' calculations."
+    )
     today_dt = pd.to_datetime(today_date)
+    
+    install_cost_sqft = st.sidebar.number_input(
+        "Install Cost per SqFt ($)",
+        min_value=0.0,
+        value=15.0,
+        step=0.50,
+        help="Adjust the assumed cost of installation per square foot."
+    )
 
+    # --- Data Loading ---
     try:
-        df_stone, df_laminate = load_and_process_data(creds, today_dt)
+        df_stone, df_laminate = load_and_process_data(creds, today_dt, install_cost_sqft)
         df_combined = pd.concat([df_stone, df_laminate], ignore_index=True)
     except Exception as e:
         st.error(f"Failed to load or process data: {e}")
@@ -623,20 +602,36 @@ def main():
         st.stop()
 
     # --- Main Dashboard Tabs ---
-    company_tab, stone_tab, laminate_tab = st.tabs(["🏢 Company-Wide", "💎 Stone/Quartz Dashboard", "🪵 Laminate Dashboard"])
+    main_tabs = st.tabs(["🏢 Company-Wide", "💎 Stone/Quartz Dashboard", "🪵 Laminate Dashboard"])
 
-    with company_tab:
-        workload_sub_tab, forecast_sub_tab = st.tabs(["👷 Field Workload", "🔮 Forecasting"])
-        with workload_sub_tab:
+    with main_tabs[0]: # Company-Wide Dashboard
+        company_sub_tabs = st.tabs(["👷 Field Workload", "🔮 Forecasting"])
+        with company_sub_tabs[0]:
             render_company_workload_tab(df_combined)
-        with forecast_sub_tab:
+        with company_sub_tabs[1]:
             render_company_forecasting_tab(df_combined)
 
-    with stone_tab:
-        build_division_dashboard(df_stone, "Stone/Quartz", today_dt)
+    with main_tabs[1]: # Stone Dashboard
+        stone_tabs = ["📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "🔬 Rework & Variance", "🚧 Pipeline & Issues", "👷 Field Workload", "🔮 Forecasting"]
+        stone_sub_tabs = st.tabs(stone_tabs)
+        with stone_sub_tabs[0]: render_overview_tab(df_stone, "Stone/Quartz")
+        with stone_sub_tabs[1]: render_detailed_data_tab(df_stone, "Stone/Quartz")
+        with stone_sub_tabs[2]: render_profit_drivers_tab(df_stone, "Stone/Quartz")
+        with stone_sub_tabs[3]: render_rework_tab(df_stone, "Stone/Quartz")
+        with stone_sub_tabs[4]: render_pipeline_issues_tab(df_stone, "Stone/Quartz", today_dt)
+        with stone_sub_tabs[5]: render_field_workload_tab(df_stone, "Stone/Quartz")
+        with stone_sub_tabs[6]: render_forecasting_tab(df_stone, "Stone/Quartz")
 
-    with laminate_tab:
-        build_division_dashboard(df_laminate, "Laminate", today_dt)
+    with main_tabs[2]: # Laminate Dashboard
+        laminate_tabs = ["📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "🔬 Rework & Variance", "🚧 Pipeline & Issues", "👷 Field Workload", "🔮 Forecasting"]
+        laminate_sub_tabs = st.tabs(laminate_tabs)
+        with laminate_sub_tabs[0]: render_overview_tab(df_laminate, "Laminate")
+        with laminate_sub_tabs[1]: render_detailed_data_tab(df_laminate, "Laminate")
+        with laminate_sub_tabs[2]: render_profit_drivers_tab(df_laminate, "Laminate")
+        with laminate_sub_tabs[3]: render_rework_tab(df_laminate, "Laminate")
+        with laminate_sub_tabs[4]: render_pipeline_issues_tab(df_laminate, "Laminate", today_dt)
+        with laminate_sub_tabs[5]: render_field_workload_tab(df_laminate, "Laminate")
+        with laminate_sub_tabs[6]: render_forecasting_tab(df_laminate, "Laminate")
 
 if __name__ == "__main__":
     main()
