@@ -239,7 +239,7 @@ def render_overview_tab(df: pd.DataFrame, division_name: str):
         st.bar_chart(sales_profit)
 
 def render_detailed_data_tab(df: pd.DataFrame, division_name: str):
-    st.header(f"📋 {division_name} Detailed Data")
+    st.header(f"� {division_name} Detailed Data")
     df_display = df.copy()
 
     col1, col2 = st.columns(2)
@@ -449,7 +449,7 @@ def render_workload_card(df_filtered: pd.DataFrame, activity_name: str, date_col
                     st.write("No scheduled work for this person in the selected period.")
 
 def render_field_workload_tab(df: pd.DataFrame, division_name: str):
-    st.header(f"� {division_name} Field Workload Planner")
+    st.header(f"👷 {division_name} Field Workload Planner")
     if df.empty:
         st.warning(f"No {division_name} data available.")
         return
@@ -543,7 +543,7 @@ def render_company_performance_tab(df_combined: pd.DataFrame, today: pd.Timestam
     st.markdown("---")
     st.subheader("🏭 Work-in-Progress (WIP) & Throughput")
 
-    c1, c2 = st.columns([2,2,3]) # Adjust column widths
+    c1, c2 = st.columns(2)
     
     with c1:
         st.markdown("**Jobs Currently in Fabrication**")
@@ -651,3 +651,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+�
