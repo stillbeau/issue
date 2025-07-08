@@ -30,7 +30,7 @@ except ImportError:
     MATPLOTLIB_AVAILABLE = False
 
 # --- Page & App Configuration ---
-st.set_page_config(layout="wide", page_title="Profitability Dashboard", page_icon="�")
+st.set_page_config(layout="wide", page_title="Profitability Dashboard", page_icon="💰")
 
 # --- Constants & Global Configuration ---
 SPREADSHEET_ID = "1iToy3C-Bfn06bjuEM_flHNHwr2k1zMCV1wX9MNKzj38"
@@ -117,7 +117,9 @@ def _calculate_durations(df: pd.DataFrame) -> pd.DataFrame:
         'Days_RTF_to_Ship': ('Ship_Date', 'Ready_to_Fab_Date'),
         'Days_Ship_to_Install': ('Install_Date', 'Ship_Date'),
         'Days_Template_to_Install': ('Install_Date', 'Template_Date'),
-        'Days_RTF_to_Product_Rcvd': ('Product_Rcvd_Date', 'Ready_to_Fab_Date')
+        'Days_RTF_to_Product_Rcvd': ('Product_Rcvd_Date', 'Ready_to_Fab_Date'),
+        'Days_Product_Rcvd_to_Install': ('Install_Date', 'Product_Rcvd_Date'),
+        'Days_Template_to_Ship': ('Ship_Date', 'Template_Date')
     }
     for new_col, (end_col, start_col) in duration_pairs.items():
         if start_col in df.columns and end_col in df.columns:
@@ -509,49 +511,93 @@ def render_forecasting_tab(df: pd.DataFrame, division_name: str):
     st.line_chart(monthly_summary[['Revenue', 'Branch_Profit']])
     st.bar_chart(monthly_summary['Job_Count'])
 
-# --- NEW: Company-Wide Timeline Tracker ---
-def render_timeline_tracker_tab(df_combined: pd.DataFrame):
-    """Displays key timeline metrics for the whole company, comparing divisions."""
-    st.header("⏱️ Company-Wide Timeline Tracker")
+# --- NEW: Company-Wide Performance Dashboard ---
+def render_company_performance_tab(df_combined: pd.DataFrame, today: pd.Timestamp):
+    """Displays key timeline, efficiency, and workload metrics for the whole company."""
+    st.header("🏢 Company-Wide Performance")
     if df_combined.empty:
-        st.warning("No data available to display timelines.")
+        st.warning("No data available to display company-wide metrics.")
         return
-
-    st.markdown("Average number of days between key process stages, compared by division.")
-
-    # Define the timelines to track
-    timelines = {
-        "Template to Install": "Days_Template_to_Install",
-        "Ready to Fab to Product Received": "Days_RTF_to_Product_Rcvd",
-        "Template to Ready to Fab": "Days_Template_to_RTF"
-    }
 
     df_stone = df_combined[df_combined['Product_Type'] == 'Stone/Quartz']
     df_laminate = df_combined[df_combined['Product_Type'] == 'Laminate']
 
-    for title, col_name in timelines.items():
-        st.markdown("---")
-        st.subheader(title)
+    # --- 1. Timeline Metrics ---
+    st.subheader("⏱️ Timeline Metrics")
+    st.markdown("Average number of days between key process stages.")
+    
+    timeline_metrics = {
+        "Template to Install": "Days_Template_to_Install",
+        "Ready to Fab to Product Received": "Days_RTF_to_Product_Rcvd",
+        "Template to Ready to Fab": "Days_Template_to_RTF",
+        "Product Received to Install": "Days_Product_Rcvd_to_Install",
+        "Template to Ship": "Days_Template_to_Ship",
+        "Ship to Install": "Days_Ship_to_Install",
+    }
 
-        if col_name not in df_combined.columns:
-            st.warning(f"Data for '{title}' is not available (missing column: {col_name}).")
-            continue
-
-        c1, c2 = st.columns(2)
-        with c1:
+    for title, col_name in timeline_metrics.items():
+        if col_name in df_combined.columns:
+            c1, c2, c3 = st.columns(3)
+            c1.markdown(f"**{title}**")
             avg_stone = df_stone[col_name].mean()
-            st.metric(label="💎 Stone/Quartz Average", value=f"{avg_stone:.1f} days" if not pd.isna(avg_stone) else "N/A")
-        with c2:
+            c2.metric("💎 Stone/Quartz", f"{avg_stone:.1f} days" if pd.notna(avg_stone) else "N/A")
             avg_laminate = df_laminate[col_name].mean()
-            st.metric(label="🪵 Laminate Average", value=f"{avg_laminate:.1f} days" if not pd.isna(avg_laminate) else "N/A")
-        
-        # Trend Chart
-        if 'Job_Creation' in df_combined.columns:
-            df_trend = df_combined.dropna(subset=[col_name, 'Job_Creation', 'Product_Type'])
-            if not df_trend.empty:
-                trend_chart_data = df_trend.groupby(['Product_Type', pd.Grouper(key='Job_Creation', freq='M')])[col_name].mean().unstack(level=0)
-                if not trend_chart_data.empty:
-                     st.line_chart(trend_chart_data)
+            c3.metric("🪵 Laminate", f"{avg_laminate:.1f} days" if pd.notna(avg_laminate) else "N/A")
+
+    # --- 2. Efficiency Metrics ---
+    st.markdown("---")
+    st.subheader("⚡ Efficiency Metrics")
+    
+    c1, c2, c3 = st.columns(3)
+    c1.markdown("**Revenue per Day (Template to Install)**")
+    
+    # Calculate for Stone
+    df_stone_eff = df_stone.dropna(subset=['Revenue', 'Days_Template_to_Install'])
+    if not df_stone_eff.empty and df_stone_eff['Days_Template_to_Install'].sum() > 0:
+        rev_per_day_stone = df_stone_eff['Revenue'].sum() / df_stone_eff['Days_Template_to_Install'].sum()
+        c2.metric("💎 Stone/Quartz", f"${rev_per_day_stone:,.2f}")
+    else:
+        c2.metric("💎 Stone/Quartz", "N/A")
+
+    # Calculate for Laminate
+    df_laminate_eff = df_laminate.dropna(subset=['Revenue', 'Days_Template_to_Install'])
+    if not df_laminate_eff.empty and df_laminate_eff['Days_Template_to_Install'].sum() > 0:
+        rev_per_day_laminate = df_laminate_eff['Revenue'].sum() / df_laminate_eff['Days_Template_to_Install'].sum()
+        c3.metric("🪵 Laminate", f"${rev_per_day_laminate:,.2f}")
+    else:
+        c3.metric("🪵 Laminate", "N/A")
+
+    # --- 3. Work-in-Progress (WIP) & Throughput ---
+    st.markdown("---")
+    st.subheader("🏭 Work-in-Progress (WIP) & Throughput")
+
+    c1, c2, c3 = st.columns(3)
+    
+    # Jobs in Fab
+    with c1:
+        st.markdown("**Jobs Currently in Fabrication**")
+        fab_cond_stone = (df_stone['Ready_to_Fab_Date'].notna()) & (df_stone['Ship_Date'].isna())
+        st.metric("💎 Stone/Quartz", f"{fab_cond_stone.sum()} Jobs")
+        fab_cond_laminate = (df_laminate['Ready_to_Fab_Date'].notna()) & (df_laminate['Ship_Date'].isna())
+        st.metric("🪵 Laminate", f"{fab_cond_laminate.sum()} Jobs")
+
+    # Weekly Throughput
+    with c2:
+        st.markdown("**Weekly Install Throughput**")
+        installs_stone = df_stone.dropna(subset=['Install_Date']).set_index('Install_Date')
+        if not installs_stone.empty:
+            weekly_installs_stone = installs_stone.resample('W').size().mean()
+            st.metric("💎 Stone/Quartz", f"{weekly_installs_stone:.1f} Jobs/Week")
+        else:
+            st.metric("💎 Stone/Quartz", "N/A")
+
+        installs_laminate = df_laminate.dropna(subset=['Install_Date']).set_index('Install_Date')
+        if not installs_laminate.empty:
+            weekly_installs_laminate = installs_laminate.resample('W').size().mean()
+            st.metric("🪵 Laminate", f"{weekly_installs_laminate:.1f} Jobs/Week")
+        else:
+            st.metric("🪵 Laminate", "N/A")
+
 
 # --- Main Application Logic ---
 
@@ -598,10 +644,10 @@ def main():
         st.stop()
 
     # --- Main Dashboard Tabs ---
-    main_tabs = st.tabs(["🏢 Company-Wide", "💎 Stone/Quartz Dashboard", "🪵 Laminate Dashboard"])
+    main_tabs = st.tabs(["🏢 Company-Wide Performance", "💎 Stone/Quartz Dashboard", "🪵 Laminate Dashboard"])
 
     with main_tabs[0]: # Company-Wide Dashboard
-        render_timeline_tracker_tab(df_combined)
+        render_company_performance_tab(df_combined, today_dt)
 
     with main_tabs[1]: # Stone Dashboard
         stone_tabs = ["📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "🔬 Rework & Variance", "🚧 Pipeline & Issues", "👷 Field Workload", "🔮 Forecasting"]
