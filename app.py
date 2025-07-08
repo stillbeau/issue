@@ -30,7 +30,7 @@ except ImportError:
     MATPLOTLIB_AVAILABLE = False
 
 # --- Page & App Configuration ---
-st.set_page_config(layout="wide", page_title="Profitability Dashboard", page_icon="💰")
+st.set_page_config(layout="wide", page_title="Profitability Dashboard", page_icon="�")
 
 # --- Constants & Global Configuration ---
 SPREADSHEET_ID = "1iToy3C-Bfn06bjuEM_flHNHwr2k1zMCV1wX9MNKzj38"
@@ -115,7 +115,9 @@ def _calculate_durations(df: pd.DataFrame) -> pd.DataFrame:
     duration_pairs = {
         'Days_Template_to_RTF': ('Ready_to_Fab_Date', 'Template_Date'),
         'Days_RTF_to_Ship': ('Ship_Date', 'Ready_to_Fab_Date'),
-        'Days_Ship_to_Install': ('Install_Date', 'Ship_Date')
+        'Days_Ship_to_Install': ('Install_Date', 'Ship_Date'),
+        'Days_Template_to_Install': ('Install_Date', 'Template_Date'),
+        'Days_RTF_to_Product_Rcvd': ('Product_Rcvd_Date', 'Ready_to_Fab_Date')
     }
     for new_col, (end_col, start_col) in duration_pairs.items():
         if start_col in df.columns and end_col in df.columns:
@@ -380,8 +382,22 @@ def render_pipeline_issues_tab(df: pd.DataFrame, division_name: str, today: pd.T
         stuck_jobs = df[conditions].copy()
         if not stuck_jobs.empty:
             stuck_jobs['Days_Since_Template'] = (today - stuck_jobs['Template_Date']).dt.days
-            display_cols = ['Job_Name', 'Salesperson', 'Template_Date', 'Days_Since_Template']
-            st.dataframe(stuck_jobs[display_cols].sort_values(by='Days_Since_Template', ascending=False), use_container_width=True)
+            
+            # Add link column if Production # exists
+            if 'Production_' in stuck_jobs.columns:
+                stuck_jobs['Link'] = stuck_jobs['Production_'].apply(lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None)
+            
+            display_cols = ['Link', 'Job_Name', 'Salesperson', 'Template_Date', 'Days_Since_Template']
+            # Ensure we only try to display columns that actually exist
+            final_display_cols = [c for c in display_cols if c in stuck_jobs.columns]
+
+            st.dataframe(
+                stuck_jobs[final_display_cols].sort_values(by='Days_Since_Template', ascending=False),
+                use_container_width=True,
+                column_config={
+                    "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)", help="Click to open job in Moraware")
+                }
+            )
         else:
             st.success("✅ No jobs are currently stuck between Template and Ready to Fab.")
     else:
@@ -400,8 +416,21 @@ def render_pipeline_issues_tab(df: pd.DataFrame, division_name: str, today: pd.T
         )
         conflict_jobs = df[conflict_conditions].copy()
         if not conflict_jobs.empty:
-            display_cols = ['Job_Name', 'Product_Rcvd_Date', 'Install_Date', 'Service_Date']
-            st.dataframe(conflict_jobs[[c for c in display_cols if c in conflict_jobs.columns]], use_container_width=True)
+            # Add link column if Production # exists
+            if 'Production_' in conflict_jobs.columns:
+                conflict_jobs['Link'] = conflict_jobs['Production_'].apply(lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None)
+
+            display_cols = ['Link', 'Job_Name', 'Product_Rcvd_Date', 'Install_Date', 'Service_Date']
+            # Ensure we only try to display columns that actually exist
+            final_display_cols = [c for c in display_cols if c in conflict_jobs.columns]
+            
+            st.dataframe(
+                conflict_jobs[final_display_cols],
+                use_container_width=True,
+                column_config={
+                    "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)", help="Click to open job in Moraware")
+                }
+            )
         else:
             st.success("✅ No scheduling conflicts found.")
     else:
@@ -480,82 +509,49 @@ def render_forecasting_tab(df: pd.DataFrame, division_name: str):
     st.line_chart(monthly_summary[['Revenue', 'Branch_Profit']])
     st.bar_chart(monthly_summary['Job_Count'])
 
-# --- NEW: Company-Wide Rendering Functions ---
-
-def render_company_workload_tab(df_combined: pd.DataFrame):
-    st.header("👷 Company-Wide Field Workload")
+# --- NEW: Company-Wide Timeline Tracker ---
+def render_timeline_tracker_tab(df_combined: pd.DataFrame):
+    """Displays key timeline metrics for the whole company, comparing divisions."""
+    st.header("⏱️ Company-Wide Timeline Tracker")
     if df_combined.empty:
-        st.warning("No data available to display workload.")
+        st.warning("No data available to display timelines.")
         return
 
-    divisions = sorted(df_combined['Product_Type'].unique())
-    selected_divisions = st.multiselect("Filter by Division:", options=divisions, default=list(divisions), key="company_workload_filter")
-    
-    if not selected_divisions:
-        st.warning("Please select at least one division.")
-        return
+    st.markdown("Average number of days between key process stages, compared by division.")
+
+    # Define the timelines to track
+    timelines = {
+        "Template to Install": "Days_Template_to_Install",
+        "Ready to Fab to Product Received": "Days_RTF_to_Product_Rcvd",
+        "Template to Ready to Fab": "Days_Template_to_RTF"
+    }
+
+    df_stone = df_combined[df_combined['Product_Type'] == 'Stone/Quartz']
+    df_laminate = df_combined[df_combined['Product_Type'] == 'Laminate']
+
+    for title, col_name in timelines.items():
+        st.markdown("---")
+        st.subheader(title)
+
+        if col_name not in df_combined.columns:
+            st.warning(f"Data for '{title}' is not available (missing column: {col_name}).")
+            continue
+
+        c1, c2 = st.columns(2)
+        with c1:
+            avg_stone = df_stone[col_name].mean()
+            st.metric(label="💎 Stone/Quartz Average", value=f"{avg_stone:.1f} days" if not pd.isna(avg_stone) else "N/A")
+        with c2:
+            avg_laminate = df_laminate[col_name].mean()
+            st.metric(label="🪵 Laminate Average", value=f"{avg_laminate:.1f} days" if not pd.isna(avg_laminate) else "N/A")
         
-    df_filtered = df_combined[df_combined['Product_Type'].isin(selected_divisions)]
-
-    col1, col2 = st.columns(2)
-    with col1:
-        render_workload_card(df_filtered, "Templates", "Template_Date", "Template_Assigned_To")
-    with col2:
-        render_workload_card(df_filtered, "Installs", "Install_Date", "Install_Assigned_To")
-
-def render_company_forecasting_tab(df_combined: pd.DataFrame):
-    st.header("🔮 Company-Wide Forecasting & Trends")
-    if not SKLEARN_AVAILABLE or not MATPLOTLIB_AVAILABLE:
-        st.error("Forecasting features require scikit-learn and matplotlib.")
-        return
-    if 'Job_Creation' not in df_combined.columns or df_combined['Job_Creation'].isnull().all():
-        st.warning("Job Creation date column is required for trend analysis.")
-        return
-    if df_combined.empty or len(df_combined) < 2:
-        st.warning("Not enough data to create a forecast.")
-        return
-
-    df_trends = df_combined.copy().set_index('Job_Creation')
-    
-    monthly_combined = df_trends.resample('M').agg({'Revenue': 'sum'}).rename(columns={'Revenue': 'Total Revenue'})
-    monthly_by_division = df_trends.groupby('Product_Type').resample('M').agg({'Revenue': 'sum'}).unstack(level=0)
-    monthly_by_division.columns = monthly_by_division.columns.droplevel(0)
-    
-    plot_df = pd.concat([monthly_combined, monthly_by_division], axis=1).fillna(0)
-
-    st.subheader("Monthly Revenue Trends by Division")
-    st.line_chart(plot_df)
-
-    st.subheader("Total Company Revenue Forecast")
-    forecast_df = monthly_combined.reset_index()
-    forecast_df['Time'] = np.arange(len(forecast_df.index))
-    
-    if len(forecast_df) < 2:
-        st.info("Not enough historical data to generate a forecast.")
-        return
-
-    model = LinearRegression()
-    X = forecast_df[['Time']]
-    y = forecast_df['Total Revenue']
-    model.fit(X, y)
-
-    future_periods = st.slider("Months to Forecast:", 1, 12, 3, key="company_forecast_slider")
-    last_time = forecast_df['Time'].max()
-    last_date = forecast_df['Job_Creation'].max()
-
-    future_dates = pd.to_datetime([last_date + pd.DateOffset(months=i) for i in range(1, future_periods + 1)])
-    future_df = pd.DataFrame({'Job_Creation': future_dates, 'Time': np.arange(last_time + 1, last_time + 1 + future_periods)})
-    future_df['Forecast'] = model.predict(future_df[['Time']])
-
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(forecast_df['Job_Creation'], forecast_df['Total Revenue'], label='Actual Revenue', marker='o')
-    ax.plot(future_df['Job_Creation'], future_df['Forecast'], label='Forecasted Revenue', linestyle='--', marker='o')
-    ax.set_title('Total Company Monthly Revenue and Forecast')
-    ax.set_ylabel('Revenue ($)')
-    ax.legend()
-    plt.grid(True, which='both', linestyle='--', linewidth=0.5)
-    st.pyplot(fig)
-
+        # Trend Chart
+        if 'Job_Creation' in df_combined.columns:
+            df_trend = df_combined.dropna(subset=[col_name, 'Job_Creation', 'Product_Type'])
+            if not df_trend.empty:
+                trend_chart_data = df_trend.groupby(['Product_Type', pd.Grouper(key='Job_Creation', freq='M')])[col_name].mean().unstack(level=0)
+                if not trend_chart_data.empty:
+                     st.line_chart(trend_chart_data)
 
 # --- Main Application Logic ---
 
@@ -605,11 +601,7 @@ def main():
     main_tabs = st.tabs(["🏢 Company-Wide", "💎 Stone/Quartz Dashboard", "🪵 Laminate Dashboard"])
 
     with main_tabs[0]: # Company-Wide Dashboard
-        company_sub_tabs = st.tabs(["👷 Field Workload", "🔮 Forecasting"])
-        with company_sub_tabs[0]:
-            render_company_workload_tab(df_combined)
-        with company_sub_tabs[1]:
-            render_company_forecasting_tab(df_combined)
+        render_timeline_tracker_tab(df_combined)
 
     with main_tabs[1]: # Stone Dashboard
         stone_tabs = ["📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "🔬 Rework & Variance", "🚧 Pipeline & Issues", "👷 Field Workload", "🔮 Forecasting"]
