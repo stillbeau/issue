@@ -239,7 +239,7 @@ def render_overview_tab(df: pd.DataFrame, division_name: str):
         st.bar_chart(sales_profit)
 
 def render_detailed_data_tab(df: pd.DataFrame, division_name: str):
-    st.header(f"� {division_name} Detailed Data")
+    st.header(f"📋 {division_name} Detailed Data")
     df_display = df.copy()
 
     col1, col2 = st.columns(2)
@@ -380,6 +380,35 @@ def render_pipeline_issues_tab(df: pd.DataFrame, division_name: str, today: pd.T
             st.success("✅ No jobs are currently stuck between Template and Ready to Fab.")
     else:
         st.warning("Could not check for jobs awaiting RTF. Required columns missing: " + ", ".join([c for c in required_cols_rtf if c not in df.columns]))
+
+    st.markdown("---")
+    st.subheader("Jobs in Fabrication (Not Shipped)")
+    required_cols_fab = ['Ready_to_Fab_Date', 'Ship_Date']
+    if all(col in df.columns for col in required_cols_fab):
+        conditions = (
+            df['Ready_to_Fab_Date'].notna() &
+            df['Ship_Date'].isna()
+        )
+        fab_jobs = df[conditions].copy()
+        if not fab_jobs.empty:
+            fab_jobs['Days_Since_RTF'] = (today - fab_jobs['Ready_to_Fab_Date']).dt.days
+
+            if 'Production_' in fab_jobs.columns:
+                fab_jobs['Link'] = fab_jobs['Production_'].apply(lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None)
+
+            display_cols = ['Link', 'Job_Name', 'Salesperson', 'Ready_to_Fab_Date', 'Days_Since_RTF']
+            final_display_cols = [c for c in display_cols if c in fab_jobs.columns]
+
+            st.dataframe(
+                fab_jobs[final_display_cols].sort_values(by='Days_Since_RTF', ascending=False),
+                use_container_width=True,
+                column_config={"Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)")}
+            )
+        else:
+            st.success("✅ No jobs are currently in fabrication without a ship date.")
+    else:
+        st.warning("Could not check for jobs in fabrication. Required columns missing: " + ", ".join([c for c in required_cols_fab if c not in df.columns]))
+
 
     st.markdown("---")
     st.subheader("Jobs with Scheduling Conflicts")
