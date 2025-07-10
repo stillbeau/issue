@@ -1,10 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-A Streamlit dashboard for analyzing job profitability data from a Google Sheet.
-
-This refactored version consolidates data processing logic, centralizes
-configuration, and improves performance and maintainability. It retains the
-three-dashboard structure: Stone/Quartz, Laminate, and a Company-Wide view.
+Enhanced Daily Operations Dashboard - Focus on Timeline Management and Early Warning System
 """
 
 import streamlit as st
@@ -14,610 +10,526 @@ import gspread
 from google.oauth2.service_account import Credentials
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
+import plotly.express as px
+import plotly.graph_objects as go
 
-# --- Attempt to import optional libraries for advanced features ---
-try:
-    from sklearn.linear_model import LinearRegression
-    SKLEARN_AVAILABLE = True
-except ImportError:
-    SKLEARN_AVAILABLE = False
+# --- Page Configuration ---
+st.set_page_config(layout="wide", page_title="Daily Operations Dashboard", page_icon="⚡")
 
-try:
-    import matplotlib.pyplot as plt
-    MATPLOTLIB_AVAILABLE = True
-except ImportError:
-    MATPLOTLIB_AVAILABLE = False
-
-# --- Page & App Configuration ---
-st.set_page_config(layout="wide", page_title="Profitability Dashboard", page_icon="💰")
-
-# --- Constants & Global Configuration ---
+# --- Constants ---
 SPREADSHEET_ID = "1iToy3C-Bfn06bjuEM_flHNHwr2k1zMCV1wX9MNKzj38"
 WORKSHEET_NAME = "jobs"
 MORAWARE_SEARCH_URL = "https://floformcountertops.moraware.net/sys/search?&search="
 
-# --- Division-Specific Processing Configuration ---
-# Centralizing configuration makes the code cleaner and easier to update.
-# The keys here are the names AFTER cleaning by _clean_column_names.
-STONE_CONFIG = {
-    "name": "Stone/Quartz",
-    "numeric_map": {
-        'Total_Job_Price_': 'Revenue',
-        'Phase_Dollars_Plant_Invoice_': 'Cost_From_Plant',
-        'Total_Job_SqFT': 'Total_Job_SqFt',
-        'Job_Throughput_Job_GM_original': 'Original_GM',
-        'Rework_Stone_Shop_Rework_Price': 'Rework_Price',
-        'Job_Throughput_Rework_COGS': 'Rework_COGS',
-        'Job_Throughput_Rework_Job_Labor': 'Rework_Labor',
-        'Job_Throughput_Total_COGS': 'Total_COGS'
-    },
-    "cost_components": ['Cost_From_Plant', 'Install_Cost', 'Total_Rework_Cost'],
-    "rework_components": ['Rework_Price', 'Rework_COGS', 'Rework_Labor'],
-    "has_shop_profit": True
+# --- Timeline Thresholds (customizable) ---
+TIMELINE_THRESHOLDS = {
+    'template_to_rtf': 3,  # days
+    'rtf_to_product': 7,   # days
+    'product_to_install': 5,  # days
+    'template_to_install': 15,  # days
+    'days_in_stage_warning': 5,  # days stuck in any stage
 }
-
-LAMINATE_CONFIG = {
-    "name": "Laminate",
-    "numeric_map": {
-        'Total_Job_Price_': 'Revenue',
-        'Branch_INV_': 'Shop_Cost',
-        'Plant_INV_': 'Material_Cost',
-        'Total_Job_SqFT': 'Total_Job_SqFt',
-        'Job_Throughput_Job_GM_original': 'Original_GM',
-        'Rework_Stone_Shop_Rework_Price': 'Rework_Price',
-    },
-    "cost_components": ['Shop_Cost', 'Material_Cost', 'Install_Cost', 'Total_Rework_Cost'],
-    "rework_components": ['Rework_Price'],
-    "has_shop_profit": False
-}
-
 
 # --- Helper Functions ---
-
 def parse_material(s: str) -> tuple[str, str]:
-    """Parses a material description string to extract brand and color."""
+    """Parses material description to extract brand and color."""
     brand_match = re.search(r'-\s*,\d+\s*-\s*([A-Za-z0-9 ]+?)\s*\(', s)
     color_match = re.search(r'\)\s*([^()]+?)\s*\(', s)
     brand = brand_match.group(1).strip() if brand_match else "N/A"
     color = color_match.group(1).strip() if color_match else "N/A"
     return brand, color
 
-# --- Data Loading and Processing Sub-Functions ---
+def calculate_risk_score(row):
+    """Calculate a risk score for each job based on multiple factors."""
+    score = 0
+    
+    # Timeline risks
+    if pd.notna(row.get('Days_Behind', np.nan)) and row['Days_Behind'] > 0:
+        score += min(row['Days_Behind'] * 2, 20)  # Max 20 points for being behind
+    
+    # Stage duration risks
+    if pd.notna(row.get('Days_In_Current_Stage', np.nan)):
+        if row['Days_In_Current_Stage'] > TIMELINE_THRESHOLDS['days_in_stage_warning']:
+            score += 10
+    
+    # Missing critical dates
+    if pd.isna(row.get('Ready_to_Fab_Date')) and pd.notna(row.get('Template_Date')):
+        days_since_template = (pd.Timestamp.now() - row['Template_Date']).days
+        if days_since_template > TIMELINE_THRESHOLDS['template_to_rtf']:
+            score += 15
+    
+    # Rework indicator
+    if row.get('Has_Rework', False):
+        score += 10
+    
+    # No next scheduled activity
+    if pd.isna(row.get('Next_Sched_Activity')):
+        score += 5
+    
+    return score
 
-def _clean_column_names(df: pd.DataFrame) -> pd.DataFrame:
-    """Standardizes all column names for easier access."""
-    df.columns = df.columns.str.strip().str.replace(r'[\s-]+', '_', regex=True).str.replace(r'[^\w]', '', regex=True)
-    return df
-
-def _parse_date_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Parses all known date columns to datetime objects."""
-    date_cols = [
-        'Template_Date', 'Ready_to_Fab_Date', 'Ship_Date', 'Install_Date',
-        'Service_Date', 'Delivery_Date', 'Job_Creation', 'Next_Sched_Date',
-        'Product_Rcvd_Date', 'Pick_Up_Date'
-    ]
-    for col in date_cols:
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col], errors='coerce')
-    return df
-
-def _calculate_days_behind(df: pd.DataFrame, today: pd.Timestamp) -> pd.DataFrame:
-    """Calculates if a job is ahead or behind its next scheduled date."""
-    if 'Next_Sched_Date' in df.columns:
-        df['Days_Behind'] = (today - df['Next_Sched_Date']).dt.days
+def get_current_stage(row):
+    """Determine the current stage of a job based on dates."""
+    if pd.notna(row.get('Install_Date')) or pd.notna(row.get('Pick_Up_Date')):
+        return 'Completed'
+    elif pd.notna(row.get('Ship_Date')):
+        return 'Shipped'
+    elif pd.notna(row.get('Product_Rcvd_Date')):
+        return 'Product Received'
+    elif pd.notna(row.get('Ready_to_Fab_Date')):
+        return 'In Fabrication'
+    elif pd.notna(row.get('Template_Date')):
+        return 'Post-Template'
     else:
-        df['Days_Behind'] = np.nan
-    return df
+        return 'Pre-Template'
 
-def _calculate_durations(df: pd.DataFrame) -> pd.DataFrame:
-    """Calculates durations between key process stages, handling invalid dates."""
-    duration_pairs = {
-        'Days_Template_to_RTF': ('Ready_to_Fab_Date', 'Template_Date'),
-        'Days_RTF_to_Ship': ('Ship_Date', 'Ready_to_Fab_Date'),
-        'Days_Ship_to_Install': ('Install_Date', 'Ship_Date'),
-        'Days_Template_to_Install': ('Install_Date', 'Template_Date'),
-        'Days_RTF_to_Product_Rcvd': ('Product_Rcvd_Date', 'Ready_to_Fab_Date'),
-        'Days_Product_Rcvd_to_Install': ('Install_Date', 'Product_Rcvd_Date'),
-        'Days_Template_to_Ship': ('Ship_Date', 'Template_Date')
-    }
-    for new_col, (end_col, start_col) in duration_pairs.items():
-        if start_col in df.columns and end_col in df.columns:
-            duration = (df[end_col] - df[start_col]).dt.days
-            df[new_col] = np.where(duration >= 0, duration, np.nan)
-    return df
-
-def _enrich_data(df: pd.DataFrame) -> pd.DataFrame:
-    """Adds supplementary data like material parsing."""
-    if 'Job_Material' in df.columns:
-        df[['Material_Brand', 'Material_Color']] = df['Job_Material'].apply(lambda x: pd.Series(parse_material(str(x))))
+def calculate_days_in_stage(row, today):
+    """Calculate how many days a job has been in its current stage."""
+    stage = row['Current_Stage']
+    
+    if stage == 'Completed':
+        return 0
+    elif stage == 'Shipped' and pd.notna(row.get('Ship_Date')):
+        return (today - row['Ship_Date']).days
+    elif stage == 'Product Received' and pd.notna(row.get('Product_Rcvd_Date')):
+        return (today - row['Product_Rcvd_Date']).days
+    elif stage == 'In Fabrication' and pd.notna(row.get('Ready_to_Fab_Date')):
+        return (today - row['Ready_to_Fab_Date']).days
+    elif stage == 'Post-Template' and pd.notna(row.get('Template_Date')):
+        return (today - row['Template_Date']).days
     else:
-        df['Material_Brand'] = "N/A"
-        df['Material_Color'] = "N/A"
-    return df
-
-# --- Unified Division-Specific Processing Pipeline ---
-
-def _process_division_data(df: pd.DataFrame, config: dict, install_cost_per_sqft: float) -> pd.DataFrame:
-    """Processes data for a specific division using a configuration dictionary."""
-    df_processed = df.copy()
-    
-    for original, new in config["numeric_map"].items():
-        if original in df_processed.columns:
-            df_processed[new] = pd.to_numeric(
-                df_processed[original].astype(str).str.replace(r'[$,%]', '', regex=True),
-                errors='coerce'
-            ).fillna(0)
-        else:
-            df_processed[new] = 0.0
-            
-    df_processed['Install_Cost'] = df_processed.get('Total_Job_SqFt', 0) * install_cost_per_sqft
-    
-    rework_costs = [df_processed.get(c, 0) for c in config["rework_components"]]
-    df_processed['Total_Rework_Cost'] = sum(rework_costs)
-    
-    branch_costs = [df_processed.get(c, 0) for c in config["cost_components"]]
-    df_processed['Total_Branch_Cost'] = sum(branch_costs)
-
-    revenue = df_processed.get('Revenue', 0)
-    df_processed['Branch_Profit'] = revenue - df_processed['Total_Branch_Cost']
-    
-    df_processed['Branch_Profit_Margin_%'] = np.where(
-        revenue != 0, (df_processed['Branch_Profit'] / revenue * 100), 0
-    )
-    
-    df_processed['Profit_Variance'] = df_processed['Branch_Profit'] - df_processed.get('Original_GM', 0)
-
-    if config["has_shop_profit"]:
-        cost_from_plant = df_processed.get('Cost_From_Plant', 0)
-        total_cogs = df_processed.get('Total_COGS', 0)
-        df_processed['Shop_Profit'] = cost_from_plant - total_cogs
-        df_processed['Shop_Profit_Margin_%'] = np.where(
-            cost_from_plant != 0, (df_processed['Shop_Profit'] / cost_from_plant * 100), 0
-        )
-        
-    return df_processed
+        return np.nan
 
 @st.cache_data(ttl=300)
-def load_and_process_data(creds_dict: dict, today: pd.Timestamp, install_cost: float) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """
-    Loads data from Google Sheets, performs universal processing, and then
-    delegates to the division-specific processor.
-    """
+def load_and_process_data(creds_dict: dict, today: pd.Timestamp):
+    """Load and process data with focus on timeline and warning indicators."""
+    # Connect and load data
     creds = Credentials.from_service_account_info(creds_dict, scopes=['https://www.googleapis.com/auth/spreadsheets'])
     gc = gspread.authorize(creds)
     worksheet = gc.open_by_key(SPREADSHEET_ID).worksheet(WORKSHEET_NAME)
-    df_raw = pd.DataFrame(worksheet.get_all_records())
-    df = df_raw.copy()
-
-    # --- Universal Processing Steps ---
-    df = _clean_column_names(df)
-    df = _parse_date_columns(df)
-    df = _calculate_days_behind(df, today)
-    df = _calculate_durations(df)
-    df = _enrich_data(df)
-
-    if 'Division' not in df.columns:
-        st.error("Your Google Sheet must have a 'Division' column to separate Stone and Laminate jobs.")
-        st.stop()
+    df = pd.DataFrame(worksheet.get_all_records())
     
-    df['Product_Type'] = df['Division'].apply(lambda x: 'Laminate' if 'laminate' in str(x).lower() else 'Stone/Quartz')
-
-    # --- Split and Process by Division ---
-    df_stone = df[df['Product_Type'] == 'Stone/Quartz'].copy()
-    df_laminate = df[df['Product_Type'] == 'Laminate'].copy()
-
-    df_stone_processed = _process_division_data(df_stone, STONE_CONFIG, install_cost)
-    df_laminate_processed = _process_division_data(df_laminate, LAMINATE_CONFIG, install_cost)
-
-    df_combined = pd.concat([df_stone_processed, df_laminate_processed], ignore_index=True)
-
-    return df_stone_processed, df_laminate_processed, df_combined
-
-
-# --- UI Rendering Functions ---
-
-def render_overview_tab(df: pd.DataFrame, division_name: str):
-    st.header(f"📈 {division_name} Overview")
-    if df.empty:
-        st.warning(f"No {division_name} data available for the selected period.")
-        return
-
-    total_revenue = df['Revenue'].sum()
-    total_profit = df['Branch_Profit'].sum()
-    avg_margin = (total_profit / total_revenue * 100) if total_revenue != 0 else 0
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Total Revenue", f"${total_revenue:,.0f}")
-    c2.metric("Total Branch Profit", f"${total_profit:,.0f}")
-    c3.metric("Avg Profit Margin", f"{avg_margin:.1f}%")
-
-    st.markdown("---")
-    st.subheader("Profit by Salesperson")
-    if 'Salesperson' in df.columns and not df.empty:
-        sales_profit = df.groupby('Salesperson')['Branch_Profit'].sum().sort_values(ascending=False)
-        st.bar_chart(sales_profit)
-
-def render_detailed_data_tab(df: pd.DataFrame, division_name: str):
-    st.header(f"📋 {division_name} Detailed Data")
-    df_display = df.copy()
-
-    col1, col2 = st.columns(2)
-    with col1:
-        job_name_filter = st.text_input("Filter by Job Name", key=f"job_name_{division_name}")
-    with col2:
-        prod_num_filter = st.text_input("Filter by Production #", key=f"prod_num_{division_name}")
-
-    if job_name_filter and 'Job_Name' in df_display.columns:
-        df_display = df_display[df_display['Job_Name'].str.contains(job_name_filter, case=False, na=False)]
-    if prod_num_filter and 'Production_' in df_display.columns:
-        df_display = df_display[df_display['Production_'].str.contains(prod_num_filter, case=False, na=False)]
-
-    if df_display.empty:
-        st.warning("No data matches the current filters.")
-        return
-
-    if 'Production_' in df_display.columns:
-        df_display['Link'] = df_display['Production_'].apply(lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None)
-
-    base_cols = ['Link', 'Job_Name', 'Next_Sched_Activity', 'Days_Behind', 'Revenue', 'Total_Job_SqFt']
-    profit_cols = ['Total_Branch_Cost', 'Branch_Profit', 'Branch_Profit_Margin_%']
+    # Clean column names
+    df.columns = df.columns.str.strip().str.replace(r'[\s-]+', '_', regex=True).str.replace(r'[^\w]', '', regex=True)
     
-    if division_name == 'Laminate':
-        middle_cols = ['Material_Cost', 'Shop_Cost']
-    else:
-        middle_cols = ['Cost_From_Plant']
-        profit_cols.append('Shop_Profit_Margin_%')
-
-    column_order = base_cols + middle_cols + profit_cols
-    final_column_order = [c for c in column_order if c in df_display.columns]
+    # Parse dates
+    date_cols = ['Template_Date', 'Ready_to_Fab_Date', 'Ship_Date', 'Install_Date',
+                 'Service_Date', 'Delivery_Date', 'Job_Creation', 'Next_Sched_Date',
+                 'Product_Rcvd_Date', 'Pick_Up_Date']
+    for col in date_cols:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors='coerce')
     
-    st.dataframe(df_display[final_column_order], use_container_width=True,
-        column_config={
-            "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)"),
-            "Days_Behind": st.column_config.NumberColumn("Days Behind/Ahead", help="Positive: Behind. Negative: Ahead."),
-            "Revenue": st.column_config.NumberColumn(format='$%.2f'),
-            "Total_Job_SqFt": st.column_config.NumberColumn("SqFt", format='%.2f'),
-            "Cost_From_Plant": st.column_config.NumberColumn("Production Cost", format='$%.2f'),
-            "Material_Cost": st.column_config.NumberColumn("Material Cost", format='$%.2f'),
-            "Shop_Cost": st.column_config.NumberColumn("Shop Cost", format='$%.2f'),
-            "Total_Branch_Cost": st.column_config.NumberColumn(format='$%.2f'),
-            "Branch_Profit": st.column_config.NumberColumn(format='$%.2f'),
-            "Branch_Profit_Margin_%": st.column_config.ProgressColumn("Branch Profit %", format='%.2f%%', min_value=-50, max_value=100),
-            "Shop_Profit_Margin_%": st.column_config.ProgressColumn("Shop Profit %", format='%.2f%%', min_value=-50, max_value=100),
-        }
+    # Calculate timeline metrics
+    df['Days_Behind'] = np.where(
+        df['Next_Sched_Date'].notna(),
+        (today - df['Next_Sched_Date']).dt.days,
+        np.nan
     )
-
-def render_profit_drivers_tab(df: pd.DataFrame, division_name: str):
-    st.header(f"💸 {division_name} Profitability Drivers")
-    if df.empty:
-        st.warning(f"No {division_name} data available.")
-        return
-
-    driver_options = ['Job_Type', 'Order_Type', 'Lead_Source', 'Salesperson', 'Material_Brand']
-    valid_drivers = [d for d in driver_options if d in df.columns]
-
-    if not valid_drivers:
-        st.warning("No valid columns found for this analysis (e.g., 'Job_Type', 'Salesperson').")
-        return
-
-    selected_driver = st.selectbox("Analyze Profitability by:", valid_drivers, key=f"driver_{division_name}")
-    if selected_driver:
-        agg_dict = {
-            'Avg_Branch_Profit_Margin': ('Branch_Profit_Margin_%', 'mean'),
-            'Total_Profit': ('Branch_Profit', 'sum'),
-            'Job_Count': ('Job_Name', 'count')
-        }
-        driver_analysis = df.groupby(selected_driver).agg(**agg_dict).sort_values('Total_Profit', ascending=False)
-        st.dataframe(driver_analysis.style.format({
-            'Avg_Branch_Profit_Margin': '{:.2f}%',
-            'Total_Profit': '${:,.2f}'
-        }), use_container_width=True)
-
-def render_rework_tab(df: pd.DataFrame, division_name: str):
-    st.header(f"🔬 {division_name} Rework & Variance")
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("Rework Analysis")
-        if 'Total_Rework_Cost' in df and 'Rework_Stone_Shop_Reason' in df.columns:
-            rework_jobs = df[df['Total_Rework_Cost'] > 0].copy()
-            if not rework_jobs.empty:
-                st.metric("Total Rework Cost", f"${rework_jobs['Total_Rework_Cost'].sum():,.2f}", f"{len(rework_jobs)} jobs affected")
-                agg_rework = rework_jobs.groupby('Rework_Stone_Shop_Reason')['Total_Rework_Cost'].agg(['sum', 'count'])
-                agg_rework.columns = ['Total Rework Cost', 'Number of Jobs']
-                st.dataframe(agg_rework.sort_values('Total Rework Cost', ascending=False).style.format({'Total Rework Cost': '${:,.2f}'}))
-            else:
-                st.info("No rework costs recorded.")
-        else:
-            st.info("Rework data not available.")
-    with c2:
-        st.subheader("Profit Variance Analysis")
-        if 'Profit_Variance' in df.columns and 'Original_GM' in df.columns:
-            variance_jobs = df[df['Profit_Variance'].abs() > 0.01].copy()
-            if not variance_jobs.empty:
-                st.metric("Jobs with Profit Variance", f"{len(variance_jobs)}")
-                display_cols = ['Job_Name', 'Original_GM', 'Branch_Profit', 'Profit_Variance']
-                st.dataframe(
-                    variance_jobs[display_cols].sort_values(by='Profit_Variance', key=abs, ascending=False).head(20),
-                    column_config={
-                        "Original_GM": st.column_config.NumberColumn("Est. Profit", format='$%.2f'),
-                        "Branch_Profit": st.column_config.NumberColumn("Actual Profit", format='$%.2f'),
-                        "Profit_Variance": st.column_config.NumberColumn("Variance", format='$%.2f')
-                    }
-                )
-            else:
-                st.info("No significant profit variance found.")
-        else:
-            st.info("Profit variance data not available.")
-
-def render_pipeline_issues_tab(df: pd.DataFrame, division_name: str, today: pd.Timestamp):
-    st.header(f"🚧 {division_name} Pipeline & Issues")
     
-    st.subheader("Jobs Awaiting Ready-to-Fab")
-    required_cols_rtf = ['Ready_to_Fab_Status', 'Template_Date']
-    if all(col in df.columns for col in required_cols_rtf):
-        conditions = (
-            df['Template_Date'].notna() &
-            (df['Template_Date'] <= today) &
-            (df['Ready_to_Fab_Status'].fillna('').str.lower() != 'complete')
+    # Current stage and days in stage
+    df['Current_Stage'] = df.apply(get_current_stage, axis=1)
+    df['Days_In_Current_Stage'] = df.apply(lambda row: calculate_days_in_stage(row, today), axis=1)
+    
+    # Timeline calculations
+    df['Days_Template_to_RTF'] = np.where(
+        (df['Template_Date'].notna() & df['Ready_to_Fab_Date'].notna()),
+        (df['Ready_to_Fab_Date'] - df['Template_Date']).dt.days,
+        np.nan
+    )
+    
+    df['Days_RTF_to_Product'] = np.where(
+        (df['Ready_to_Fab_Date'].notna() & df['Product_Rcvd_Date'].notna()),
+        (df['Product_Rcvd_Date'] - df['Ready_to_Fab_Date']).dt.days,
+        np.nan
+    )
+    
+    df['Days_Product_to_Install'] = np.where(
+        (df['Product_Rcvd_Date'].notna() & df['Install_Date'].notna()),
+        (df['Install_Date'] - df['Product_Rcvd_Date']).dt.days,
+        np.nan
+    )
+    
+    # Parse material info
+    if 'Job_Material' in df.columns:
+        df[['Material_Brand', 'Material_Color']] = df['Job_Material'].apply(
+            lambda x: pd.Series(parse_material(str(x)))
         )
-        stuck_jobs = df[conditions].copy()
-        if not stuck_jobs.empty:
-            stuck_jobs['Days_Since_Template'] = (today - stuck_jobs['Template_Date']).dt.days
-            
-            if 'Production_' in stuck_jobs.columns:
-                stuck_jobs['Link'] = stuck_jobs['Production_'].apply(lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None)
-            
-            display_cols = ['Link', 'Job_Name', 'Salesperson', 'Template_Date', 'Days_Since_Template']
-            final_display_cols = [c for c in display_cols if c in stuck_jobs.columns]
+    
+    # Rework indicator
+    df['Has_Rework'] = df['Rework_Stone_Shop_Rework_Price'].notna() & (df['Rework_Stone_Shop_Rework_Price'] != '')
+    
+    # Calculate risk score
+    df['Risk_Score'] = df.apply(calculate_risk_score, axis=1)
+    
+    # Add hyperlinks
+    if 'Production_' in df.columns:
+        df['Link'] = df['Production_'].apply(
+            lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None
+        )
+    
+    # Parse numeric fields
+    numeric_fields = ['Total_Job_Price_', 'Total_Job_SqFT', 'Job_Throughput_Job_GM_original']
+    for field in numeric_fields:
+        if field in df.columns:
+            df[field] = pd.to_numeric(
+                df[field].astype(str).str.replace(r'[$,%]', '', regex=True),
+                errors='coerce'
+            ).fillna(0)
+    
+    return df
 
-            st.dataframe(
-                stuck_jobs[final_display_cols].sort_values(by='Days_Since_Template', ascending=False),
-                use_container_width=True,
-                column_config={"Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)")}
-            )
-        else:
-            st.success("✅ No jobs are currently stuck between Template and Ready to Fab.")
-    else:
-        st.warning("Could not check for jobs awaiting RTF. Required columns missing: " + ", ".join([c for c in required_cols_rtf if c not in df.columns]))
-
+def render_daily_priorities(df: pd.DataFrame, today: pd.Timestamp):
+    """Render the daily priorities and warnings dashboard."""
+    st.header("🚨 Daily Priorities & Warnings")
+    
+    # High risk jobs
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        high_risk_jobs = df[df['Risk_Score'] >= 30]
+        st.metric("🔴 High Risk Jobs", len(high_risk_jobs))
+    
+    with col2:
+        behind_schedule = df[df['Days_Behind'] > 0]
+        st.metric("⏰ Behind Schedule", len(behind_schedule))
+    
+    with col3:
+        stuck_jobs = df[df['Days_In_Current_Stage'] > TIMELINE_THRESHOLDS['days_in_stage_warning']]
+        st.metric("🚧 Stuck Jobs", len(stuck_jobs))
+    
+    # Critical Issues Section
     st.markdown("---")
-    st.subheader("Jobs in Fabrication (Not Shipped)")
-    required_cols_fab = ['Ready_to_Fab_Date', 'Ship_Date']
-    if all(col in df.columns for col in required_cols_fab):
-        conditions = (
-            df['Ready_to_Fab_Date'].notna() &
-            df['Ship_Date'].isna()
-        )
-        fab_jobs = df[conditions].copy()
-        if not fab_jobs.empty:
-            fab_jobs['Days_Since_RTF'] = (today - fab_jobs['Ready_to_Fab_Date']).dt.days
-
-            if 'Production_' in fab_jobs.columns:
-                fab_jobs['Link'] = fab_jobs['Production_'].apply(lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None)
-
-            display_cols = ['Link', 'Job_Name', 'Salesperson', 'Ready_to_Fab_Date', 'Days_Since_RTF']
-            final_display_cols = [c for c in display_cols if c in fab_jobs.columns]
-
+    st.subheader("⚡ Critical Issues Requiring Immediate Attention")
+    
+    # Jobs missing next scheduled activity
+    missing_activity = df[
+        (df['Next_Sched_Activity'].isna()) & 
+        (df['Current_Stage'].isin(['Post-Template', 'In Fabrication', 'Product Received']))
+    ]
+    
+    if not missing_activity.empty:
+        with st.expander(f"🚨 Jobs Missing Next Activity ({len(missing_activity)} jobs)", expanded=True):
+            display_cols = ['Link', 'Job_Name', 'Current_Stage', 'Days_In_Current_Stage', 'Salesperson']
             st.dataframe(
-                fab_jobs[final_display_cols].sort_values(by='Days_Since_RTF', ascending=False),
-                use_container_width=True,
-                column_config={"Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)")}
+                missing_activity[display_cols].sort_values('Days_In_Current_Stage', ascending=False),
+                column_config={
+                    "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)")
+                }
             )
-        else:
-            st.success("✅ No jobs are currently in fabrication without a ship date.")
-    else:
-        st.warning("Could not check for jobs in fabrication. Required columns missing: " + ", ".join([c for c in required_cols_fab if c not in df.columns]))
-
-
-    st.markdown("---")
-    st.subheader("Jobs with Scheduling Conflicts")
-    required_cols_conflict = ['Install_Date', 'Service_Date', 'Pick_Up_Date', 'Delivery_Date', 'Product_Rcvd_Date']
-    if all(col in df.columns for col in required_cols_conflict):
-        conflict_conditions = (
-            (df['Install_Date'].notna() & (df['Install_Date'] < df['Product_Rcvd_Date'])) |
-            (df['Service_Date'].notna() & (df['Service_Date'] < df['Product_Rcvd_Date'])) |
-            (df['Pick_Up_Date'].notna() & (df['Pick_Up_Date'] < df['Product_Rcvd_Date'])) |
-            (df['Delivery_Date'].notna() & (df['Delivery_Date'] < df['Product_Rcvd_Date']))
-        )
-        conflict_jobs = df[conflict_conditions].copy()
-        if not conflict_jobs.empty:
-            if 'Production_' in conflict_jobs.columns:
-                conflict_jobs['Link'] = conflict_jobs['Production_'].apply(lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None)
-
-            display_cols = ['Link', 'Job_Name', 'Product_Rcvd_Date', 'Install_Date', 'Service_Date']
-            final_display_cols = [c for c in display_cols if c in conflict_jobs.columns]
-            
+    
+    # Jobs stuck between stages
+    template_to_rtf_stuck = df[
+        (df['Template_Date'].notna()) & 
+        (df['Ready_to_Fab_Date'].isna()) & 
+        ((today - df['Template_Date']).dt.days > TIMELINE_THRESHOLDS['template_to_rtf'])
+    ]
+    
+    if not template_to_rtf_stuck.empty:
+        with st.expander(f"📋 Stuck: Template → Ready to Fab ({len(template_to_rtf_stuck)} jobs)"):
+            template_to_rtf_stuck['Days_Since_Template'] = (today - template_to_rtf_stuck['Template_Date']).dt.days
+            display_cols = ['Link', 'Job_Name', 'Template_Date', 'Days_Since_Template', 'Salesperson']
             st.dataframe(
-                conflict_jobs[final_display_cols],
-                use_container_width=True,
-                column_config={"Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)")}
+                template_to_rtf_stuck[display_cols].sort_values('Days_Since_Template', ascending=False),
+                column_config={
+                    "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)")
+                }
             )
-        else:
-            st.success("✅ No scheduling conflicts found.")
-    else:
-        st.warning("Could not perform scheduling conflict analysis. Required columns are missing: " + ", ".join([c for c in required_cols_conflict if c not in df.columns]))
-
-
-def render_workload_card(df_filtered: pd.DataFrame, activity_name: str, date_col: str, assignee_col: str):
-    st.subheader(activity_name)
     
-    if date_col not in df_filtered.columns or assignee_col not in df_filtered.columns:
-        st.warning(f"Required columns for {activity_name} analysis not found: {date_col}, {assignee_col}")
-        return
-        
-    activity_df = df_filtered.dropna(subset=[date_col, assignee_col]).copy()
-    if activity_df.empty:
-        st.info(f"No {activity_name.lower()} data available.")
-        return
-
-    assignees = sorted([name for name in activity_df[assignee_col].unique() if name and str(name).strip()])
+    # Upcoming installs without product
+    upcoming_installs = df[
+        (df['Install_Date'].notna()) & 
+        (df['Install_Date'] <= today + timedelta(days=7)) &
+        (df['Product_Rcvd_Date'].isna())
+    ]
     
-    for assignee in assignees:
-        with st.container(border=True):
-            assignee_df = activity_df[activity_df[assignee_col] == assignee]
-            
-            total_jobs = len(assignee_df)
-            total_sqft = assignee_df['Total_Job_SqFt'].sum() if 'Total_Job_SqFt' in assignee_df.columns else 0
+    if not upcoming_installs.empty:
+        with st.expander(f"⚠️ Upcoming Installs Missing Product ({len(upcoming_installs)} jobs)", expanded=True):
+            upcoming_installs['Days_Until_Install'] = (upcoming_installs['Install_Date'] - today).dt.days
+            display_cols = ['Link', 'Job_Name', 'Install_Date', 'Days_Until_Install', 'Install_Assigned_To']
+            st.dataframe(
+                upcoming_installs[display_cols].sort_values('Days_Until_Install'),
+                column_config={
+                    "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)")
+                }
+            )
 
-            col1, col2 = st.columns(2)
-            col1.metric(f"{assignee} - Total Jobs", f"{total_jobs}")
-            col2.metric(f"{assignee} - Total SqFt", f"{total_sqft:,.2f}")
-
-            with st.expander("View Weekly Breakdown"):
-                agg_cols = {'Jobs': ('Production_', 'count')}
-                if 'Total_Job_SqFt' in assignee_df.columns:
-                    agg_cols['Total_SqFt'] = ('Total_Job_SqFt', 'sum')
-                
-                weekly_summary = assignee_df.set_index(date_col).resample('W-Mon', label='left', closed='left').agg(**agg_cols).reset_index()
-                weekly_summary = weekly_summary[weekly_summary['Jobs'] > 0]
-                
-                if not weekly_summary.empty:
-                    st.dataframe(weekly_summary.rename(columns={date_col: 'Week_Start_Date'}), use_container_width=True)
-                else:
-                    st.write("No scheduled work for this person in the selected period.")
-
-def render_field_workload_tab(df: pd.DataFrame, division_name: str):
-    st.header(f"👷 {division_name} Field Workload Planner")
-    if df.empty:
-        st.warning(f"No {division_name} data available.")
-        return
+def render_workload_calendar(df: pd.DataFrame, today: pd.Timestamp):
+    """Render workload calendar view to identify light days."""
+    st.header("📅 Workload Calendar")
     
+    # Date range selector
     col1, col2 = st.columns(2)
     with col1:
-        render_workload_card(df, "Templates", "Template_Date", "Template_Assigned_To")
+        start_date = st.date_input("Start Date", value=today.date())
     with col2:
-        render_workload_card(df, "Installs", "Install_Date", "Install_Assigned_To")
-
-def render_forecasting_tab(df: pd.DataFrame, division_name: str):
-    st.header(f"🔮 {division_name} Forecasting & Trends")
-    if not SKLEARN_AVAILABLE or not MATPLOTLIB_AVAILABLE:
-        st.error("Forecasting features require scikit-learn and matplotlib. Please install them.")
-        return
-    if 'Job_Creation' not in df.columns or df['Job_Creation'].isnull().all():
-        st.warning("Job Creation date column is required for trend analysis.")
-        return
-    if df.empty or len(df) < 2:
-        st.warning(f"Not enough {division_name} data to create a forecast.")
-        return
-
-    df_trends = df.copy().set_index('Job_Creation').sort_index()
-    st.subheader("Monthly Performance Trends")
-    monthly_summary = df_trends.resample('M').agg({'Revenue': 'sum', 'Branch_Profit': 'sum', 'Job_Name': 'count'}).rename(columns={'Job_Name': 'Job_Count'})
-    if monthly_summary.empty:
-        st.info("No data in the selected range to display monthly trends.")
-        return
-    st.line_chart(monthly_summary[['Revenue', 'Branch_Profit']])
-    st.bar_chart(monthly_summary['Job_Count'])
-
-# --- Company-Wide Performance Dashboard ---
-def render_company_performance_tab(df_combined: pd.DataFrame, today: pd.Timestamp):
-    """Displays key timeline, efficiency, and workload metrics for the whole company."""
-    st.header("🏢 Company-Wide Performance")
-    if df_combined.empty:
-        st.warning("No data available to display company-wide metrics.")
-        return
-
-    df_stone = df_combined[df_combined['Product_Type'] == 'Stone/Quartz']
-    df_laminate = df_combined[df_combined['Product_Type'] == 'Laminate']
-
-    # --- 1. Timeline Metrics ---
-    st.subheader("⏱️ Timeline Metrics")
-    st.markdown("Average number of days between key process stages.")
+        end_date = st.date_input("End Date", value=(today + timedelta(days=14)).date())
     
-    timeline_metrics = {
-        "Template to Install": "Days_Template_to_Install",
-        "Ready to Fab to Product Received": "Days_RTF_to_Product_Rcvd",
-        "Template to Ready to Fab": "Days_Template_to_RTF",
-        "Product Received to Install": "Days_Product_Rcvd_to_Install",
-        "Template to Ship": "Days_Template_to_Ship",
-        "Ship to Install": "Days_Ship_to_Install",
-    }
-
-    for title, col_name in timeline_metrics.items():
-        if col_name in df_combined.columns:
-            c1, c2, c3 = st.columns(3)
-            c1.markdown(f"**{title}**")
-            avg_stone = df_stone[col_name].mean()
-            c2.metric("💎 Stone/Quartz", f"{avg_stone:.1f} days" if pd.notna(avg_stone) else "N/A")
-            avg_laminate = df_laminate[col_name].mean()
-            c3.metric("🪵 Laminate", f"{avg_laminate:.1f} days" if pd.notna(avg_laminate) else "N/A")
-
-    # --- 2. Efficiency Metrics ---
-    st.markdown("---")
-    st.subheader("⚡ Efficiency Metrics")
+    date_range = pd.date_range(start=start_date, end=end_date, freq='D')
     
-    if 'Revenue' in df_combined.columns and 'Days_Template_to_Install' in df_combined.columns:
-        c1, c2, c3 = st.columns(3)
-        c1.markdown("**Revenue per Day (Template to Install)**")
-        
-        df_stone_eff = df_stone.dropna(subset=['Revenue', 'Days_Template_to_Install'])
-        if not df_stone_eff.empty and df_stone_eff['Days_Template_to_Install'].sum() > 0:
-            rev_per_day_stone = df_stone_eff['Revenue'].sum() / df_stone_eff['Days_Template_to_Install'].sum()
-            c2.metric("💎 Stone/Quartz", f"${rev_per_day_stone:,.2f}")
-        else:
-            c2.metric("💎 Stone/Quartz", "N/A")
-
-        df_laminate_eff = df_laminate.dropna(subset=['Revenue', 'Days_Template_to_Install'])
-        if not df_laminate_eff.empty and df_laminate_eff['Days_Template_to_Install'].sum() > 0:
-            rev_per_day_laminate = df_laminate_eff['Revenue'].sum() / df_laminate_eff['Days_Template_to_Install'].sum()
-            c3.metric("🪵 Laminate", f"${rev_per_day_laminate:,.2f}")
-        else:
-            c3.metric("🪵 Laminate", "N/A")
+    # Activity type selector
+    activity_type = st.selectbox(
+        "Select Activity Type",
+        ["Templates", "Installs", "All Activities"]
+    )
+    
+    # Prepare data based on selection
+    if activity_type == "Templates":
+        activity_df = df[df['Template_Date'].notna()].copy()
+        date_col = 'Template_Date'
+        assignee_col = 'Template_Assigned_To'
+    elif activity_type == "Installs":
+        activity_df = df[df['Install_Date'].notna()].copy()
+        date_col = 'Install_Date'
+        assignee_col = 'Install_Assigned_To'
     else:
-        st.warning("Revenue or timeline data missing for Efficiency Metrics.")
-
-
-    # --- 3. Work-in-Progress (WIP) & Throughput ---
-    st.markdown("---")
-    st.subheader("🏭 Work-in-Progress (WIP) & Throughput")
-
-    c1, c2 = st.columns(2)
+        # Combine all activities
+        activities = []
+        if 'Template_Date' in df.columns:
+            temp_df = df[df['Template_Date'].notna()].copy()
+            temp_df['Activity_Type'] = 'Template'
+            temp_df['Activity_Date'] = temp_df['Template_Date']
+            temp_df['Assignee'] = temp_df.get('Template_Assigned_To', 'Unassigned')
+            activities.append(temp_df)
+        
+        if 'Install_Date' in df.columns:
+            inst_df = df[df['Install_Date'].notna()].copy()
+            inst_df['Activity_Type'] = 'Install'
+            inst_df['Activity_Date'] = inst_df['Install_Date']
+            inst_df['Assignee'] = inst_df.get('Install_Assigned_To', 'Unassigned')
+            activities.append(inst_df)
+        
+        activity_df = pd.concat(activities, ignore_index=True) if activities else pd.DataFrame()
+        date_col = 'Activity_Date'
+        assignee_col = 'Assignee'
     
-    with c1:
-        st.markdown("**Jobs Currently in Fabrication**")
-        if 'Ready_to_Fab_Date' in df_stone.columns and 'Ship_Date' in df_stone.columns:
-            fab_cond_stone = (df_stone['Ready_to_Fab_Date'].notna()) & (df_stone['Ship_Date'].isna())
-            st.metric("💎 Stone/Quartz", f"{fab_cond_stone.sum()} Jobs")
+    if activity_df.empty:
+        st.warning("No activities found in the selected range.")
+        return
+    
+    # Filter by date range
+    activity_df = activity_df[
+        (activity_df[date_col] >= pd.Timestamp(start_date)) & 
+        (activity_df[date_col] <= pd.Timestamp(end_date))
+    ]
+    
+    # Create daily summary
+    daily_summary = []
+    for date in date_range:
+        day_activities = activity_df[activity_df[date_col].dt.date == date.date()]
+        
+        if assignee_col in day_activities.columns:
+            assignee_counts = day_activities[assignee_col].value_counts()
+            for assignee, count in assignee_counts.items():
+                if assignee and str(assignee).strip():
+                    daily_summary.append({
+                        'Date': date,
+                        'Assignee': assignee,
+                        'Job_Count': count,
+                        'Total_SqFt': day_activities[day_activities[assignee_col] == assignee]['Total_Job_SqFT'].sum()
+                    })
+    
+    if daily_summary:
+        summary_df = pd.DataFrame(daily_summary)
+        
+        # Pivot for heatmap
+        pivot_df = summary_df.pivot_table(
+            index='Assignee',
+            columns=summary_df['Date'].dt.strftime('%m/%d'),
+            values='Job_Count',
+            fill_value=0
+        )
+        
+        # Create heatmap
+        fig = px.imshow(
+            pivot_df,
+            labels=dict(x="Date", y="Assignee", color="Jobs"),
+            color_continuous_scale="RdYlGn_r",
+            aspect="auto"
+        )
+        fig.update_layout(height=400)
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Show days with light workload
+        st.subheader("💡 Days with Light Workload")
+        threshold = st.slider("Jobs threshold for 'light' day", 1, 10, 3)
+        
+        light_days = []
+        for date in date_range:
+            day_total = summary_df[summary_df['Date'] == date]['Job_Count'].sum()
+            if day_total < threshold:
+                light_days.append({
+                    'Date': date.strftime('%A, %m/%d'),
+                    'Total_Jobs': day_total,
+                    'Available_Capacity': threshold - day_total
+                })
+        
+        if light_days:
+            light_df = pd.DataFrame(light_days)
+            st.dataframe(light_df, use_container_width=True)
         else:
-            st.metric("💎 Stone/Quartz", "N/A")
-            
-        if 'Ready_to_Fab_Date' in df_laminate.columns and 'Ship_Date' in df_laminate.columns:
-            fab_cond_laminate = (df_laminate['Ready_to_Fab_Date'].notna()) & (df_laminate['Ship_Date'].isna())
-            st.metric("🪵 Laminate", f"{fab_cond_laminate.sum()} Jobs")
-        else:
-            st.metric("🪵 Laminate", "N/A")
+            st.success(f"No days found with fewer than {threshold} jobs.")
 
-    with c2:
-        st.markdown("**Weekly Install Throughput**")
-        if 'Install_Date' in df_stone.columns:
-            installs_stone = df_stone.dropna(subset=['Install_Date']).set_index('Install_Date')
-            if not installs_stone.empty:
-                weekly_installs_stone = installs_stone.resample('W').size().mean()
-                st.metric("💎 Stone/Quartz", f"{weekly_installs_stone:.1f} Jobs/Week")
-            else:
-                st.metric("💎 Stone/Quartz", "N/A")
-        else:
-            st.metric("💎 Stone/Quartz", "N/A")
+def render_timeline_analytics(df: pd.DataFrame):
+    """Render timeline analytics and bottleneck identification."""
+    st.header("📊 Timeline Analytics & Bottlenecks")
+    
+    # Average timelines by stage
+    timeline_metrics = {
+        'Template → RTF': 'Days_Template_to_RTF',
+        'RTF → Product Received': 'Days_RTF_to_Product',
+        'Product → Install': 'Days_Product_to_Install'
+    }
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Average Timeline by Stage")
+        avg_times = []
+        for stage, col in timeline_metrics.items():
+            if col in df.columns:
+                avg_time = df[col].mean()
+                if pd.notna(avg_time):
+                    avg_times.append({
+                        'Stage': stage,
+                        'Avg_Days': round(avg_time, 1),
+                        'Target_Days': TIMELINE_THRESHOLDS.get(col.lower(), 'N/A')
+                    })
+        
+        if avg_times:
+            avg_df = pd.DataFrame(avg_times)
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                x=avg_df['Stage'],
+                y=avg_df['Avg_Days'],
+                name='Actual',
+                marker_color='lightblue'
+            ))
+            fig.update_layout(
+                title="Average Days by Stage",
+                yaxis_title="Days",
+                showlegend=False
+            )
+            st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        st.subheader("Current Bottlenecks")
+        
+        # Count jobs in each stage
+        stage_counts = df['Current_Stage'].value_counts()
+        
+        # Identify bottlenecks (stages with unusually high counts)
+        if not stage_counts.empty:
+            fig = px.pie(
+                values=stage_counts.values,
+                names=stage_counts.index,
+                title="Jobs by Current Stage"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+    
+    # Timeline trend analysis
+    st.subheader("📈 Timeline Trends (Last 30 Days)")
+    recent_jobs = df[df['Install_Date'] >= today - timedelta(days=30)]
+    
+    if not recent_jobs.empty and 'Days_Template_to_Install' in recent_jobs.columns:
+        recent_jobs = recent_jobs.dropna(subset=['Days_Template_to_Install'])
+        if not recent_jobs.empty:
+            fig = px.scatter(
+                recent_jobs,
+                x='Install_Date',
+                y='Days_Template_to_Install',
+                color='Salesperson',
+                size='Total_Job_SqFT',
+                hover_data=['Job_Name', 'Material_Brand'],
+                title="Template to Install Timeline Trend"
+            )
+            fig.add_hline(
+                y=TIMELINE_THRESHOLDS['template_to_install'],
+                line_dash="dash",
+                line_color="red",
+                annotation_text="Target"
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
-        if 'Install_Date' in df_laminate.columns:
-            installs_laminate = df_laminate.dropna(subset=['Install_Date']).set_index('Install_Date')
-            if not installs_laminate.empty:
-                weekly_installs_laminate = installs_laminate.resample('W').size().mean()
-                st.metric("🪵 Laminate", f"{weekly_installs_laminate:.1f} Jobs/Week")
-            else:
-                st.metric("🪵 Laminate", "N/A")
-        else:
-            st.metric("🪵 Laminate", "N/A")
+def render_quick_actions(df: pd.DataFrame):
+    """Render quick action items and recommendations."""
+    st.header("⚡ Quick Actions & Recommendations")
+    
+    # Generate actionable insights
+    actions = []
+    
+    # Check for jobs needing immediate attention
+    urgent_jobs = df[
+        (df['Days_Behind'] > 3) | 
+        (df['Risk_Score'] > 40)
+    ]
+    
+    if not urgent_jobs.empty:
+        actions.append({
+            'Priority': '🔴 HIGH',
+            'Action': f"Contact customers for {len(urgent_jobs)} high-risk jobs",
+            'Details': f"Jobs more than 3 days behind or with risk score > 40"
+        })
+    
+    # Check for resource imbalances
+    if 'Install_Assigned_To' in df.columns:
+        upcoming_installs = df[
+            (df['Install_Date'] >= today) & 
+            (df['Install_Date'] <= today + timedelta(days=7))
+        ]
+        if not upcoming_installs.empty:
+            installer_loads = upcoming_installs['Install_Assigned_To'].value_counts()
+            if len(installer_loads) > 0:
+                max_load = installer_loads.max()
+                min_load = installer_loads.min()
+                if max_load > min_load * 2:
+                    actions.append({
+                        'Priority': '🟡 MEDIUM',
+                        'Action': "Rebalance installer workload",
+                        'Details': f"Workload varies from {min_load} to {max_load} jobs per installer"
+                    })
+    
+    # Check for scheduling opportunities
+    light_days = []
+    for i in range(1, 8):
+        future_date = today + timedelta(days=i)
+        day_installs = df[df['Install_Date'].dt.date == future_date.date()]
+        if len(day_installs) < 3:
+            light_days.append(future_date.strftime('%A %m/%d'))
+    
+    if light_days:
+        actions.append({
+            'Priority': '🟢 LOW',
+            'Action': "Schedule additional jobs on light days",
+            'Details': f"Light days: {', '.join(light_days[:3])}"
+        })
+    
+    # Display actions
+    if actions:
+        actions_df = pd.DataFrame(actions)
+        st.dataframe(
+            actions_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Priority": st.column_config.TextColumn("Priority", width="small"),
+                "Action": st.column_config.TextColumn("Action", width="medium"),
+                "Details": st.column_config.TextColumn("Details", width="large")
+            }
+        )
+    else:
+        st.success("✅ No urgent actions required at this time!")
 
-
-# --- Main Application Logic ---
-
+# --- Main Application ---
 def main():
-    st.title("💰 Enhanced Job Profitability Dashboard")
-    st.markdown("An interactive dashboard to analyze job data and drive profitability, separated by division.")
+    st.title("⚡ Daily Operations Dashboard")
+    st.markdown("Real-time insights for maximizing efficiency and catching issues early")
+    
+    # Sidebar configuration
     st.sidebar.header("⚙️ Configuration")
     
+    # Load credentials
     creds = None
     if "google_creds_json" in st.secrets:
         creds = json.loads(st.secrets["google_creds_json"])
@@ -625,58 +537,72 @@ def main():
         uploaded_file = st.sidebar.file_uploader("Upload Google Service Account JSON", type="json")
         if uploaded_file:
             creds = json.load(uploaded_file)
+    
     if not creds:
         st.sidebar.error("Please provide Google credentials to load data.")
         st.stop()
-
-    today_date = st.sidebar.date_input(
-        "Select 'Today's' Date for Calculations",
-        value=datetime.now().date(),
-        help="This date is used for 'Days Behind' calculations."
-    )
-    today_dt = pd.to_datetime(today_date)
     
-    install_cost_sqft = st.sidebar.number_input(
-        "Install Cost per SqFt ($)",
-        min_value=0.0,
-        value=15.0,
-        step=0.50,
-        help="Adjust the assumed cost of installation per square foot."
-    )
-
+    # Timeline threshold customization
+    with st.sidebar.expander("⏱️ Timeline Thresholds"):
+        for key, value in TIMELINE_THRESHOLDS.items():
+            TIMELINE_THRESHOLDS[key] = st.number_input(
+                f"{key.replace('_', ' ').title()} (days)",
+                value=value,
+                min_value=1,
+                max_value=30
+            )
+    
+    today = pd.Timestamp.now()
+    
+    # Load data
     try:
-        df_stone, df_laminate, df_combined = load_and_process_data(creds, today_dt, install_cost_sqft)
+        with st.spinner("Loading data..."):
+            df = load_and_process_data(creds, today)
     except Exception as e:
-        st.error(f"Failed to load or process data. Please ensure your Google Sheet format matches the script's expectations. Error: {e}")
-        st.exception(e)
+        st.error(f"Failed to load data: {e}")
         st.stop()
-
-    main_tabs = st.tabs(["🏢 Company-Wide Performance", "💎 Stone/Quartz Dashboard", "🪵 Laminate Dashboard"])
-
-    with main_tabs[0]:
-        render_company_performance_tab(df_combined, today_dt)
-
-    with main_tabs[1]:
-        stone_tabs = ["📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "🔬 Rework & Variance", "🚧 Pipeline & Issues", "👷 Field Workload", "🔮 Forecasting"]
-        stone_sub_tabs = st.tabs(stone_tabs)
-        with stone_sub_tabs[0]: render_overview_tab(df_stone, "Stone/Quartz")
-        with stone_sub_tabs[1]: render_detailed_data_tab(df_stone, "Stone/Quartz")
-        with stone_sub_tabs[2]: render_profit_drivers_tab(df_stone, "Stone/Quartz")
-        with stone_sub_tabs[3]: render_rework_tab(df_stone, "Stone/Quartz")
-        with stone_sub_tabs[4]: render_pipeline_issues_tab(df_stone, "Stone/Quartz", today_dt)
-        with stone_sub_tabs[5]: render_field_workload_tab(df_stone, "Stone/Quartz")
-        with stone_sub_tabs[6]: render_forecasting_tab(df_stone, "Stone/Quartz")
-
-    with main_tabs[2]:
-        laminate_tabs = ["📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "🔬 Rework & Variance", "🚧 Pipeline & Issues", "👷 Field Workload", "🔮 Forecasting"]
-        laminate_sub_tabs = st.tabs(laminate_tabs)
-        with laminate_sub_tabs[0]: render_overview_tab(df_laminate, "Laminate")
-        with laminate_sub_tabs[1]: render_detailed_data_tab(df_laminate, "Laminate")
-        with laminate_sub_tabs[2]: render_profit_drivers_tab(df_laminate, "Laminate")
-        with laminate_sub_tabs[3]: render_rework_tab(df_laminate, "Laminate")
-        with laminate_sub_tabs[4]: render_pipeline_issues_tab(df_laminate, "Laminate", today_dt)
-        with laminate_sub_tabs[5]: render_field_workload_tab(df_laminate, "Laminate")
-        with laminate_sub_tabs[6]: render_forecasting_tab(df_laminate, "Laminate")
+    
+    # Quick metrics at the top
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        active_jobs = df[~df['Current_Stage'].isin(['Completed'])]
+        st.metric("Active Jobs", len(active_jobs))
+    with col2:
+        avg_timeline = df['Days_Template_to_Install'].mean()
+        st.metric("Avg Timeline", f"{avg_timeline:.1f} days" if pd.notna(avg_timeline) else "N/A")
+    with col3:
+        high_risk = df[df['Risk_Score'] >= 30]
+        st.metric("High Risk Jobs", len(high_risk), delta=f"{len(high_risk)/len(active_jobs)*100:.0f}%")
+    with col4:
+        today_activities = df[
+            (df['Template_Date'].dt.date == today.date()) | 
+            (df['Install_Date'].dt.date == today.date())
+        ]
+        st.metric("Today's Activities", len(today_activities))
+    
+    # Main content tabs
+    tabs = st.tabs([
+        "🚨 Daily Priorities",
+        "📅 Workload Calendar", 
+        "📊 Timeline Analytics",
+        "⚡ Quick Actions"
+    ])
+    
+    with tabs[0]:
+        render_daily_priorities(df, today)
+    
+    with tabs[1]:
+        render_workload_calendar(df, today)
+    
+    with tabs[2]:
+        render_timeline_analytics(df)
+    
+    with tabs[3]:
+        render_quick_actions(df)
+    
+    # Auto-refresh option
+    if st.sidebar.checkbox("Auto-refresh (5 min)", value=False):
+        st.rerun()
 
 if __name__ == "__main__":
     main()
