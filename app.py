@@ -331,33 +331,66 @@ def render_workload_calendar(df: pd.DataFrame, today: pd.Timestamp):
     for date in date_range:
         day_activities = activity_df[activity_df[date_col].dt.date == date.date()]
         
-        if assignee_col in day_activities.columns:
+        if not day_activities.empty and assignee_col in day_activities.columns:
             assignee_counts = day_activities[assignee_col].value_counts()
             for assignee, count in assignee_counts.items():
                 if assignee and str(assignee).strip():
+                    sqft_col = 'Total_Job_SqFT' if 'Total_Job_SqFT' in day_activities.columns else None
+                    total_sqft = 0
+                    if sqft_col:
+                        assignee_jobs = day_activities[day_activities[assignee_col] == assignee]
+                        total_sqft = assignee_jobs[sqft_col].sum() if not assignee_jobs.empty else 0
+                    
                     daily_summary.append({
                         'Date': date,
-                        'Assignee': assignee,
-                        'Job_Count': count,
-                        'Total_SqFt': day_activities[day_activities[assignee_col] == assignee]['Total_Job_SqFT'].sum()
+                        'Assignee': str(assignee),
+                        'Job_Count': int(count),
+                        'Total_SqFt': float(total_sqft)
                     })
+        elif not day_activities.empty:
+            # If no assignee column, just count total jobs for the day
+            sqft_col = 'Total_Job_SqFT' if 'Total_Job_SqFT' in day_activities.columns else None
+            total_sqft = day_activities[sqft_col].sum() if sqft_col else 0
+            
+            daily_summary.append({
+                'Date': date,
+                'Assignee': 'Unassigned',
+                'Job_Count': len(day_activities),
+                'Total_SqFt': float(total_sqft)
+            })
     
     if daily_summary:
         summary_df = pd.DataFrame(daily_summary)
         
         # Create a simple heatmap using matplotlib
-        pivot_df = summary_df.pivot_table(
-            index='Assignee',
-            columns=summary_df['Date'].dt.strftime('%m/%d'),
-            values='Job_Count',
-            fill_value=0
-        )
-        
-        # Display heatmap
-        fig, ax = plt.subplots(figsize=(12, 6))
-        sns.heatmap(pivot_df, annot=True, fmt='d', cmap='YlOrRd', ax=ax)
-        ax.set_title('Jobs by Assignee and Date')
-        st.pyplot(fig)
+        try:
+            pivot_df = summary_df.pivot_table(
+                index='Assignee',
+                columns=summary_df['Date'].dt.strftime('%m/%d'),
+                values='Job_Count',
+                fill_value=0,
+                aggfunc='sum'  # Explicitly set aggregation function
+            )
+            
+            # Convert to integers to avoid formatting issues
+            pivot_df = pivot_df.fillna(0).astype(int)
+            
+            # Only create heatmap if we have data
+            if not pivot_df.empty:
+                # Display heatmap
+                fig, ax = plt.subplots(figsize=(12, 6))
+                sns.heatmap(pivot_df, annot=True, fmt='d', cmap='YlOrRd', ax=ax, cbar_kws={'label': 'Number of Jobs'})
+                ax.set_title('Jobs by Assignee and Date')
+                ax.set_xlabel('Date')
+                ax.set_ylabel('Assignee')
+                plt.tight_layout()
+                st.pyplot(fig)
+                plt.close()
+            else:
+                st.info("No data available for heatmap visualization.")
+        except Exception as e:
+            st.warning(f"Unable to create heatmap visualization. Showing data in table format instead.")
+            st.dataframe(summary_df)
         
         # Show days with light workload
         st.subheader("💡 Days with Light Workload")
@@ -365,13 +398,13 @@ def render_workload_calendar(df: pd.DataFrame, today: pd.Timestamp):
         
         light_days = []
         for date in date_range:
-            day_df = summary_df[summary_df['Date'] == date]
+            day_df = summary_df[summary_df['Date'] == date] if 'summary_df' in locals() else pd.DataFrame()
             day_total = day_df['Job_Count'].sum() if not day_df.empty else 0
             if day_total < threshold:
                 light_days.append({
                     'Date': date.strftime('%A, %m/%d'),
-                    'Total_Jobs': day_total,
-                    'Available_Capacity': threshold - day_total
+                    'Total_Jobs': int(day_total),
+                    'Available_Capacity': int(threshold - day_total)
                 })
         
         if light_days:
@@ -383,6 +416,8 @@ def render_workload_calendar(df: pd.DataFrame, today: pd.Timestamp):
 def render_timeline_analytics(df: pd.DataFrame):
     """Render timeline analytics and bottleneck identification."""
     st.header("📊 Timeline Analytics & Bottlenecks")
+    
+    today = pd.Timestamp.now()
     
     # Average timelines by stage
     timeline_metrics = {
@@ -439,6 +474,7 @@ def render_timeline_analytics(df: pd.DataFrame):
                 ax.set_title('Template to Install Timeline Trend')
                 ax.legend()
                 st.pyplot(fig)
+                plt.close()
 
 def render_quick_actions(df: pd.DataFrame):
     """Render quick action items and recommendations."""
@@ -614,5 +650,4 @@ def main():
         st.rerun()
 
 if __name__ == "__main__":
-    today = pd.Timestamp.now()
     main()
