@@ -1,7 +1,8 @@
 streamlit
 pandas
+numpy
 gspread
 google-auth
 google-auth-oauthlib
-scikit-learn
 matplotlib
+seaborn
