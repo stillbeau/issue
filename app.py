@@ -11,8 +11,8 @@ from google.oauth2.service_account import Credentials
 import json
 import re
 from datetime import datetime, timedelta
-import plotly.express as px
-import plotly.graph_objects as go
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 # --- Page Configuration ---
 st.set_page_config(layout="wide", page_title="Daily Operations Dashboard", page_icon="⚡")
@@ -151,6 +151,12 @@ def load_and_process_data(creds_dict: dict, today: pd.Timestamp):
         np.nan
     )
     
+    df['Days_Template_to_Install'] = np.where(
+        (df['Template_Date'].notna() & df['Install_Date'].notna()),
+        (df['Install_Date'] - df['Template_Date']).dt.days,
+        np.nan
+    )
+    
     # Parse material info
     if 'Job_Material' in df.columns:
         df[['Material_Brand', 'Material_Color']] = df['Job_Material'].apply(
@@ -212,11 +218,13 @@ def render_daily_priorities(df: pd.DataFrame, today: pd.Timestamp):
     if not missing_activity.empty:
         with st.expander(f"🚨 Jobs Missing Next Activity ({len(missing_activity)} jobs)", expanded=True):
             display_cols = ['Link', 'Job_Name', 'Current_Stage', 'Days_In_Current_Stage', 'Salesperson']
+            display_cols = [col for col in display_cols if col in missing_activity.columns]
             st.dataframe(
                 missing_activity[display_cols].sort_values('Days_In_Current_Stage', ascending=False),
                 column_config={
                     "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)")
-                }
+                },
+                use_container_width=True
             )
     
     # Jobs stuck between stages
@@ -230,11 +238,13 @@ def render_daily_priorities(df: pd.DataFrame, today: pd.Timestamp):
         with st.expander(f"📋 Stuck: Template → Ready to Fab ({len(template_to_rtf_stuck)} jobs)"):
             template_to_rtf_stuck['Days_Since_Template'] = (today - template_to_rtf_stuck['Template_Date']).dt.days
             display_cols = ['Link', 'Job_Name', 'Template_Date', 'Days_Since_Template', 'Salesperson']
+            display_cols = [col for col in display_cols if col in template_to_rtf_stuck.columns]
             st.dataframe(
                 template_to_rtf_stuck[display_cols].sort_values('Days_Since_Template', ascending=False),
                 column_config={
                     "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)")
-                }
+                },
+                use_container_width=True
             )
     
     # Upcoming installs without product
@@ -248,11 +258,13 @@ def render_daily_priorities(df: pd.DataFrame, today: pd.Timestamp):
         with st.expander(f"⚠️ Upcoming Installs Missing Product ({len(upcoming_installs)} jobs)", expanded=True):
             upcoming_installs['Days_Until_Install'] = (upcoming_installs['Install_Date'] - today).dt.days
             display_cols = ['Link', 'Job_Name', 'Install_Date', 'Days_Until_Install', 'Install_Assigned_To']
+            display_cols = [col for col in display_cols if col in upcoming_installs.columns]
             st.dataframe(
                 upcoming_installs[display_cols].sort_values('Days_Until_Install'),
                 column_config={
                     "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)")
-                }
+                },
+                use_container_width=True
             )
 
 def render_workload_calendar(df: pd.DataFrame, today: pd.Timestamp):
@@ -333,7 +345,7 @@ def render_workload_calendar(df: pd.DataFrame, today: pd.Timestamp):
     if daily_summary:
         summary_df = pd.DataFrame(daily_summary)
         
-        # Pivot for heatmap
+        # Create a simple heatmap using matplotlib
         pivot_df = summary_df.pivot_table(
             index='Assignee',
             columns=summary_df['Date'].dt.strftime('%m/%d'),
@@ -341,15 +353,11 @@ def render_workload_calendar(df: pd.DataFrame, today: pd.Timestamp):
             fill_value=0
         )
         
-        # Create heatmap
-        fig = px.imshow(
-            pivot_df,
-            labels=dict(x="Date", y="Assignee", color="Jobs"),
-            color_continuous_scale="RdYlGn_r",
-            aspect="auto"
-        )
-        fig.update_layout(height=400)
-        st.plotly_chart(fig, use_container_width=True)
+        # Display heatmap
+        fig, ax = plt.subplots(figsize=(12, 6))
+        sns.heatmap(pivot_df, annot=True, fmt='d', cmap='YlOrRd', ax=ax)
+        ax.set_title('Jobs by Assignee and Date')
+        st.pyplot(fig)
         
         # Show days with light workload
         st.subheader("💡 Days with Light Workload")
@@ -357,7 +365,8 @@ def render_workload_calendar(df: pd.DataFrame, today: pd.Timestamp):
         
         light_days = []
         for date in date_range:
-            day_total = summary_df[summary_df['Date'] == date]['Job_Count'].sum()
+            day_df = summary_df[summary_df['Date'] == date]
+            day_total = day_df['Job_Count'].sum() if not day_df.empty else 0
             if day_total < threshold:
                 light_days.append({
                     'Date': date.strftime('%A, %m/%d'),
@@ -393,25 +402,12 @@ def render_timeline_analytics(df: pd.DataFrame):
                 if pd.notna(avg_time):
                     avg_times.append({
                         'Stage': stage,
-                        'Avg_Days': round(avg_time, 1),
-                        'Target_Days': TIMELINE_THRESHOLDS.get(col.lower(), 'N/A')
+                        'Avg_Days': round(avg_time, 1)
                     })
         
         if avg_times:
             avg_df = pd.DataFrame(avg_times)
-            fig = go.Figure()
-            fig.add_trace(go.Bar(
-                x=avg_df['Stage'],
-                y=avg_df['Avg_Days'],
-                name='Actual',
-                marker_color='lightblue'
-            ))
-            fig.update_layout(
-                title="Average Days by Stage",
-                yaxis_title="Days",
-                showlegend=False
-            )
-            st.plotly_chart(fig, use_container_width=True)
+            st.bar_chart(avg_df.set_index('Stage')['Avg_Days'])
     
     with col2:
         st.subheader("Current Bottlenecks")
@@ -419,14 +415,9 @@ def render_timeline_analytics(df: pd.DataFrame):
         # Count jobs in each stage
         stage_counts = df['Current_Stage'].value_counts()
         
-        # Identify bottlenecks (stages with unusually high counts)
+        # Display as a bar chart
         if not stage_counts.empty:
-            fig = px.pie(
-                values=stage_counts.values,
-                names=stage_counts.index,
-                title="Jobs by Current Stage"
-            )
-            st.plotly_chart(fig, use_container_width=True)
+            st.bar_chart(stage_counts)
     
     # Timeline trend analysis
     st.subheader("📈 Timeline Trends (Last 30 Days)")
@@ -435,26 +426,25 @@ def render_timeline_analytics(df: pd.DataFrame):
     if not recent_jobs.empty and 'Days_Template_to_Install' in recent_jobs.columns:
         recent_jobs = recent_jobs.dropna(subset=['Days_Template_to_Install'])
         if not recent_jobs.empty:
-            fig = px.scatter(
-                recent_jobs,
-                x='Install_Date',
-                y='Days_Template_to_Install',
-                color='Salesperson',
-                size='Total_Job_SqFT',
-                hover_data=['Job_Name', 'Material_Brand'],
-                title="Template to Install Timeline Trend"
-            )
-            fig.add_hline(
-                y=TIMELINE_THRESHOLDS['template_to_install'],
-                line_dash="dash",
-                line_color="red",
-                annotation_text="Target"
-            )
-            st.plotly_chart(fig, use_container_width=True)
+            # Group by week and calculate average
+            recent_jobs['Week'] = recent_jobs['Install_Date'].dt.to_period('W')
+            weekly_avg = recent_jobs.groupby('Week')['Days_Template_to_Install'].mean()
+            
+            if not weekly_avg.empty:
+                fig, ax = plt.subplots(figsize=(10, 6))
+                weekly_avg.plot(kind='line', marker='o', ax=ax)
+                ax.axhline(y=TIMELINE_THRESHOLDS['template_to_install'], color='r', linestyle='--', label='Target')
+                ax.set_xlabel('Week')
+                ax.set_ylabel('Average Days')
+                ax.set_title('Template to Install Timeline Trend')
+                ax.legend()
+                st.pyplot(fig)
 
 def render_quick_actions(df: pd.DataFrame):
     """Render quick action items and recommendations."""
     st.header("⚡ Quick Actions & Recommendations")
+    
+    today = pd.Timestamp.now()
     
     # Generate actionable insights
     actions = []
@@ -520,6 +510,25 @@ def render_quick_actions(df: pd.DataFrame):
         )
     else:
         st.success("✅ No urgent actions required at this time!")
+    
+    # Additional insights
+    st.subheader("📊 Key Performance Indicators")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        avg_cycle_time = df['Days_Template_to_Install'].mean()
+        if pd.notna(avg_cycle_time):
+            st.metric("Avg Cycle Time", f"{avg_cycle_time:.1f} days")
+    
+    with col2:
+        on_time_jobs = df[df['Days_Behind'] <= 0]
+        on_time_pct = len(on_time_jobs) / len(df) * 100 if len(df) > 0 else 0
+        st.metric("On-Time Performance", f"{on_time_pct:.1f}%")
+    
+    with col3:
+        jobs_with_rework = df[df['Has_Rework'] == True]
+        rework_pct = len(jobs_with_rework) / len(df) * 100 if len(df) > 0 else 0
+        st.metric("Rework Rate", f"{rework_pct:.1f}%")
 
 # --- Main Application ---
 def main():
@@ -572,7 +581,7 @@ def main():
         st.metric("Avg Timeline", f"{avg_timeline:.1f} days" if pd.notna(avg_timeline) else "N/A")
     with col3:
         high_risk = df[df['Risk_Score'] >= 30]
-        st.metric("High Risk Jobs", len(high_risk), delta=f"{len(high_risk)/len(active_jobs)*100:.0f}%")
+        st.metric("High Risk Jobs", len(high_risk), delta=f"{len(high_risk)/len(active_jobs)*100:.0f}%" if len(active_jobs) > 0 else None)
     with col4:
         today_activities = df[
             (df['Template_Date'].dt.date == today.date()) | 
@@ -605,4 +614,5 @@ def main():
         st.rerun()
 
 if __name__ == "__main__":
+    today = pd.Timestamp.now()
     main()
