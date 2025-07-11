@@ -229,7 +229,7 @@ def load_and_process_data(creds_dict: dict, today: pd.Timestamp, install_cost: f
     df['Risk_Score'] = df.apply(calculate_risk_score, axis=1)
     df[['Delay_Probability', 'Risk_Factors']] = df.apply(lambda row: pd.Series(calculate_delay_probability(row)), axis=1)
 
-    # 6. Financial Metrics Processing
+    # 6. Financial Metrics Processing & Splitting by Division
     df_stone = df[df['Division_Type'] == 'Stone/Quartz'].copy()
     df_laminate = df[df['Division_Type'] == 'Laminate'].copy()
     
@@ -238,12 +238,15 @@ def load_and_process_data(creds_dict: dict, today: pd.Timestamp, install_cost: f
 
     df_combined = pd.concat([df_stone_processed, df_laminate_processed], ignore_index=True)
 
-    return df_combined
+    # Return all three dataframes for efficiency
+    return df_stone_processed, df_laminate_processed, df_combined
 
 # --- UI Rendering Functions for OPERATIONAL PERFORMANCE ---
 
 def render_daily_priorities(df: pd.DataFrame, today: pd.Timestamp):
     st.header("🚨 Daily Priorities & Warnings")
+    
+    # Metrics at the top respect the main filters applied to the incoming dataframe `df`
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("🔴 High Risk Jobs", len(df[df['Risk_Score'] >= 30]))
@@ -252,13 +255,28 @@ def render_daily_priorities(df: pd.DataFrame, today: pd.Timestamp):
     with col3:
         st.metric("🚧 Stuck Jobs", len(df[df['Days_In_Current_Stage'] > TIMELINE_THRESHOLDS['days_in_stage_warning']]))
     with col4:
-        stale_jobs = df[df['Days_Since_Last_Activity'] > TIMELINE_THRESHOLDS['stale_job_threshold']]
-        st.metric("💨 Stale Jobs", len(stale_jobs))
+        # For the metric, also only count active stale jobs from the filtered df
+        stale_jobs_metric = df[(df['Days_Since_Last_Activity'] > TIMELINE_THRESHOLDS['stale_job_threshold']) & (df['Current_Stage'] != 'Completed')]
+        st.metric("💨 Stale Jobs", len(stale_jobs_metric))
 
     st.markdown("---")
     st.subheader("⚡ Critical Issues Requiring Immediate Attention")
+    st.caption("This section only shows active jobs from the currently filtered dataset.")
+
+    # Define dataframes for each critical issue, ensuring they are active jobs
+    # by filtering the incoming dataframe `df`.
     
+    # This is already filtered for active stages by its definition, so it's fine.
     missing_activity = df[(df['Next_Sched_Activity'].isna()) & (df['Current_Stage'].isin(['Post-Template', 'In Fabrication', 'Product Received']))]
+    
+    # Explicitly filter for active jobs for the remaining categories
+    stale_jobs = df[(df['Days_Since_Last_Activity'] > TIMELINE_THRESHOLDS['stale_job_threshold']) & (df['Current_Stage'] != 'Completed')]
+    
+    template_to_rtf_stuck = df[(df['Template_Date'].notna()) & (df['Ready_to_Fab_Date'].isna()) & ((today - df['Template_Date']).dt.days > TIMELINE_THRESHOLDS['template_to_rtf']) & (df['Current_Stage'] != 'Completed')]
+    
+    upcoming_installs = df[(df['Install_Date'].notna()) & (df['Install_Date'] <= today + timedelta(days=7)) & (df['Product_Rcvd_Date'].isna()) & (df['Current_Stage'] != 'Completed')]
+
+    # Render expanders using the filtered dataframes
     if not missing_activity.empty:
         with st.expander(f"🚨 Jobs Missing Next Activity ({len(missing_activity)} jobs)", expanded=True):
             display_cols = ['Link', 'Job_Name', 'Current_Stage', 'Days_In_Current_Stage', 'Salesperson']
@@ -273,20 +291,20 @@ def render_daily_priorities(df: pd.DataFrame, today: pd.Timestamp):
             st.dataframe(stale_jobs_display[display_cols].sort_values('Days_Since_Last_Activity', ascending=False),
                          column_config={"Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)")}, use_container_width=True)
 
-    template_to_rtf_stuck = df[(df['Template_Date'].notna()) & (df['Ready_to_Fab_Date'].isna()) & ((today - df['Template_Date']).dt.days > TIMELINE_THRESHOLDS['template_to_rtf'])]
     if not template_to_rtf_stuck.empty:
         with st.expander(f"📋 Stuck: Template → Ready to Fab ({len(template_to_rtf_stuck)} jobs)"):
-            template_to_rtf_stuck['Days_Since_Template'] = (today - template_to_rtf_stuck['Template_Date']).dt.days
+            template_to_rtf_stuck_display = template_to_rtf_stuck.copy()
+            template_to_rtf_stuck_display['Days_Since_Template'] = (today - template_to_rtf_stuck_display['Template_Date']).dt.days
             display_cols = ['Link', 'Job_Name', 'Template_Date', 'Days_Since_Template', 'Salesperson']
-            st.dataframe(template_to_rtf_stuck[display_cols].sort_values('Days_Since_Template', ascending=False),
+            st.dataframe(template_to_rtf_stuck_display[display_cols].sort_values('Days_Since_Template', ascending=False),
                          column_config={"Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)")}, use_container_width=True)
 
-    upcoming_installs = df[(df['Install_Date'].notna()) & (df['Install_Date'] <= today + timedelta(days=7)) & (df['Product_Rcvd_Date'].isna())]
     if not upcoming_installs.empty:
         with st.expander(f"⚠️ Upcoming Installs Missing Product ({len(upcoming_installs)} jobs)", expanded=True):
-            upcoming_installs['Days_Until_Install'] = (upcoming_installs['Install_Date'] - today).dt.days
+            upcoming_installs_display = upcoming_installs.copy()
+            upcoming_installs_display['Days_Until_Install'] = (upcoming_installs_display['Install_Date'] - today).dt.days
             display_cols = ['Link', 'Job_Name', 'Install_Date', 'Days_Until_Install', 'Install_Assigned_To']
-            st.dataframe(upcoming_installs[display_cols].sort_values('Days_Until_Install'),
+            st.dataframe(upcoming_installs_display[display_cols].sort_values('Days_Until_Install'),
                          column_config={"Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)")}, use_container_width=True)
 
 def render_workload_calendar(df: pd.DataFrame, today: pd.Timestamp):
@@ -440,7 +458,7 @@ def render_predictive_analytics(df: pd.DataFrame):
         active_jobs['Risk_Category'] = pd.cut(active_jobs['Delay_Probability'], bins=risk_bins, labels=risk_labels, right=False)
         risk_dist = active_jobs['Risk_Category'].value_counts()
         for category in risk_labels:
-            st.metric(f"{'🔴' if 'Critical' in category else '🟡' if 'High' in category else '🟠' if 'Medium' in category else '�'} {category}", risk_dist.get(category, 0))
+            st.metric(f"{'🔴' if 'Critical' in category else '🟡' if 'High' in category else '🟠' if 'Medium' in category else '🟢'} {category}", risk_dist.get(category, 0))
 
 def render_performance_scorecards(df: pd.DataFrame):
     st.header("🎯 Performance Scorecards")
@@ -864,7 +882,8 @@ def main():
     # --- Data Loading ---
     try:
         with st.spinner("Loading and processing all job data..."):
-            df_full = load_and_process_data(creds, today_dt, install_cost_sqft)
+            # The data loading function now returns all three dataframes
+            df_stone, df_laminate, df_full = load_and_process_data(creds, today_dt, install_cost_sqft)
     except Exception as e:
         st.error(f"Failed to load or process data. Error: {e}")
         st.exception(e)
@@ -918,9 +937,7 @@ def main():
         st.header("Profitability Analysis Dashboard")
         st.markdown("Analyze financial performance, costs, and profit drivers by division.")
 
-        df_stone = df_full[df_full['Division_Type'] == 'Stone/Quartz']
-        df_laminate = df_full[df_full['Division_Type'] == 'Laminate']
-
+        # Use the pre-processed dataframes directly
         profit_sub_tabs = st.tabs(["💎 Stone/Quartz", "🪵 Laminate"])
         
         with profit_sub_tabs[0]:
@@ -946,4 +963,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-�
