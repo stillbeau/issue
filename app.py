@@ -258,7 +258,6 @@ def render_daily_priorities(df: pd.DataFrame, today: pd.Timestamp):
                 use_container_width=True
             )
 
-# (The rest of your rendering functions: render_workload_calendar, render_timeline_analytics, etc. remain the same)
 def render_workload_calendar(df: pd.DataFrame, today: pd.Timestamp):
     """Render workload calendar view to identify light days."""
     st.header("📅 Workload Calendar")
@@ -381,7 +380,6 @@ def render_timeline_analytics(df: pd.DataFrame):
         else:
             st.success(f"✅ No jobs stuck > {stuck_threshold} days")
             
-# (The rest of your original rendering functions remain here)
 def calculate_delay_probability(row):
     """Calculate probability of delay based on multiple factors."""
     risk_score = 0
@@ -491,6 +489,74 @@ def render_quick_actions(df: pd.DataFrame):
     st.header("⚡ Quick Actions & Recommendations")
     # This function remains as is, providing high-level summaries and actions.
 
+def render_historical_trends(df: pd.DataFrame):
+    """Render historical trend line graphs."""
+    st.header("📈 Historical Trends")
+    st.markdown("Analyze performance and quality trends over time. This view uses all data, ignoring sidebar filters.")
+
+    # Ensure date columns are in datetime format
+    df['Job_Creation'] = pd.to_datetime(df['Job_Creation'], errors='coerce')
+    df['Install_Date'] = pd.to_datetime(df['Install_Date'], errors='coerce')
+    df.dropna(subset=['Job_Creation', 'Install_Date'], how='all', inplace=True)
+
+    # Set a common date range for all charts
+    min_date = df[['Job_Creation', 'Install_Date']].min().min()
+    max_date = df[['Job_Creation', 'Install_Date']].max().max()
+
+    if pd.isna(min_date) or pd.isna(max_date):
+        st.warning("Not enough date information to build historical trends.")
+        return
+
+    # --- 1. Job Throughput (Created vs. Completed) ---
+    st.subheader("Job Throughput (Monthly)")
+    
+    # Resample data by month
+    created = df.set_index('Job_Creation').resample('M').size().rename('Jobs Created')
+    completed = df[df['Current_Stage'] == 'Completed'].set_index('Install_Date').resample('M').size().rename('Jobs Completed')
+    
+    throughput_df = pd.concat([created, completed], axis=1).fillna(0).astype(int)
+    throughput_df.index = throughput_df.index.strftime('%Y-%m')
+    
+    st.line_chart(throughput_df)
+    st.caption("Compares the number of new jobs created vs. jobs completed each month. Helps identify growing or shrinking backlogs.")
+
+    st.markdown("---")
+
+    # --- 2. Average Job Cycle Time ---
+    st.subheader("Average Job Cycle Time Trend (Template to Install)")
+    
+    completed_jobs = df[df['Days_Template_to_Install'].notna()].copy()
+    if not completed_jobs.empty:
+        cycle_time_trend = completed_jobs.set_index('Install_Date')['Days_Template_to_Install'].resample('M').mean().fillna(0)
+        cycle_time_trend.index = cycle_time_trend.index.strftime('%Y-%m')
+        st.line_chart(cycle_time_trend)
+        st.caption("Tracks the average number of days from template to installation. A key measure of overall efficiency.")
+    else:
+        st.info("No completed jobs with both Template and Install dates to analyze cycle time.")
+
+    st.markdown("---")
+    
+    # --- 3. Rework Rate Trend ---
+    st.subheader("Rework Rate Trend (%)")
+    
+    rework_jobs = df[df['Install_Date'].notna()].copy()
+    if not rework_jobs.empty:
+        rework_jobs['Month'] = rework_jobs['Install_Date'].dt.to_period('M')
+        monthly_rework = rework_jobs.groupby('Month').agg(
+            Total_Jobs=('Job_Name', 'count'),
+            Rework_Jobs=('Has_Rework', 'sum')
+        )
+        monthly_rework['Rework_Rate'] = (monthly_rework['Rework_Jobs'] / monthly_rework['Total_Jobs']) * 100
+        
+        rework_rate_trend = monthly_rework['Rework_Rate'].fillna(0)
+        rework_rate_trend.index = rework_rate_trend.index.strftime('%Y-%m')
+        
+        st.line_chart(rework_rate_trend)
+        st.caption("Monitors the percentage of completed jobs that required rework. A key indicator of quality.")
+    else:
+        st.info("No completed jobs to analyze rework trends.")
+
+
 # --- Main Application ---
 def main():
     """Main function to run the Streamlit application."""
@@ -570,14 +636,14 @@ def main():
         st.metric("Today's Activities", len(today_activities))
 
     # Render tabs
-    tabs = st.tabs(["🚨 Daily Priorities", "📅 Workload Calendar", "📊 Timeline Analytics", "🔮 Predictive Analytics", "🎯 Performance Scorecards", "⚡ Quick Actions", "📈 Historical Comparisons"])
+    tabs = st.tabs(["🚨 Daily Priorities", "📅 Workload Calendar", "📊 Timeline Analytics", "🔮 Predictive Analytics", "🎯 Performance Scorecards", "⚡ Quick Actions", "📈 Historical Trends"])
     with tabs[0]: render_daily_priorities(df_filtered, today)
     with tabs[1]: render_workload_calendar(df_filtered, today)
     with tabs[2]: render_timeline_analytics(df_filtered)
     with tabs[3]: render_predictive_analytics(df_filtered)
     with tabs[4]: render_performance_scorecards(df_filtered)
     with tabs[5]: render_quick_actions(df_filtered)
-    with tabs[6]: render_historical_placeholder(df_full) # Pass full dataframe to historical
+    with tabs[6]: render_historical_trends(df_full) # Pass full dataframe to historical
 
 if __name__ == "__main__":
     main()
