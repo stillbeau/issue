@@ -196,7 +196,7 @@ def load_and_process_data(creds_dict: dict, today: pd.Timestamp, install_cost: f
         'Install_Assigned_To', 'Template_Assigned_To', 'Job_Name', 'Rework_Stone_Shop_Reason',
         'Ready_to_Fab_Status', 'Job_Type', 'Order_Type', 'Lead_Source', 'Phase_Dollars_Plant_Invoice_',
         'Job_Throughput_Rework_COGS', 'Job_Throughput_Rework_Job_Labor', 'Job_Throughput_Total_COGS',
-        'Branch_INV_', 'Plant_INV_'
+        'Branch_INV_', 'Plant_INV_', 'Job_Status'
     ]
     for col in all_expected_cols:
         if col not in df.columns:
@@ -256,25 +256,23 @@ def render_daily_priorities(df: pd.DataFrame, today: pd.Timestamp):
         st.metric("🚧 Stuck Jobs", len(df[df['Days_In_Current_Stage'] > TIMELINE_THRESHOLDS['days_in_stage_warning']]))
     with col4:
         # For the metric, also only count active stale jobs from the filtered df
-        stale_jobs_metric = df[(df['Days_Since_Last_Activity'] > TIMELINE_THRESHOLDS['stale_job_threshold']) & (df['Current_Stage'] != 'Completed')]
+        stale_jobs_metric = df[(df['Days_Since_Last_Activity'] > TIMELINE_THRESHOLDS['stale_job_threshold']) & (df['Job_Status'] != 'Complete')]
         st.metric("💨 Stale Jobs", len(stale_jobs_metric))
 
     st.markdown("---")
     st.subheader("⚡ Critical Issues Requiring Immediate Attention")
-    st.caption("This section only shows active jobs from the currently filtered dataset.")
+    st.caption("This section only shows jobs where 'Job Status' is not 'Complete'.")
 
     # Define dataframes for each critical issue, ensuring they are active jobs
-    # by filtering the incoming dataframe `df`.
+    # by filtering for Job_Status != 'Complete' from the incoming dataframe `df`.
     
-    # This is already filtered for active stages by its definition, so it's fine.
-    missing_activity = df[(df['Next_Sched_Activity'].isna()) & (df['Current_Stage'].isin(['Post-Template', 'In Fabrication', 'Product Received']))]
+    missing_activity = df[(df['Next_Sched_Activity'].isna()) & (df['Current_Stage'].isin(['Post-Template', 'In Fabrication', 'Product Received'])) & (df['Job_Status'] != 'Complete')]
     
-    # Explicitly filter for active jobs for the remaining categories
-    stale_jobs = df[(df['Days_Since_Last_Activity'] > TIMELINE_THRESHOLDS['stale_job_threshold']) & (df['Current_Stage'] != 'Completed')]
+    stale_jobs = df[(df['Days_Since_Last_Activity'] > TIMELINE_THRESHOLDS['stale_job_threshold']) & (df['Job_Status'] != 'Complete')]
     
-    template_to_rtf_stuck = df[(df['Template_Date'].notna()) & (df['Ready_to_Fab_Date'].isna()) & ((today - df['Template_Date']).dt.days > TIMELINE_THRESHOLDS['template_to_rtf']) & (df['Current_Stage'] != 'Completed')]
+    template_to_rtf_stuck = df[(df['Template_Date'].notna()) & (df['Ready_to_Fab_Date'].isna()) & ((today - df['Template_Date']).dt.days > TIMELINE_THRESHOLDS['template_to_rtf']) & (df['Job_Status'] != 'Complete')]
     
-    upcoming_installs = df[(df['Install_Date'].notna()) & (df['Install_Date'] <= today + timedelta(days=7)) & (df['Product_Rcvd_Date'].isna()) & (df['Current_Stage'] != 'Completed')]
+    upcoming_installs = df[(df['Install_Date'].notna()) & (df['Install_Date'] <= today + timedelta(days=7)) & (df['Product_Rcvd_Date'].isna()) & (df['Job_Status'] != 'Complete')]
 
     # Render expanders using the filtered dataframes
     if not missing_activity.empty:
@@ -603,7 +601,7 @@ def render_overview_tab(df: pd.DataFrame, division_name: str):
         st.bar_chart(sales_profit)
 
 def render_detailed_data_tab(df: pd.DataFrame, division_name: str):
-    st.header(f"📋 {division_name} Detailed Data")
+    st.header(f"� {division_name} Detailed Data")
     df_display = df.copy()
 
     col1, col2 = st.columns(2)
@@ -905,7 +903,8 @@ def main():
         
         op_cols = st.columns(3)
         with op_cols[0]:
-            status_filter = st.selectbox("Filter by Job Status", ["Active", "Completed", "All"], index=0, key="op_status")
+            status_options = ["Active", "Complete", "30+ Days Old", "Unscheduled"]
+            status_filter = st.multiselect("Filter by Job Status", status_options, default=["Active"], key="op_status_multi")
         with op_cols[1]:
             salesperson_list = ['All'] + sorted(df_full['Salesperson'].dropna().unique().tolist())
             salesperson_filter = st.selectbox("Filter by Salesperson", salesperson_list, key="op_sales")
@@ -913,13 +912,35 @@ def main():
             division_list = ['All'] + sorted(df_full['Division_Type'].dropna().unique().tolist())
             division_filter = st.selectbox("Filter by Division", division_list, key="op_div")
 
+        # --- Filtering Logic ---
         df_op_filtered = df_full.copy()
-        if status_filter == "Active":
-            df_op_filtered = df_op_filtered[df_op_filtered['Current_Stage'] != 'Completed']
-        elif status_filter == "Completed":
-            df_op_filtered = df_op_filtered[df_op_filtered['Current_Stage'] == 'Completed']
+
+        # Apply Job Status Filter first
+        if status_filter:
+            final_mask = pd.Series([False] * len(df_full), index=df_full.index)
+            
+            if "Active" in status_filter:
+                final_mask |= (df_full['Job_Status'] != 'Complete')
+            
+            if "Complete" in status_filter:
+                final_mask |= (df_full['Job_Status'] == 'Complete')
+
+            if "30+ Days Old" in status_filter:
+                thirty_days_ago = today_dt - timedelta(days=30)
+                final_mask |= ((df_full['Job_Creation'] < thirty_days_ago) & (df_full['Job_Status'] != 'Complete'))
+            
+            if "Unscheduled" in status_filter:
+                final_mask |= (df_full['Next_Sched_Date'].isna() & (df_full['Job_Status'] != 'Complete'))
+
+            df_op_filtered = df_full[final_mask]
+        else:
+            # If no status is selected, show an empty dataframe
+            df_op_filtered = pd.DataFrame(columns=df_full.columns)
+
+        # Apply other filters sequentially
         if salesperson_filter != 'All':
             df_op_filtered = df_op_filtered[df_op_filtered['Salesperson'] == salesperson_filter]
+        
         if division_filter != 'All':
             df_op_filtered = df_op_filtered[df_op_filtered['Division_Type'] == division_filter]
         
