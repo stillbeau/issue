@@ -1,8 +1,6 @@
 streamlit
+st-gsheets-connection
 pandas
 numpy
-gspread
-google-auth
-google-auth-oauthlib
 matplotlib
 seaborn
