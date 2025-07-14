@@ -656,6 +656,284 @@ def render_profitability_tabs(df_stone, df_laminate, today_dt):
         with laminate_tabs[5]: render_field_workload_tab(df_laminate, "Laminate")
         with laminate_tabs[6]: render_forecasting_tab(df_laminate, "Laminate")
 
+# --- UI Rendering Functions for PROFITABILITY ANALYSIS ---
+
+def render_overview_tab(df: pd.DataFrame, division_name: str):
+    st.header(f"📈 {division_name} Overview")
+    if df.empty:
+        st.warning(f"No {division_name} data available for the selected period.")
+        return
+
+    total_revenue = df['Revenue'].sum()
+    total_profit = df['Branch_Profit'].sum()
+    avg_margin = (total_profit / total_revenue * 100) if total_revenue != 0 else 0
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total Revenue", f"${total_revenue:,.0f}")
+    c2.metric("Total Branch Profit", f"${total_profit:,.0f}")
+    c3.metric("Avg Profit Margin", f"{avg_margin:.1f}%")
+
+    st.markdown("---")
+    st.subheader("Profit by Salesperson")
+    if 'Salesperson' in df.columns and not df.empty:
+        sales_profit = df.groupby('Salesperson')['Branch_Profit'].sum().sort_values(ascending=False)
+        st.bar_chart(sales_profit)
+
+def render_detailed_data_tab(df: pd.DataFrame, division_name: str):
+    st.header(f"📋 {division_name} Detailed Data")
+    df_display = df.copy()
+
+    col1, col2 = st.columns(2)
+    with col1:
+        job_name_filter = st.text_input("Filter by Job Name", key=f"job_name_{division_name}")
+    with col2:
+        prod_num_filter = st.text_input("Filter by Production #", key=f"prod_num_{division_name}")
+
+    if job_name_filter and 'Job_Name' in df_display.columns:
+        df_display = df_display[df_display['Job_Name'].str.contains(job_name_filter, case=False, na=False)]
+    if prod_num_filter and 'Production_' in df_display.columns:
+        df_display = df_display[df_display['Production_'].str.contains(prod_num_filter, case=False, na=False)]
+
+    if df_display.empty:
+        st.warning("No data matches the current filters.")
+        return
+
+    base_cols = ['Link', 'Job_Name', 'Next_Sched_Activity', 'Days_Behind', 'Revenue', 'Total_Job_SqFt']
+    profit_cols = ['Total_Branch_Cost', 'Branch_Profit', 'Branch_Profit_Margin_%']
+    
+    if division_name == 'Laminate':
+        middle_cols = ['Material_Cost', 'Shop_Cost']
+    else:
+        middle_cols = ['Cost_From_Plant']
+        profit_cols.append('Shop_Profit_Margin_%')
+
+    column_order = base_cols + middle_cols + profit_cols
+    final_column_order = [c for c in column_order if c in df_display.columns]
+    
+    st.dataframe(df_display[final_column_order], use_container_width=True,
+        column_config={
+            "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)"),
+            "Days_Behind": st.column_config.NumberColumn("Days Behind/Ahead", help="Positive: Behind. Negative: Ahead."),
+            "Revenue": st.column_config.NumberColumn(format='$%.2f'),
+            "Total_Job_SqFt": st.column_config.NumberColumn("SqFt", format='%.2f'),
+            "Cost_From_Plant": st.column_config.NumberColumn("Production Cost", format='$%.2f'),
+            "Material_Cost": st.column_config.NumberColumn("Material Cost", format='$%.2f'),
+            "Shop_Cost": st.column_config.NumberColumn("Shop Cost", format='$%.2f'),
+            "Total_Branch_Cost": st.column_config.NumberColumn(format='$%.2f'),
+            "Branch_Profit": st.column_config.NumberColumn(format='$%.2f'),
+            "Branch_Profit_Margin_%": st.column_config.ProgressColumn("Branch Profit %", format='%.2f%%', min_value=-50, max_value=100),
+            "Shop_Profit_Margin_%": st.column_config.ProgressColumn("Shop Profit %", format='%.2f%%', min_value=-50, max_value=100),
+        }
+    )
+
+def render_profit_drivers_tab(df: pd.DataFrame, division_name: str):
+    st.header(f"💸 {division_name} Profitability Drivers")
+    if df.empty:
+        st.warning(f"No {division_name} data available.")
+        return
+
+    driver_options = ['Job_Type', 'Order_Type', 'Lead_Source', 'Salesperson', 'Material_Brand']
+    valid_drivers = [d for d in driver_options if d in df.columns and df[d].notna().any()]
+
+    if not valid_drivers:
+        st.warning("No valid columns found for this analysis (e.g., 'Job_Type', 'Salesperson').")
+        return
+
+    selected_driver = st.selectbox("Analyze Profitability by:", valid_drivers, key=f"driver_{division_name}")
+    if selected_driver:
+        agg_dict = {
+            'Avg_Branch_Profit_Margin': ('Branch_Profit_Margin_%', 'mean'),
+            'Total_Profit': ('Branch_Profit', 'sum'),
+            'Job_Count': ('Job_Name', 'count')
+        }
+        driver_analysis = df.groupby(selected_driver).agg(**agg_dict).sort_values('Total_Profit', ascending=False)
+        st.dataframe(driver_analysis.style.format({
+            'Avg_Branch_Profit_Margin': '{:.2f}%',
+            'Total_Profit': '${:,.2f}'
+        }), use_container_width=True)
+
+def render_rework_tab(df: pd.DataFrame, division_name: str):
+    st.header(f"🔬 {division_name} Rework & Variance")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.subheader("Rework Analysis")
+        if 'Total_Rework_Cost' in df and 'Rework_Stone_Shop_Reason' in df.columns:
+            rework_jobs = df[df['Total_Rework_Cost'] > 0].copy()
+            if not rework_jobs.empty:
+                st.metric("Total Rework Cost", f"${rework_jobs['Total_Rework_Cost'].sum():,.2f}", f"{len(rework_jobs)} jobs affected")
+                agg_rework = rework_jobs.groupby('Rework_Stone_Shop_Reason')['Total_Rework_Cost'].agg(['sum', 'count'])
+                agg_rework.columns = ['Total Rework Cost', 'Number of Jobs']
+                st.dataframe(agg_rework.sort_values('Total Rework Cost', ascending=False).style.format({'Total Rework Cost': '${:,.2f}'}))
+            else:
+                st.info("No rework costs recorded.")
+        else:
+            st.info("Rework data not available.")
+    with c2:
+        st.subheader("Profit Variance Analysis")
+        if 'Profit_Variance' in df.columns and 'Original_GM' in df.columns:
+            variance_jobs = df[df['Profit_Variance'].abs() > 0.01].copy()
+            if not variance_jobs.empty:
+                st.metric("Jobs with Profit Variance", f"{len(variance_jobs)}")
+                display_cols = ['Job_Name', 'Original_GM', 'Branch_Profit', 'Profit_Variance']
+                st.dataframe(
+                    variance_jobs[display_cols].sort_values(by='Profit_Variance', key=abs, ascending=False).head(20),
+                    column_config={
+                        "Original_GM": st.column_config.NumberColumn("Est. Profit", format='$%.2f'),
+                        "Branch_Profit": st.column_config.NumberColumn("Actual Profit", format='$%.2f'),
+                        "Profit_Variance": st.column_config.NumberColumn("Variance", format='$%.2f')
+                    }
+                )
+            else:
+                st.info("No significant profit variance found.")
+        else:
+            st.info("Profit variance data not available.")
+
+def render_pipeline_issues_tab(df: pd.DataFrame, division_name: str, today: pd.Timestamp):
+    st.header(f"🚧 {division_name} Pipeline & Issues")
+    
+    st.subheader("Jobs Awaiting Ready-to-Fab")
+    required_cols_rtf = ['Ready_to_Fab_Status', 'Template_Date']
+    if all(col in df.columns for col in required_cols_rtf):
+        conditions = (df['Template_Date'].notna() & (df['Template_Date'] <= today) & (df['Ready_to_Fab_Status'].fillna('').str.lower() != 'complete'))
+        stuck_jobs = df[conditions].copy()
+        if not stuck_jobs.empty:
+            stuck_jobs['Days_Since_Template'] = (today - stuck_jobs['Template_Date']).dt.days
+            display_cols = ['Link', 'Job_Name', 'Salesperson', 'Template_Date', 'Days_Since_Template']
+            st.dataframe(stuck_jobs[display_cols].sort_values(by='Days_Since_Template', ascending=False),
+                         use_container_width=True, column_config={"Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)")})
+        else:
+            st.success("✅ No jobs are currently stuck between Template and Ready to Fab.")
+    else:
+        st.warning("Could not check for jobs awaiting RTF. Required columns missing.")
+
+    st.markdown("---")
+    st.subheader("Jobs in Fabrication (Not Shipped)")
+    required_cols_fab = ['Ready_to_Fab_Date', 'Ship_Date']
+    if all(col in df.columns for col in required_cols_fab):
+        conditions = (df['Ready_to_Fab_Date'].notna() & df['Ship_Date'].isna())
+        fab_jobs = df[conditions].copy()
+        if not fab_jobs.empty:
+            fab_jobs['Days_Since_RTF'] = (today - fab_jobs['Ready_to_Fab_Date']).dt.days
+            display_cols = ['Link', 'Job_Name', 'Salesperson', 'Ready_to_Fab_Date', 'Days_Since_RTF']
+            st.dataframe(fab_jobs[display_cols].sort_values(by='Days_Since_RTF', ascending=False),
+                         use_container_width=True, column_config={"Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)")})
+        else:
+            st.success("✅ No jobs are currently in fabrication without a ship date.")
+    else:
+        st.warning("Could not check for jobs in fabrication. Required columns missing.")
+
+def render_workload_card(df_filtered: pd.DataFrame, activity_name: str, date_col: str, assignee_col: str):
+    st.subheader(activity_name)
+    if date_col not in df_filtered.columns or assignee_col not in df_filtered.columns:
+        st.warning(f"Required columns for {activity_name} analysis not found: {date_col}, {assignee_col}")
+        return
+        
+    activity_df = df_filtered.dropna(subset=[date_col, assignee_col]).copy()
+    if activity_df.empty:
+        st.info(f"No {activity_name.lower()} data available.")
+        return
+
+    assignees = sorted([name for name in activity_df[assignee_col].unique() if name and str(name).strip()])
+    
+    for assignee in assignees:
+        with st.container(border=True):
+            assignee_df = activity_df[activity_df[assignee_col] == assignee]
+            total_jobs = len(assignee_df)
+            total_sqft = assignee_df['Total_Job_SqFt'].sum() if 'Total_Job_SqFt' in assignee_df.columns else 0
+
+            col1, col2 = st.columns(2)
+            col1.metric(f"{assignee} - Total Jobs", f"{total_jobs}")
+            col2.metric(f"{assignee} - Total SqFt", f"{total_sqft:,.2f}")
+
+            with st.expander("View Weekly Breakdown"):
+                agg_cols = {'Jobs': ('Production_', 'count')}
+                if 'Total_Job_SqFt' in assignee_df.columns:
+                    agg_cols['Total_SqFt'] = ('Total_Job_SqFt', 'sum')
+                
+                weekly_summary = assignee_df.set_index(date_col).resample('W-Mon', label='left', closed='left').agg(**agg_cols).reset_index()
+                weekly_summary = weekly_summary[weekly_summary['Jobs'] > 0]
+                
+                if not weekly_summary.empty:
+                    st.dataframe(weekly_summary.rename(columns={date_col: 'Week_Start_Date'}), use_container_width=True)
+                else:
+                    st.write("No scheduled work for this person in the selected period.")
+
+def render_field_workload_tab(df: pd.DataFrame, division_name: str):
+    st.header(f"👷 {division_name} Field Workload Planner")
+    if df.empty:
+        st.warning(f"No {division_name} data available.")
+        return
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        render_workload_card(df, "Templates", "Template_Date", "Template_Assigned_To")
+    with col2:
+        render_workload_card(df, "Installs", "Install_Date", "Install_Assigned_To")
+
+def render_forecasting_tab(df: pd.DataFrame, division_name: str):
+    st.header(f"🔮 {division_name} Forecasting & Trends")
+    if 'Job_Creation' not in df.columns or df['Job_Creation'].isnull().all():
+        st.warning("Job Creation date column is required for trend analysis.")
+        return
+    if df.empty or len(df) < 2:
+        st.warning(f"Not enough {division_name} data to create a forecast.")
+        return
+
+    df_trends = df.copy().set_index('Job_Creation').sort_index()
+    st.subheader("Monthly Performance Trends")
+    monthly_summary = df_trends.resample('M').agg({'Revenue': 'sum', 'Branch_Profit': 'sum', 'Job_Name': 'count'}).rename(columns={'Job_Name': 'Job_Count'})
+    if monthly_summary.empty:
+        st.info("No data in the selected range to display monthly trends.")
+        return
+    st.line_chart(monthly_summary[['Revenue', 'Branch_Profit']])
+    st.bar_chart(monthly_summary['Job_Count'])
+
+def render_overall_health_tab(df: pd.DataFrame, today: pd.Timestamp):
+    st.header("🚀 Overall Business Health at a Glance")
+    
+    df_active = df[df['Job_Status'] != 'Complete']
+    df_completed_last_30 = df[(df['Job_Status'] == 'Complete') & (df['Install_Date'].notna()) & (df['Install_Date'] >= today - timedelta(days=30))]
+
+    st.markdown("### Key Performance Indicators (Last 30 Days)")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        total_profit = df_completed_last_30['Branch_Profit'].sum()
+        st.metric("Total Profit", f"${total_profit:,.0f}")
+    with col2:
+        avg_margin = df_completed_last_30['Branch_Profit_Margin_%'].mean()
+        st.metric("Avg Profit Margin", f"{avg_margin:.1f}%" if pd.notna(avg_margin) else "N/A")
+    with col3:
+        avg_timeline = df_completed_last_30['Days_Template_to_Install'].mean()
+        st.metric("Avg Cycle Time", f"{avg_timeline:.1f} days" if pd.notna(avg_timeline) else "N/A")
+    with col4:
+        rework_rate = df_completed_last_30['Has_Rework'].mean() * 100
+        st.metric("Rework Rate", f"{rework_rate:.1f}%" if pd.notna(rework_rate) else "N/A")
+
+    st.markdown("---")
+    st.markdown("### Current Operational Status (Active Jobs)")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Active Jobs", len(df_active))
+    with col2:
+        st.metric("🔴 High Risk Jobs", len(df_active[df_active['Risk_Score'] >= 30]))
+    with col3:
+        st.metric("🚧 Stuck Jobs", len(df_active[df_active['Days_In_Current_Stage'] > TIMELINE_THRESHOLDS['days_in_stage_warning']]))
+    with col4:
+        st.metric("⏰ Behind Schedule", len(df_active[df_active['Days_Behind'] > 0]))
+
+    st.markdown("---")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.subheader("Current Bottlenecks (Active Jobs)")
+        stage_counts = df_active['Current_Stage'].value_counts()
+        if not stage_counts.empty:
+            st.bar_chart(stage_counts)
+    with c2:
+        st.subheader("Profitability by Division (Last 30 Days)")
+        profit_by_div = df_completed_last_30.groupby('Division_Type')['Branch_Profit'].sum()
+        if not profit_by_div.empty:
+            st.bar_chart(profit_by_div)
+
 # --- Main Application ---
 def main():
     if not render_login_screen():
