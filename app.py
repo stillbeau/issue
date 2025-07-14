@@ -11,9 +11,7 @@ It provides a holistic view of the business, integrating:
 import streamlit as st
 import pandas as pd
 import numpy as np
-import gspread
-from google.oauth2.service_account import Credentials
-import json
+from streamlit_gsheets import GSheetsConnection
 import re
 from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
@@ -23,7 +21,6 @@ import seaborn as sns
 st.set_page_config(layout="wide", page_title="Unified Business Dashboard", page_icon="🚀")
 
 # --- Constants & Global Configuration ---
-SPREADSHEET_ID = "1iToy3C-Bfn06bjuEM_flHNHwr2k1zMCV1wX9MNKzj38"
 WORKSHEET_NAME = "jobs"
 MORAWARE_SEARCH_URL = "https://floformcountertops.moraware.net/sys/search?&search="
 
@@ -175,16 +172,26 @@ def _process_financial_data(df: pd.DataFrame, config: dict, install_cost_per_sqf
     return df_processed
 
 @st.cache_data(ttl=300)
-def load_and_process_data(creds_dict: dict, today: pd.Timestamp, install_cost: float):
+def load_and_process_data(today: pd.Timestamp, install_cost: float):
     """
-    Loads data from Google Sheets and performs all processing for both
+    Loads data from Google Sheets using Streamlit secrets and performs all processing for both
     operational and profitability analysis.
     """
-    # 1. Load and Clean Data
-    creds = Credentials.from_service_account_info(creds_dict, scopes=['https://www.googleapis.com/auth/spreadsheets'])
-    gc = gspread.authorize(creds)
-    worksheet = gc.open_by_key(SPREADSHEET_ID).worksheet(WORKSHEET_NAME)
-    df = pd.DataFrame(worksheet.get_all_records())
+    try:
+        # 1. Load data using Streamlit connection
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        df = conn.read(worksheet=WORKSHEET_NAME, ttl=300)
+        
+        # Convert to DataFrame if needed
+        if not isinstance(df, pd.DataFrame):
+            df = pd.DataFrame(df)
+            
+    except Exception as e:
+        st.error(f"Failed to load data from Google Sheets: {e}")
+        st.info("Please check your Streamlit secrets configuration.")
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    
+    # Clean column names
     df.columns = df.columns.str.strip().str.replace(r'[\s-]+', '_', regex=True).str.replace(r'[^\w]', '', regex=True)
 
     # 2. Ensure Core Columns Exist
@@ -196,7 +203,8 @@ def load_and_process_data(creds_dict: dict, today: pd.Timestamp, install_cost: f
         'Install_Assigned_To', 'Template_Assigned_To', 'Job_Name', 'Rework_Stone_Shop_Reason',
         'Ready_to_Fab_Status', 'Job_Type', 'Order_Type', 'Lead_Source', 'Phase_Dollars_Plant_Invoice_',
         'Job_Throughput_Rework_COGS', 'Job_Throughput_Rework_Job_Labor', 'Job_Throughput_Total_COGS',
-        'Branch_INV_', 'Plant_INV_', 'Job_Status'
+        'Branch_INV_', 'Plant_INV_', 'Job_Status', 'Customer_Category', 'City', 'Lead_Type',
+        'Supplied_By', 'Job_Throughput_Job_Rev', 'Job_Throughput_Total_Job_Cost'
     ]
     for col in all_expected_cols:
         if col not in df.columns:
@@ -228,6 +236,9 @@ def load_and_process_data(creds_dict: dict, today: pd.Timestamp, install_cost: f
     df['Has_Rework'] = df['Rework_Stone_Shop_Rework_Price'].notna() & (df['Rework_Stone_Shop_Rework_Price'] != '')
     df['Risk_Score'] = df.apply(calculate_risk_score, axis=1)
     df[['Delay_Probability', 'Risk_Factors']] = df.apply(lambda row: pd.Series(calculate_delay_probability(row)), axis=1)
+    
+    # Calculate Total_Rework_Cost for quality analysis
+    df['Total_Rework_Cost'] = pd.to_numeric(df['Rework_Stone_Shop_Rework_Price'].astype(str).str.replace(r'[$,%]', '', regex=True), errors='coerce').fillna(0)
 
     # 6. Financial Metrics Processing & Splitting by Division
     df_stone = df[df['Division_Type'] == 'Stone/Quartz'].copy()
@@ -1298,17 +1309,7 @@ def main():
     
     # --- Sidebar Configuration ---
     st.sidebar.header("⚙️ Configuration")
-    creds = None
-    if "google_creds_json" in st.secrets:
-        creds = json.loads(st.secrets["google_creds_json"])
-    else:
-        uploaded_file = st.sidebar.file_uploader("Upload Google Service Account JSON", type="json")
-        if uploaded_file:
-            creds = json.load(uploaded_file)
-    if not creds:
-        st.sidebar.error("Please provide Google credentials to load data.")
-        st.stop()
-
+    
     today_dt = pd.to_datetime(st.sidebar.date_input("Select 'Today's' Date", value=datetime.now().date()))
     
     install_cost_sqft = st.sidebar.number_input("Install Cost per SqFt ($)", min_value=0.0, value=15.0, step=0.50)
@@ -1316,16 +1317,28 @@ def main():
     # --- Data Loading ---
     try:
         with st.spinner("Loading and processing all job data..."):
-            # The data loading function now returns all three dataframes
-            df_stone, df_laminate, df_full = load_and_process_data(creds, today_dt, install_cost_sqft)
+            # The data loading function now uses Streamlit secrets
+            df_stone, df_laminate, df_full = load_and_process_data(today_dt, install_cost_sqft)
     except Exception as e:
         st.error(f"Failed to load or process data. Error: {e}")
-        st.exception(e)
+        st.error("Please check your Streamlit secrets configuration in the app settings.")
+        st.info("Make sure you have set up the 'gsheets' connection in your secrets.toml file.")
+        st.stop()
+
+    if df_full.empty:
+        st.error("No data loaded. Please check your Google Sheets connection and data.")
         st.stop()
 
     st.sidebar.markdown("---")
     st.sidebar.info(f"Data loaded for {len(df_full)} jobs.")
     st.sidebar.info(f"Last refreshed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # Display connection status
+    with st.sidebar:
+        if len(df_full) > 0:
+            st.success("✅ Connected to Google Sheets")
+        else:
+            st.error("❌ Connection failed")
 
     # --- Main Application Tabs ---
     main_tabs = st.tabs(["📈 Overall Business Health", "⚙️ Operational Performance", "💰 Profitability Analysis"])
@@ -1357,13 +1370,17 @@ def main():
         
         st.info(f"Displaying {len(df_op_filtered)} jobs based on filters.")
 
-        op_sub_tabs = st.tabs(["🚨 Daily Priorities", "📅 Workload Calendar", "📊 Timeline Analytics", "🔮 Predictive Analytics", "🎯 Performance Scorecards", "📈 Historical Trends"])
+        op_sub_tabs = st.tabs(["🚨 Daily Priorities", "📅 Workload Calendar", "📊 Timeline Analytics", "🔮 Predictive Analytics", "🎯 Performance Scorecards", "📈 Historical Trends", "💰 Cash Flow Forecast", "🔬 Material Intelligence", "👥 Resource Optimization", "🎯 Quality Control"])
         with op_sub_tabs[0]: render_daily_priorities(df_op_filtered, today_dt)
         with op_sub_tabs[1]: render_workload_calendar(df_op_filtered, today_dt)
         with op_sub_tabs[2]: render_timeline_analytics(df_op_filtered)
         with op_sub_tabs[3]: render_predictive_analytics(df_op_filtered)
         with op_sub_tabs[4]: render_performance_scorecards(df_op_filtered)
         with op_sub_tabs[5]: render_historical_trends(df_full)
+        with op_sub_tabs[6]: render_cash_flow_forecasting(df_op_filtered, today_dt)
+        with op_sub_tabs[7]: render_material_cost_intelligence(df_op_filtered)
+        with op_sub_tabs[8]: render_resource_optimization(df_op_filtered)
+        with op_sub_tabs[9]: render_quality_control_center(df_op_filtered)
 
     with main_tabs[2]:
         st.header("Profitability Analysis Dashboard")
