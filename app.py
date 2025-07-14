@@ -16,7 +16,194 @@ import re
 from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
 import seaborn as sns
+import streamlit.components.v1 as components
+import hashlib
+import time
 
+def render_webauthn_login():
+    """Modern biometric authentication using WebAuthn API"""
+    
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
+    
+    if st.session_state.authenticated:
+        return True
+    
+    # Custom CSS for modern login screen
+    st.markdown("""
+        <style>
+        .auth-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 70vh;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 20px;
+            padding: 2rem;
+            margin: 2rem 0;
+            color: white;
+            text-align: center;
+        }
+        .auth-title {
+            font-size: 2.5rem;
+            font-weight: bold;
+            margin-bottom: 1rem;
+        }
+        .auth-subtitle {
+            font-size: 1.2rem;
+            opacity: 0.9;
+            margin-bottom: 2rem;
+        }
+        .biometric-btn {
+            background: rgba(255,255,255,0.2);
+            border: 2px solid rgba(255,255,255,0.3);
+            border-radius: 15px;
+            padding: 1rem 2rem;
+            color: white;
+            font-size: 1.1rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+        .biometric-btn:hover {
+            background: rgba(255,255,255,0.3);
+            border-color: rgba(255,255,255,0.5);
+        }
+        .fallback-section {
+            margin-top: 2rem;
+            padding-top: 2rem;
+            border-top: 1px solid rgba(255,255,255,0.3);
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("""
+        <div class="auth-container">
+            <div class="auth-title">🔐 Secure Access</div>
+            <div class="auth-subtitle">Use your device's biometric authentication to access the dashboard</div>
+            <div id="webauthn-container">
+                <button class="biometric-btn" onclick="authenticateWithBiometrics()">
+                    🔒 Authenticate with Biometrics
+                </button>
+            </div>
+            <div class="fallback-section">
+                <div style="opacity: 0.8; margin-bottom: 1rem;">Or use PIN as fallback:</div>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # WebAuthn JavaScript
+    webauthn_js = """
+    <script>
+    // Check if WebAuthn is supported
+    if (!window.PublicKeyCredential) {
+        document.getElementById('webauthn-container').innerHTML = 
+            '<div style="color: #ffcccb;">❌ Biometric authentication not supported on this device</div>';
+    }
+    
+    async function authenticateWithBiometrics() {
+        try {
+            // Check if biometrics are available
+            const available = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+            
+            if (!available) {
+                alert('Biometric authentication not available on this device. Please use PIN fallback.');
+                return;
+            }
+            
+            // Create credential request
+            const credentialRequestOptions = {
+                challenge: new Uint8Array(32),
+                timeout: 60000,
+                userVerification: 'required'
+            };
+            
+            // Request authentication
+            const credential = await navigator.credentials.create({
+                publicKey: {
+                    challenge: credentialRequestOptions.challenge,
+                    rp: { name: "Business Dashboard" },
+                    user: {
+                        id: new TextEncoder().encode("user123"),
+                        name: "dashboard-user",
+                        displayName: "Dashboard User"
+                    },
+                    pubKeyCredParams: [{alg: -7, type: "public-key"}],
+                    authenticatorSelection: {
+                        authenticatorAttachment: "platform",
+                        userVerification: "required"
+                    },
+                    timeout: 60000,
+                    attestation: "direct"
+                }
+            });
+            
+            if (credential) {
+                // Success! Set a flag that Streamlit can read
+                window.parent.postMessage({
+                    type: 'biometric_success',
+                    authenticated: true
+                }, '*');
+                
+                document.getElementById('webauthn-container').innerHTML = 
+                    '<div style="color: #90EE90;">✅ Authentication Successful!</div>';
+            }
+            
+        } catch (error) {
+            console.error('Authentication failed:', error);
+            alert('Authentication failed. Please try the PIN fallback below.');
+        }
+    }
+    </script>
+    """
+    
+    components.html(webauthn_js, height=0)
+    
+    # PIN Fallback
+    with st.form("pin_auth"):
+        st.markdown("**PIN Authentication (Fallback)**")
+        pin = st.text_input("Enter 4-digit PIN", type="password", max_chars=4)
+        col1, col2, col3 = st.columns([1,1,1])
+        
+        with col2:
+            submit = st.form_submit_button("🔓 Unlock", use_container_width=True)
+        
+        if submit:
+            # You can set your own PIN or integrate with your user system
+            correct_pin = "1234"  # Change this to your desired PIN
+            
+            if pin == correct_pin:
+                st.session_state.authenticated = True
+                st.success("✅ Authentication successful!")
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.error("❌ Invalid PIN. Please try again.")
+    
+    # Listen for biometric success message
+    components.html("""
+        <script>
+        window.addEventListener('message', function(event) {
+            if (event.data.type === 'biometric_success' && event.data.authenticated) {
+                // Notify Streamlit of successful authentication
+                fetch('/streamlit/message', {
+                    method: 'POST',
+                    body: JSON.stringify({authenticated: true})
+                });
+            }
+        });
+        </script>
+    """, height=0)
+    
+    return False
+
+# Add this to your main() function at the very beginning
+def main():
+    # Check authentication first
+    if not render_webauthn_login():
+        return
+    
 # --- Page & App Configuration ---
 st.set_page_config(layout="wide", page_title="Unified Business Dashboard", page_icon="🚀")
 
