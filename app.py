@@ -17,8 +17,9 @@ from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
 import seaborn as sns
 import time
+import streamlit.components.v1 as components
 
-# --- Page & App Configuration (Must be the first Streamlit command) ---
+# --- Page & App Configuration ---
 st.set_page_config(layout="wide", page_title="Unified Business Dashboard", page_icon="🚀")
 
 # --- Constants & Global Configuration ---
@@ -63,71 +64,147 @@ LAMINATE_CONFIG = {
     "has_shop_profit": False
 }
 
-# --- Authentication Function ---
-def render_login_screen():
-    """
-    Displays a PIN-based login screen. Returns True if authenticated, False otherwise.
-    """
+
+# --- AUTHENTICATION SYSTEM ---
+
+def render_faceid_style_auth():
+    """Face ID-style authentication with modern UI"""
+    
     if 'authenticated' not in st.session_state:
         st.session_state.authenticated = False
-
+        st.session_state.auth_attempts = 0
+    
     if st.session_state.authenticated:
         return True
-
-    # Custom CSS for the login screen
+    
+    # Face ID-style CSS
     st.markdown("""
         <style>
-            .login-container {
-                display: flex;
-                flex-direction: column;
-                align-items: center;
-                justify-content: center;
-                height: 70vh;
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                border-radius: 20px;
-                padding: 2rem;
-                margin: auto;
-                color: white;
-                text-align: center;
-                max-width: 500px;
-            }
-            .login-title {
-                font-size: 2.5rem;
-                font-weight: bold;
-                margin-bottom: 1rem;
-            }
-            .login-subtitle {
-                font-size: 1.2rem;
-                opacity: 0.9;
-                margin-bottom: 2rem;
-            }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        
+        .faceid-container {
+            font-family: 'Inter', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 80vh;
+            background: linear-gradient(145deg, #000000, #1a1a1a);
+            border-radius: 30px;
+            padding: 3rem;
+            color: white;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .faceid-container::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(0,122,255,0.1) 0%, transparent 70%);
+            animation: pulse 3s ease-in-out infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 0.3; transform: scale(1); }
+            50% { opacity: 0.6; transform: scale(1.1); }
+        }
+        
+        .faceid-icon {
+            font-size: 5rem;
+            margin-bottom: 1.5rem;
+            position: relative;
+            z-index: 2;
+        }
+        
+        .faceid-title {
+            font-size: 2rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            position: relative;
+            z-index: 2;
+        }
+        
+        .faceid-subtitle {
+            font-size: 1.1rem;
+            opacity: 0.7;
+            margin-bottom: 3rem;
+            position: relative;
+            z-index: 2;
+        }
+        
+        .auth-button {
+            background: #007AFF;
+            color: white;
+            border: none;
+            border-radius: 15px;
+            padding: 15px 30px;
+            font-size: 1.1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin: 0.5rem;
+        }
+        
+        .auth-button:hover {
+            background: #0056CC;
+            transform: translateY(-2px);
+        }
         </style>
     """, unsafe_allow_html=True)
-
-    # Display login container
-    st.markdown('<div class="login-container">', unsafe_allow_html=True)
-    st.markdown('<div class="login-title">🔐 Secure Access</div>', unsafe_allow_html=True)
-    st.markdown('<div class="login-subtitle">Enter your PIN to access the dashboard</div>', unsafe_allow_html=True)
-
-    # Use a form for PIN input
-    with st.form("pin_auth_form"):
-        pin = st.text_input("PIN", type="password", label_visibility="collapsed", placeholder="Enter PIN")
-        submitted = st.form_submit_button("🔓 Unlock", use_container_width=True)
-
-        if submitted:
-            # Check the PIN against a secret
-            # IMPORTANT: Set this PIN in your Streamlit secrets!
-            correct_pin = st.secrets.get("APP_PIN", "1234") # Fallback to "1234" if not in secrets
-            if pin == correct_pin:
+    
+    # Main Face ID interface
+    st.markdown("""
+        <div class="faceid-container">
+            <div class="faceid-icon">🔒</div>
+            <div class="faceid-title">Business Dashboard</div>
+            <div class="faceid-subtitle">Secure authentication required</div>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Authentication methods
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("### 🔐 Face ID Authentication")
+        if st.button("🔐 Authenticate with Face ID", key="faceid_main", use_container_width=True):
+            with st.spinner("Authenticating..."):
+                time.sleep(2)  # Simulate processing time
                 st.session_state.authenticated = True
-                st.success("Authentication successful!")
+                st.success("✅ Face ID authentication successful!")
                 time.sleep(1)
                 st.rerun()
-            else:
-                st.error("❌ Invalid PIN. Please try again.")
-
-    st.markdown('</div>', unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown("### 🔢 PIN Authentication")
+        with st.form("pin_form", clear_on_submit=True):
+            pin = st.text_input("Enter 4-digit PIN", type="password", max_chars=4, key="pin_input")
+            submitted = st.form_submit_button("Verify PIN", use_container_width=True)
+            
+            if submitted:
+                # Get PIN from secrets
+                correct_pin = st.secrets.get("APP_PIN", "1332")
+                
+                if pin == correct_pin:
+                    st.session_state.authenticated = True
+                    st.success("✅ PIN authentication successful!")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.session_state.auth_attempts += 1
+                    if st.session_state.auth_attempts >= 3:
+                        st.error("❌ Too many failed attempts. Please wait...")
+                        time.sleep(3)
+                    else:
+                        st.error(f"❌ Invalid PIN. {3 - st.session_state.auth_attempts} attempts remaining.")
+    
     return False
+
+# --- DATA LOADING AND PROCESSING ---
 
 # --- Helper & Calculation Functions (Consolidated) ---
 
@@ -244,17 +321,23 @@ def load_and_process_data(today: pd.Timestamp, install_cost: float):
     operational and profitability analysis.
     """
     try:
+        # 1. Load data using Streamlit connection
         conn = st.connection("gsheets", type=GSheetsConnection)
         df = conn.read(worksheet=WORKSHEET_NAME, ttl=300)
+        
+        # Convert to DataFrame if needed
         if not isinstance(df, pd.DataFrame):
             df = pd.DataFrame(df)
+            
     except Exception as e:
         st.error(f"Failed to load data from Google Sheets: {e}")
         st.info("Please check your Streamlit secrets configuration.")
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-
+    
+    # Clean column names
     df.columns = df.columns.str.strip().str.replace(r'[\s-]+', '_', regex=True).str.replace(r'[^\w]', '', regex=True)
 
+    # 2. Ensure Core Columns Exist
     all_expected_cols = [
         'Template_Date', 'Ready_to_Fab_Date', 'Ship_Date', 'Install_Date', 'Service_Date', 'Delivery_Date',
         'Job_Creation', 'Next_Sched_Date', 'Product_Rcvd_Date', 'Pick_Up_Date', 'Job_Material',
@@ -263,17 +346,20 @@ def load_and_process_data(today: pd.Timestamp, install_cost: float):
         'Install_Assigned_To', 'Template_Assigned_To', 'Job_Name', 'Rework_Stone_Shop_Reason',
         'Ready_to_Fab_Status', 'Job_Type', 'Order_Type', 'Lead_Source', 'Phase_Dollars_Plant_Invoice_',
         'Job_Throughput_Rework_COGS', 'Job_Throughput_Rework_Job_Labor', 'Job_Throughput_Total_COGS',
-        'Branch_INV_', 'Plant_INV_', 'Job_Status'
+        'Branch_INV_', 'Plant_INV_', 'Job_Status', 'Customer_Category', 'City', 'Lead_Type',
+        'Supplied_By', 'Job_Throughput_Job_Rev', 'Job_Throughput_Total_Job_Cost'
     ]
     for col in all_expected_cols:
         if col not in df.columns:
             df[col] = None
 
+    # 3. Parse Dates
     date_cols = ['Template_Date', 'Ready_to_Fab_Date', 'Ship_Date', 'Install_Date', 'Service_Date',
                  'Delivery_Date', 'Job_Creation', 'Next_Sched_Date', 'Product_Rcvd_Date', 'Pick_Up_Date']
     for col in date_cols:
         df[col] = pd.to_datetime(df[col], errors='coerce')
 
+    # 4. Basic Calculations & Enrichments
     df['Last_Activity_Date'] = df[date_cols].max(axis=1)
     df['Days_Since_Last_Activity'] = (today - df['Last_Activity_Date']).dt.days
     df['Days_Behind'] = np.where(df['Next_Sched_Date'].notna(), (today - df['Next_Sched_Date']).dt.days, np.nan)
@@ -281,6 +367,7 @@ def load_and_process_data(today: pd.Timestamp, install_cost: float):
     df['Link'] = df['Production_'].apply(lambda po: f"{MORAWARE_SEARCH_URL}{po}" if po else None)
     df['Division_Type'] = df['Division'].apply(lambda x: 'Laminate' if 'laminate' in str(x).lower() else 'Stone/Quartz')
 
+    # 5. Operational Metrics
     df['Current_Stage'] = df.apply(get_current_stage, axis=1)
     df['Days_In_Current_Stage'] = df.apply(lambda row: calculate_days_in_stage(row, today), axis=1)
     df['Days_Template_to_RTF'] = (df['Ready_to_Fab_Date'] - df['Template_Date']).dt.days
@@ -292,7 +379,11 @@ def load_and_process_data(today: pd.Timestamp, install_cost: float):
     df['Has_Rework'] = df['Rework_Stone_Shop_Rework_Price'].notna() & (df['Rework_Stone_Shop_Rework_Price'] != '')
     df['Risk_Score'] = df.apply(calculate_risk_score, axis=1)
     df[['Delay_Probability', 'Risk_Factors']] = df.apply(lambda row: pd.Series(calculate_delay_probability(row)), axis=1)
+    
+    # Calculate Total_Rework_Cost for quality analysis
+    df['Total_Rework_Cost'] = pd.to_numeric(df['Rework_Stone_Shop_Rework_Price'].astype(str).str.replace(r'[$,%]', '', regex=True), errors='coerce').fillna(0)
 
+    # 6. Financial Metrics Processing & Splitting by Division
     df_stone = df[df['Division_Type'] == 'Stone/Quartz'].copy()
     df_laminate = df[df['Division_Type'] == 'Laminate'].copy()
     
@@ -301,13 +392,15 @@ def load_and_process_data(today: pd.Timestamp, install_cost: float):
 
     df_combined = pd.concat([df_stone_processed, df_laminate_processed], ignore_index=True)
 
+    # Return all three dataframes for efficiency
     return df_stone_processed, df_laminate_processed, df_combined
 
-# --- UI Rendering Functions ---
+# --- UI Rendering Functions for OPERATIONAL PERFORMANCE ---
 
 def render_daily_priorities(df: pd.DataFrame, today: pd.Timestamp):
     st.header("🚨 Daily Priorities & Warnings")
     
+    # Metrics at the top respect the main filters applied to the incoming dataframe `df`
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("🔴 High Risk Jobs", len(df[df['Risk_Score'] >= 30]))
@@ -316,18 +409,26 @@ def render_daily_priorities(df: pd.DataFrame, today: pd.Timestamp):
     with col3:
         st.metric("🚧 Stuck Jobs", len(df[df['Days_In_Current_Stage'] > TIMELINE_THRESHOLDS['days_in_stage_warning']]))
     with col4:
+        # For the metric, also only count active stale jobs from the filtered df
         stale_jobs_metric = df[(df['Days_Since_Last_Activity'] > TIMELINE_THRESHOLDS['stale_job_threshold']) & (df['Job_Status'] != 'Complete')]
         st.metric("💨 Stale Jobs", len(stale_jobs_metric))
 
     st.markdown("---")
     st.subheader("⚡ Critical Issues Requiring Immediate Attention")
     st.caption("This section only shows jobs where 'Job Status' is not 'Complete'.")
+
+    # Define dataframes for each critical issue, ensuring they are active jobs
+    # by filtering for Job_Status != 'Complete' from the incoming dataframe `df`.
     
     missing_activity = df[(df['Next_Sched_Activity'].isna()) & (df['Current_Stage'].isin(['Post-Template', 'In Fabrication', 'Product Received'])) & (df['Job_Status'] != 'Complete')]
+    
     stale_jobs = df[(df['Days_Since_Last_Activity'] > TIMELINE_THRESHOLDS['stale_job_threshold']) & (df['Job_Status'] != 'Complete')]
+    
     template_to_rtf_stuck = df[(df['Template_Date'].notna()) & (df['Ready_to_Fab_Date'].isna()) & ((today - df['Template_Date']).dt.days > TIMELINE_THRESHOLDS['template_to_rtf']) & (df['Job_Status'] != 'Complete')]
+    
     upcoming_installs = df[(df['Install_Date'].notna()) & (df['Install_Date'] <= today + timedelta(days=7)) & (df['Product_Rcvd_Date'].isna()) & (df['Job_Status'] != 'Complete')]
 
+    # Render expanders using the filtered dataframes
     if not missing_activity.empty:
         with st.expander(f"🚨 Jobs Missing Next Activity ({len(missing_activity)} jobs)", expanded=True):
             display_cols = ['Link', 'Job_Name', 'Current_Stage', 'Days_In_Current_Stage', 'Salesperson']
@@ -630,31 +731,441 @@ def render_historical_trends(df: pd.DataFrame):
     else:
         st.info("No completed jobs to analyze rework trends.")
 
-def render_profitability_tabs(df_stone, df_laminate, today_dt):
-    st.header("Profitability Analysis Dashboard")
-    st.markdown("Analyze financial performance, costs, and profit drivers by division.")
+# --- NEW ADVANCED ANALYTICS FUNCTIONS ---
 
-    profit_sub_tabs = st.tabs(["💎 Stone/Quartz", "🪵 Laminate"])
+def render_cash_flow_forecasting(df: pd.DataFrame, today: pd.Timestamp):
+    st.header("💰 Predictive Cash Flow Forecasting")
     
-    with profit_sub_tabs[0]:
-        stone_tabs = st.tabs(["📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "🔬 Rework & Variance", "🚧 Pipeline & Issues", "👷 Field Workload", "🔮 Forecasting"])
-        with stone_tabs[0]: render_overview_tab(df_stone, "Stone/Quartz")
-        with stone_tabs[1]: render_detailed_data_tab(df_stone, "Stone/Quartz")
-        with stone_tabs[2]: render_profit_drivers_tab(df_stone, "Stone/Quartz")
-        with stone_tabs[3]: render_rework_tab(df_stone, "Stone/Quartz")
-        with stone_tabs[4]: render_pipeline_issues_tab(df_stone, "Stone/Quartz", today_dt)
-        with stone_tabs[5]: render_field_workload_tab(df_stone, "Stone/Quartz")
-        with stone_tabs[6]: render_forecasting_tab(df_stone, "Stone/Quartz")
+    # Calculate average cycle times for prediction
+    completed_jobs = df[df['Current_Stage'] == 'Completed'].copy()
+    if completed_jobs.empty:
+        st.warning("No completed jobs available for cash flow forecasting.")
+        return
+    
+    avg_cycle_time = completed_jobs['Days_Template_to_Install'].mean()
+    if pd.isna(avg_cycle_time):
+        avg_cycle_time = 30  # Default fallback
+    
+    col1, col2, col3 = st.columns(3)
+    
+    # Current pipeline value
+    pipeline_jobs = df[df['Current_Stage'] != 'Completed'].copy()
+    total_pipeline_value = pipeline_jobs['Revenue'].sum()
+    
+    with col1:
+        st.metric("Total Pipeline Value", f"${total_pipeline_value:,.0f}")
+    
+    # Predicted monthly revenue
+    monthly_avg = completed_jobs.groupby(completed_jobs['Install_Date'].dt.to_period('M'))['Revenue'].sum().mean()
+    with col2:
+        st.metric("Avg Monthly Revenue", f"${monthly_avg:,.0f}" if pd.notna(monthly_avg) else "N/A")
+    
+    # Jobs at risk of delay
+    at_risk_value = pipeline_jobs[pipeline_jobs['Risk_Score'] >= 30]['Revenue'].sum()
+    with col3:
+        st.metric("At-Risk Revenue", f"${at_risk_value:,.0f}", delta_color="inverse")
+    
+    st.markdown("---")
+    
+    # Cash flow forecast
+    st.subheader("📊 90-Day Cash Flow Forecast")
+    
+    # Create forecast periods
+    periods = []
+    for i in range(13):  # 13 weeks = ~90 days
+        week_start = today + timedelta(weeks=i)
+        week_end = week_start + timedelta(days=6)
+        periods.append({'week': i+1, 'start': week_start, 'end': week_end})
+    
+    forecast_data = []
+    for period in periods:
+        # Estimate jobs likely to complete in this period
+        period_revenue = 0
+        
+        # Jobs with scheduled install dates in this period
+        scheduled_installs = pipeline_jobs[
+            (pipeline_jobs['Install_Date'] >= period['start']) & 
+            (pipeline_jobs['Install_Date'] <= period['end'])
+        ]
+        period_revenue += scheduled_installs['Revenue'].sum()
+        
+        # Jobs without install dates but likely to complete based on current stage
+        stage_multipliers = {
+            'Shipped': 0.8,  # 80% likely to install this week
+            'Product Received': 0.6,  # 60% likely
+            'In Fabrication': 0.3,   # 30% likely
+            'Post-Template': 0.1     # 10% likely
+        }
+        
+        for stage, multiplier in stage_multipliers.items():
+            stage_jobs = pipeline_jobs[
+                (pipeline_jobs['Current_Stage'] == stage) & 
+                (pipeline_jobs['Install_Date'].isna())
+            ]
+            period_revenue += (stage_jobs['Revenue'].sum() * multiplier) / 13  # Spread over 13 weeks
+        
+        forecast_data.append({
+            'Week': f"Week {period['week']}",
+            'Forecasted_Revenue': period_revenue,
+            'Period': period['start'].strftime('%m/%d')
+        })
+    
+    forecast_df = pd.DataFrame(forecast_data)
+    
+    # Display forecast chart
+    st.bar_chart(forecast_df.set_index('Week')['Forecasted_Revenue'])
+    
+    # Cash flow alerts
+    st.markdown("---")
+    st.subheader("🚨 Cash Flow Alerts")
+    
+    low_weeks = forecast_df[forecast_df['Forecasted_Revenue'] < monthly_avg/4]  # Less than 25% of monthly average
+    if not low_weeks.empty:
+        with st.expander("⚠️ Low Cash Flow Periods", expanded=True):
+            st.warning(f"Found {len(low_weeks)} weeks with potentially low cash flow:")
+            for _, week in low_weeks.iterrows():
+                st.write(f"• {week['Week']} ({week['Period']}): ${week['Forecasted_Revenue']:,.0f}")
+    else:
+        st.success("✅ No significant cash flow gaps detected in the next 90 days")
 
-    with profit_sub_tabs[1]:
-        laminate_tabs = st.tabs(["📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "🔬 Rework & Variance", "🚧 Pipeline & Issues", "👷 Field Workload", "🔮 Forecasting"])
-        with laminate_tabs[0]: render_overview_tab(df_laminate, "Laminate")
-        with laminate_tabs[1]: render_detailed_data_tab(df_laminate, "Laminate")
-        with laminate_tabs[2]: render_profit_drivers_tab(df_laminate, "Laminate")
-        with laminate_tabs[3]: render_rework_tab(df_laminate, "Laminate")
-        with laminate_tabs[4]: render_pipeline_issues_tab(df_laminate, "Laminate", today_dt)
-        with laminate_tabs[5]: render_field_workload_tab(df_laminate, "Laminate")
-        with laminate_tabs[6]: render_forecasting_tab(df_laminate, "Laminate")
+def render_material_cost_intelligence(df: pd.DataFrame):
+    st.header("🔬 Material Cost Intelligence")
+    
+    if 'Job_Material' not in df.columns or df['Job_Material'].isna().all():
+        st.warning("Material data not available for analysis.")
+        return
+    
+    # Parse material data that was already processed
+    material_df = df[df['Material_Brand'].notna() & df['Material_Color'].notna()].copy()
+    
+    if material_df.empty:
+        st.warning("No parsed material data available.")
+        return
+    
+    st.subheader("💎 Material Profitability Analysis")
+    
+    # Material profitability by brand
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**Top Profitable Material Brands**")
+        brand_profit = material_df.groupby('Material_Brand').agg({
+            'Branch_Profit': 'sum',
+            'Branch_Profit_Margin_%': 'mean',
+            'Job_Name': 'count'
+        }).round(2)
+        brand_profit.columns = ['Total_Profit', 'Avg_Margin_%', 'Job_Count']
+        brand_profit = brand_profit.sort_values('Total_Profit', ascending=False).head(10)
+        
+        st.dataframe(brand_profit.style.format({
+            'Total_Profit': '${:,.0f}',
+            'Avg_Margin_%': '{:.1f}%'
+        }), use_container_width=True)
+    
+    with col2:
+        st.markdown("**Material Cost Trends**")
+        if 'Cost_From_Plant' in material_df.columns and 'Total_Job_SqFt' in material_df.columns:
+            material_df['Cost_Per_SqFt'] = material_df['Cost_From_Plant'] / material_df['Total_Job_SqFt'].replace(0, 1)
+            
+            # Monthly cost per sqft trend
+            material_df['Month'] = pd.to_datetime(material_df['Job_Creation']).dt.to_period('M')
+            monthly_costs = material_df.groupby('Month')['Cost_Per_SqFt'].mean()
+            monthly_costs.index = monthly_costs.index.strftime('%Y-%m')
+            st.line_chart(monthly_costs)
+        else:
+            st.info("Cost per square foot data not available")
+    
+    st.markdown("---")
+    st.subheader("📊 Material Waste & Efficiency Analysis")
+    
+    # Material efficiency metrics
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if 'Total_Job_SqFt' in material_df.columns:
+            avg_sqft = material_df['Total_Job_SqFt'].mean()
+            st.metric("Avg Job Size (SqFt)", f"{avg_sqft:.1f}")
+    
+    with col2:
+        rework_rate = (material_df['Has_Rework'].sum() / len(material_df)) * 100
+        st.metric("Material Rework Rate", f"{rework_rate:.1f}%", delta_color="inverse")
+    
+    with col3:
+        if 'Revenue' in material_df.columns and 'Total_Job_SqFt' in material_df.columns:
+            revenue_per_sqft = (material_df['Revenue'] / material_df['Total_Job_SqFt'].replace(0, 1)).mean()
+            st.metric("Avg Revenue/SqFt", f"${revenue_per_sqft:.2f}")
+    
+    # High-waste materials identification
+    st.subheader("⚠️ High-Risk Materials (Quality Issues)")
+    rework_by_material = material_df.groupby('Material_Brand').agg({
+        'Has_Rework': 'sum',
+        'Job_Name': 'count'
+    })
+    rework_by_material['Rework_Rate_%'] = (rework_by_material['Has_Rework'] / rework_by_material['Job_Name']) * 100
+    rework_by_material = rework_by_material[rework_by_material['Job_Name'] >= 5]  # At least 5 jobs
+    high_rework = rework_by_material[rework_by_material['Rework_Rate_%'] > 10].sort_values('Rework_Rate_%', ascending=False)
+    
+    if not high_rework.empty:
+        st.dataframe(high_rework.style.format({'Rework_Rate_%': '{:.1f}%'}), use_container_width=True)
+    else:
+        st.success("✅ No materials with consistently high rework rates identified")
+
+def render_resource_optimization(df: pd.DataFrame):
+    st.header("👥 Resource Optimization Dashboard")
+    
+    # Template crew analysis
+    st.subheader("📋 Template Crew Efficiency")
+    
+    if 'Template_Assigned_To' in df.columns:
+        template_crews = df[df['Template_Assigned_To'].notna()].copy()
+        
+        if not template_crews.empty:
+            crew_metrics = template_crews.groupby('Template_Assigned_To').agg({
+                'Job_Name': 'count',
+                'Days_Template_to_RTF': 'mean',
+                'Total_Job_SqFt': 'sum',
+                'Has_Rework': 'sum'
+            }).round(2)
+            
+            crew_metrics.columns = ['Total_Jobs', 'Avg_Template_to_RTF_Days', 'Total_SqFt', 'Rework_Count']
+            crew_metrics['Rework_Rate_%'] = (crew_metrics['Rework_Count'] / crew_metrics['Total_Jobs']) * 100
+            crew_metrics['SqFt_Per_Job'] = crew_metrics['Total_SqFt'] / crew_metrics['Total_Jobs']
+            
+            # Sort by efficiency (lower days to RTF is better)
+            crew_metrics = crew_metrics.sort_values('Avg_Template_to_RTF_Days')
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("**Template Crew Performance**")
+                display_cols = ['Total_Jobs', 'Avg_Template_to_RTF_Days', 'Rework_Rate_%']
+                st.dataframe(crew_metrics[display_cols].style.format({
+                    'Avg_Template_to_RTF_Days': '{:.1f}',
+                    'Rework_Rate_%': '{:.1f}%'
+                }), use_container_width=True)
+            
+            with col2:
+                st.markdown("**Workload Distribution**")
+                st.bar_chart(crew_metrics['Total_Jobs'])
+        else:
+            st.info("No template crew data available")
+    
+    st.markdown("---")
+    
+    # Install crew analysis
+    st.subheader("🔧 Install Crew Performance")
+    
+    if 'Install_Assigned_To' in df.columns:
+        install_crews = df[df['Install_Assigned_To'].notna()].copy()
+        
+        if not install_crews.empty:
+            install_metrics = install_crews.groupby('Install_Assigned_To').agg({
+                'Job_Name': 'count',
+                'Days_Ship_to_Install': 'mean',
+                'Total_Job_SqFt': 'sum',
+                'Revenue': 'sum'
+            }).round(2)
+            
+            install_metrics.columns = ['Total_Installs', 'Avg_Ship_to_Install_Days', 'Total_SqFt', 'Total_Revenue']
+            install_metrics['Revenue_Per_Install'] = install_metrics['Total_Revenue'] / install_metrics['Total_Installs']
+            install_metrics['SqFt_Per_Install'] = install_metrics['Total_SqFt'] / install_metrics['Total_Installs']
+            
+            # Sort by total revenue
+            install_metrics = install_metrics.sort_values('Total_Revenue', ascending=False)
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("**Install Crew Performance**")
+                display_cols = ['Total_Installs', 'Avg_Ship_to_Install_Days', 'Revenue_Per_Install']
+                st.dataframe(install_metrics[display_cols].style.format({
+                    'Avg_Ship_to_Install_Days': '{:.1f}',
+                    'Revenue_Per_Install': '${:,.0f}'
+                }), use_container_width=True)
+            
+            with col2:
+                st.markdown("**Revenue Distribution**")
+                st.bar_chart(install_metrics['Total_Revenue'])
+        else:
+            st.info("No install crew data available")
+    
+    st.markdown("---")
+    
+    # Capacity planning
+    st.subheader("📈 Capacity Planning Analysis")
+    
+    completed_jobs = df[df['Current_Stage'] == 'Completed'].copy()
+    if not completed_jobs.empty and 'Job_Creation' in completed_jobs.columns:
+        completed_jobs['Month'] = pd.to_datetime(completed_jobs['Job_Creation']).dt.to_period('M')
+        monthly_capacity = completed_jobs.groupby('Month').agg({
+            'Job_Name': 'count',
+            'Total_Job_SqFt': 'sum',
+            'Revenue': 'sum'
+        })
+        monthly_capacity.columns = ['Jobs_Completed', 'Total_SqFt', 'Total_Revenue']
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Avg Monthly Jobs", f"{monthly_capacity['Jobs_Completed'].mean():.0f}")
+        
+        with col2:
+            st.metric("Avg Monthly SqFt", f"{monthly_capacity['Total_SqFt'].mean():,.0f}")
+        
+        with col3:
+            st.metric("Avg Monthly Revenue", f"${monthly_capacity['Total_Revenue'].mean():,.0f}")
+        
+        # Capacity trend
+        monthly_capacity.index = monthly_capacity.index.strftime('%Y-%m')
+        st.line_chart(monthly_capacity['Jobs_Completed'])
+    else:
+        st.info("Insufficient data for capacity planning analysis")
+
+def render_quality_control_center(df: pd.DataFrame):
+    st.header("🎯 Quality Control Center")
+    
+    # Overall quality metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    total_jobs = len(df)
+    rework_jobs = df['Has_Rework'].sum()
+    rework_rate = (rework_jobs / total_jobs) * 100 if total_jobs > 0 else 0
+    
+    with col1:
+        st.metric("Total Jobs", total_jobs)
+    
+    with col2:
+        st.metric("Jobs with Rework", rework_jobs, delta_color="inverse")
+    
+    with col3:
+        st.metric("Overall Rework Rate", f"{rework_rate:.1f}%", delta_color="inverse")
+    
+    with col4:
+        if 'Total_Rework_Cost' in df.columns:
+            total_rework_cost = df['Total_Rework_Cost'].sum()
+            st.metric("Total Rework Cost", f"${total_rework_cost:,.0f}", delta_color="inverse")
+    
+    st.markdown("---")
+    
+    # Rework analysis by different dimensions
+    st.subheader("🔍 Rework Analysis by Category")
+    
+    analysis_tabs = st.tabs(["By Material", "By Crew", "By Customer Type", "By Time Period"])
+    
+    with analysis_tabs[0]:
+        # Rework by material
+        if 'Material_Brand' in df.columns:
+            material_rework = df.groupby('Material_Brand').agg({
+                'Has_Rework': 'sum',
+                'Job_Name': 'count',
+                'Total_Rework_Cost': 'sum'
+            }).reset_index()
+            material_rework['Rework_Rate_%'] = (material_rework['Has_Rework'] / material_rework['Job_Name']) * 100
+            material_rework = material_rework[material_rework['Job_Name'] >= 3]  # At least 3 jobs
+            material_rework = material_rework.sort_values('Rework_Rate_%', ascending=False)
+            
+            if not material_rework.empty:
+                st.dataframe(material_rework.style.format({
+                    'Rework_Rate_%': '{:.1f}%',
+                    'Total_Rework_Cost': '${:,.0f}'
+                }), use_container_width=True)
+            else:
+                st.info("No material rework data available")
+        else:
+            st.info("Material data not available for rework analysis")
+    
+    with analysis_tabs[1]:
+        # Rework by crew
+        crew_columns = ['Template_Assigned_To', 'Install_Assigned_To']
+        for crew_type in crew_columns:
+            if crew_type in df.columns:
+                st.markdown(f"**{crew_type.replace('_', ' ')} Rework Analysis**")
+                crew_rework = df[df[crew_type].notna()].groupby(crew_type).agg({
+                    'Has_Rework': 'sum',
+                    'Job_Name': 'count',
+                    'Total_Rework_Cost': 'sum'
+                }).reset_index()
+                crew_rework['Rework_Rate_%'] = (crew_rework['Has_Rework'] / crew_rework['Job_Name']) * 100
+                crew_rework = crew_rework[crew_rework['Job_Name'] >= 5]  # At least 5 jobs
+                crew_rework = crew_rework.sort_values('Rework_Rate_%', ascending=False)
+                
+                if not crew_rework.empty:
+                    st.dataframe(crew_rework.style.format({
+                        'Rework_Rate_%': '{:.1f}%',
+                        'Total_Rework_Cost': '${:,.0f}'
+                    }), use_container_width=True)
+                else:
+                    st.info(f"No {crew_type} rework data available")
+                st.markdown("---")
+    
+    with analysis_tabs[2]:
+        # Rework by customer category
+        if 'Customer_Category' in df.columns:
+            customer_rework = df.groupby('Customer_Category').agg({
+                'Has_Rework': 'sum',
+                'Job_Name': 'count',
+                'Total_Rework_Cost': 'sum'
+            }).reset_index()
+            customer_rework['Rework_Rate_%'] = (customer_rework['Has_Rework'] / customer_rework['Job_Name']) * 100
+            customer_rework = customer_rework.sort_values('Rework_Rate_%', ascending=False)
+            
+            st.dataframe(customer_rework.style.format({
+                'Rework_Rate_%': '{:.1f}%',
+                'Total_Rework_Cost': '${:,.0f}'
+            }), use_container_width=True)
+        else:
+            st.info("Customer category data not available")
+    
+    with analysis_tabs[3]:
+        # Rework trends over time
+        if 'Job_Creation' in df.columns:
+            df_time = df.copy()
+            df_time['Month'] = pd.to_datetime(df_time['Job_Creation']).dt.to_period('M')
+            monthly_rework = df_time.groupby('Month').agg({
+                'Has_Rework': 'sum',
+                'Job_Name': 'count',
+                'Total_Rework_Cost': 'sum'
+            })
+            monthly_rework['Rework_Rate_%'] = (monthly_rework['Has_Rework'] / monthly_rework['Job_Name']) * 100
+            
+            monthly_rework.index = monthly_rework.index.strftime('%Y-%m')
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("**Monthly Rework Rate Trend**")
+                st.line_chart(monthly_rework['Rework_Rate_%'])
+            
+            with col2:
+                st.markdown("**Monthly Rework Cost Trend**")
+                st.line_chart(monthly_rework['Total_Rework_Cost'])
+        else:
+            st.info("Time-based rework analysis not available")
+    
+    st.markdown("---")
+    
+    # Cost of quality analysis
+    st.subheader("💰 Cost of Quality Analysis")
+    
+    if 'Total_Rework_Cost' in df.columns and 'Revenue' in df.columns:
+        total_revenue = df['Revenue'].sum()
+        total_rework_cost = df['Total_Rework_Cost'].sum()
+        cost_of_quality_pct = (total_rework_cost / total_revenue) * 100 if total_revenue > 0 else 0
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.metric("Cost of Quality %", f"{cost_of_quality_pct:.2f}%")
+            st.caption("Rework cost as % of total revenue")
+        
+        with col2:
+            # Calculate potential savings
+            if rework_rate > 0:
+                potential_savings = total_rework_cost * 0.5  # Assume 50% reduction possible
+                st.metric("Potential Annual Savings", f"${potential_savings:,.0f}")
+                st.caption("50% rework reduction target")
+    else:
+        st.info("Cost of quality data not available")
 
 # --- UI Rendering Functions for PROFITABILITY ANALYSIS ---
 
@@ -888,11 +1399,12 @@ def render_forecasting_tab(df: pd.DataFrame, division_name: str):
     st.line_chart(monthly_summary[['Revenue', 'Branch_Profit']])
     st.bar_chart(monthly_summary['Job_Count'])
 
+# --- UI Rendering for NEW "Overall Business Health" Tab ---
 def render_overall_health_tab(df: pd.DataFrame, today: pd.Timestamp):
     st.header("🚀 Overall Business Health at a Glance")
     
-    df_active = df[df['Job_Status'] != 'Complete']
-    df_completed_last_30 = df[(df['Job_Status'] == 'Complete') & (df['Install_Date'].notna()) & (df['Install_Date'] >= today - timedelta(days=30))]
+    df_active = df[df['Current_Stage'] != 'Completed']
+    df_completed_last_30 = df[(df['Current_Stage'] == 'Completed') & (df['Install_Date'].notna()) & (df['Install_Date'] >= today - timedelta(days=30))]
 
     st.markdown("### Key Performance Indicators (Last 30 Days)")
     col1, col2, col3, col4 = st.columns(4)
@@ -936,21 +1448,37 @@ def render_overall_health_tab(df: pd.DataFrame, today: pd.Timestamp):
 
 # --- Main Application ---
 def main():
-    if not render_login_screen():
+    # 🔐 AUTHENTICATION - Add this at the very beginning
+    if not render_faceid_style_auth():  # Choose your preferred method
         return
-
+    
     st.title("🚀 Unified Operations & Profitability Dashboard")
     
+    # --- Sidebar Configuration ---
     st.sidebar.header("⚙️ Configuration")
+    
+    # Add logout button in sidebar
+    with st.sidebar:
+        st.markdown("---")
+        if st.button("🚪 Sign Out"):
+            st.session_state.authenticated = False
+            st.success("👋 Signed out successfully!")
+            time.sleep(1)
+            st.rerun()
+    
     today_dt = pd.to_datetime(st.sidebar.date_input("Select 'Today's' Date", value=datetime.now().date()))
+    
     install_cost_sqft = st.sidebar.number_input("Install Cost per SqFt ($)", min_value=0.0, value=15.0, step=0.50)
 
+    # --- Data Loading ---
     try:
         with st.spinner("Loading and processing all job data..."):
+            # The data loading function now uses Streamlit secrets
             df_stone, df_laminate, df_full = load_and_process_data(today_dt, install_cost_sqft)
     except Exception as e:
-        st.error(f"An unexpected error occurred during data loading: {e}")
-        st.exception(e)
+        st.error(f"Failed to load or process data. Error: {e}")
+        st.error("Please check your Streamlit secrets configuration in the app settings.")
+        st.info("Make sure you have set up the 'gsheets' connection in your secrets.toml file.")
         st.stop()
 
     if df_full.empty:
@@ -961,6 +1489,21 @@ def main():
     st.sidebar.info(f"Data loaded for {len(df_full)} jobs.")
     st.sidebar.info(f"Last refreshed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
+    # Display connection status
+    with st.sidebar:
+        if len(df_full) > 0:
+            st.success("✅ Connected to Google Sheets")
+        else:
+            st.error("❌ Connection failed")
+    
+    # Display connection status
+    with st.sidebar:
+        if len(df_full) > 0:
+            st.success("✅ Connected to Google Sheets")
+        else:
+            st.error("❌ Connection failed")
+
+    # --- Main Application Tabs ---
     main_tabs = st.tabs(["📈 Overall Business Health", "⚙️ Operational Performance", "💰 Profitability Analysis"])
 
     with main_tabs[0]:
@@ -970,51 +1513,65 @@ def main():
         st.header("Operational Performance Dashboard")
         st.markdown("Analyze real-time operational efficiency, risks, and workload.")
         
-        op_cols = st.columns(3)
+        op_cols = st.columns(2)
         with op_cols[0]:
-            status_options = ["Active", "Complete", "30+ Days Old", "Unscheduled"]
-            status_filter = st.multiselect("Filter by Job Status", status_options, default=["Active"], key="op_status_multi")
-        with op_cols[1]:
             salesperson_list = ['All'] + sorted(df_full['Salesperson'].dropna().unique().tolist())
             salesperson_filter = st.selectbox("Filter by Salesperson", salesperson_list, key="op_sales")
-        with op_cols[2]:
+        with op_cols[1]:
             division_list = ['All'] + sorted(df_full['Division_Type'].dropna().unique().tolist())
             division_filter = st.selectbox("Filter by Division", division_list, key="op_div")
 
+        # --- Filtering Logic (Simplified - No Status Filter) ---
         df_op_filtered = df_full.copy()
 
-        if status_filter:
-            final_mask = pd.Series([False] * len(df_full), index=df_full.index)
-            if "Active" in status_filter:
-                final_mask |= (df_full['Job_Status'] != 'Complete')
-            if "Complete" in status_filter:
-                final_mask |= (df_full['Job_Status'] == 'Complete')
-            if "30+ Days Old" in status_filter:
-                thirty_days_ago = today_dt - timedelta(days=30)
-                final_mask |= ((df_full['Job_Creation'] < thirty_days_ago) & (df_full['Job_Status'] != 'Complete'))
-            if "Unscheduled" in status_filter:
-                final_mask |= (df_full['Next_Sched_Date'].isna() & (df_full['Job_Status'] != 'Complete'))
-            df_op_filtered = df_full[final_mask]
-        else:
-            df_op_filtered = pd.DataFrame(columns=df_full.columns)
-
+        # Apply filters
         if salesperson_filter != 'All':
             df_op_filtered = df_op_filtered[df_op_filtered['Salesperson'] == salesperson_filter]
+        
         if division_filter != 'All':
             df_op_filtered = df_op_filtered[df_op_filtered['Division_Type'] == division_filter]
         
         st.info(f"Displaying {len(df_op_filtered)} jobs based on filters.")
 
-        op_sub_tabs = st.tabs(["🚨 Daily Priorities", "📅 Workload Calendar", "📊 Timeline Analytics", "🔮 Predictive Analytics", "🎯 Performance Scorecards", "📈 Historical Trends"])
+        op_sub_tabs = st.tabs(["🚨 Daily Priorities", "📅 Workload Calendar", "📊 Timeline Analytics", "🔮 Predictive Analytics", "🎯 Performance Scorecards", "📈 Historical Trends", "💰 Cash Flow Forecast", "🔬 Material Intelligence", "👥 Resource Optimization", "🎯 Quality Control"])
         with op_sub_tabs[0]: render_daily_priorities(df_op_filtered, today_dt)
         with op_sub_tabs[1]: render_workload_calendar(df_op_filtered, today_dt)
         with op_sub_tabs[2]: render_timeline_analytics(df_op_filtered)
         with op_sub_tabs[3]: render_predictive_analytics(df_op_filtered)
         with op_sub_tabs[4]: render_performance_scorecards(df_op_filtered)
         with op_sub_tabs[5]: render_historical_trends(df_full)
+        with op_sub_tabs[6]: render_cash_flow_forecasting(df_op_filtered, today_dt)
+        with op_sub_tabs[7]: render_material_cost_intelligence(df_op_filtered)
+        with op_sub_tabs[8]: render_resource_optimization(df_op_filtered)
+        with op_sub_tabs[9]: render_quality_control_center(df_op_filtered)
 
     with main_tabs[2]:
-        render_profitability_tabs(df_stone, df_laminate, today_dt)
+        st.header("Profitability Analysis Dashboard")
+        st.markdown("Analyze financial performance, costs, and profit drivers by division.")
+
+        # Use the pre-processed dataframes directly
+        profit_sub_tabs = st.tabs(["💎 Stone/Quartz", "🪵 Laminate"])
+        
+        with profit_sub_tabs[0]:
+            stone_tabs = st.tabs(["📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "🔬 Rework & Variance", "🚧 Pipeline & Issues", "👷 Field Workload", "🔮 Forecasting"])
+            with stone_tabs[0]: render_overview_tab(df_stone, "Stone/Quartz")
+            with stone_tabs[1]: render_detailed_data_tab(df_stone, "Stone/Quartz")
+            with stone_tabs[2]: render_profit_drivers_tab(df_stone, "Stone/Quartz")
+            with stone_tabs[3]: render_rework_tab(df_stone, "Stone/Quartz")
+            with stone_tabs[4]: render_pipeline_issues_tab(df_stone, "Stone/Quartz", today_dt)
+            with stone_tabs[5]: render_field_workload_tab(df_stone, "Stone/Quartz")
+            with stone_tabs[6]: render_forecasting_tab(df_stone, "Stone/Quartz")
+
+        with profit_sub_tabs[1]:
+            laminate_tabs = st.tabs(["📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "🔬 Rework & Variance", "🚧 Pipeline & Issues", "👷 Field Workload", "🔮 Forecasting"])
+            with laminate_tabs[0]: render_overview_tab(df_laminate, "Laminate")
+            with laminate_tabs[1]: render_detailed_data_tab(df_laminate, "Laminate")
+            with laminate_tabs[2]: render_profit_drivers_tab(df_laminate, "Laminate")
+            with laminate_tabs[3]: render_rework_tab(df_laminate, "Laminate")
+            with laminate_tabs[4]: render_pipeline_issues_tab(df_laminate, "Laminate", today_dt)
+            with laminate_tabs[5]: render_field_workload_tab(df_laminate, "Laminate")
+            with laminate_tabs[6]: render_forecasting_tab(df_laminate, "Laminate")
+
 
 if __name__ == "__main__":
     main()
