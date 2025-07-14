@@ -659,7 +659,7 @@ def render_profitability_tabs(df_stone, df_laminate, today_dt):
 # --- UI Rendering Functions for PROFITABILITY ANALYSIS ---
 
 def render_overview_tab(df: pd.DataFrame, division_name: str):
-    st.header(f"� {division_name} Overview")
+    st.header(f"📈 {division_name} Overview")
     if df.empty:
         st.warning(f"No {division_name} data available for the selected period.")
         return
@@ -727,7 +727,7 @@ def render_detailed_data_tab(df: pd.DataFrame, division_name: str):
     )
 
 def render_profit_drivers_tab(df: pd.DataFrame, division_name: str):
-    st.header(f"💸 {division_name} Profitability Drivers")
+    st.header(f"� {division_name} Profitability Drivers")
     if df.empty:
         st.warning(f"No {division_name} data available.")
         return
@@ -947,12 +947,15 @@ def main():
 
     # --- PIN Status Debugger ---
     st.sidebar.markdown("---")
-    st.sidebar.subheader("Connection Status")
+    st.sidebar.subheader("Secrets Debugger")
     if st.secrets.has_key("APP_PIN"):
         st.sidebar.success("✅ APP_PIN secret loaded.")
     else:
         st.sidebar.warning("⚠️ APP_PIN secret not found.")
         st.sidebar.info("Using default PIN '1234'.")
+    
+    with st.sidebar.expander("View all loaded secret keys"):
+        st.write(st.secrets.keys())
     st.sidebar.markdown("---")
 
 
@@ -1028,3 +1031,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+�
