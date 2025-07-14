@@ -659,7 +659,7 @@ def render_profitability_tabs(df_stone, df_laminate, today_dt):
 # --- UI Rendering Functions for PROFITABILITY ANALYSIS ---
 
 def render_overview_tab(df: pd.DataFrame, division_name: str):
-    st.header(f"📈 {division_name} Overview")
+    st.header(f"� {division_name} Overview")
     if df.empty:
         st.warning(f"No {division_name} data available for the selected period.")
         return
@@ -945,6 +945,17 @@ def main():
     today_dt = pd.to_datetime(st.sidebar.date_input("Select 'Today's' Date", value=datetime.now().date()))
     install_cost_sqft = st.sidebar.number_input("Install Cost per SqFt ($)", min_value=0.0, value=15.0, step=0.50)
 
+    # --- PIN Status Debugger ---
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Connection Status")
+    if st.secrets.has_key("APP_PIN"):
+        st.sidebar.success("✅ APP_PIN secret loaded.")
+    else:
+        st.sidebar.warning("⚠️ APP_PIN secret not found.")
+        st.sidebar.info("Using default PIN '1234'.")
+    st.sidebar.markdown("---")
+
+
     try:
         with st.spinner("Loading and processing all job data..."):
             df_stone, df_laminate, df_full = load_and_process_data(today_dt, install_cost_sqft)
@@ -957,7 +968,6 @@ def main():
         st.error("No data loaded. Please check your Google Sheets connection and data.")
         st.stop()
 
-    st.sidebar.markdown("---")
     st.sidebar.info(f"Data loaded for {len(df_full)} jobs.")
     st.sidebar.info(f"Last refreshed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
