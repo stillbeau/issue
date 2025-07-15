@@ -263,7 +263,7 @@ def load_and_process_data(today: pd.Timestamp, install_cost: float):
         'Install_Assigned_To', 'Template_Assigned_To', 'Job_Name', 'Rework_Stone_Shop_Reason',
         'Ready_to_Fab_Status', 'Job_Type', 'Order_Type', 'Lead_Source', 'Phase_Dollars_Plant_Invoice_',
         'Job_Throughput_Rework_COGS', 'Job_Throughput_Rework_Job_Labor', 'Job_Throughput_Total_COGS',
-        'Branch_INV_', 'Plant_INV_', 'Job_Status'
+        'Branch_INV_', 'Plant_INV_', 'Job_Status', 'Invoice_Status', 'Install_Status', 'Pick_Up_Status', 'Delivery_Status'
     ]
     for col in all_expected_cols:
         if col not in df.columns:
@@ -727,7 +727,7 @@ def render_detailed_data_tab(df: pd.DataFrame, division_name: str):
     )
 
 def render_profit_drivers_tab(df: pd.DataFrame, division_name: str):
-    st.header(f"� {division_name} Profitability Drivers")
+    st.header(f"💸 {division_name} Profitability Drivers")
     if df.empty:
         st.warning(f"No {division_name} data available.")
         return
@@ -821,6 +821,54 @@ def render_pipeline_issues_tab(df: pd.DataFrame, division_name: str, today: pd.T
             st.success("✅ No jobs are currently in fabrication without a ship date.")
     else:
         st.warning("Could not check for jobs in fabrication. Required columns missing.")
+
+    st.markdown("---")
+    st.subheader("Jobs Ready for Invoicing")
+    
+    # Check for jobs that should be invoiced
+    # Logic: If Install, Pick Up, or Delivery is complete but Invoice is not complete
+    required_cols_invoice = ['Invoice_Status', 'Install_Status', 'Pick_Up_Status', 'Delivery_Status']
+    
+    if all(col in df.columns for col in required_cols_invoice):
+        # Jobs where at least one completion activity is done but invoice is not complete
+        completion_conditions = (
+            (df['Install_Status'].fillna('').str.lower() == 'complete') |
+            (df['Pick_Up_Status'].fillna('').str.lower() == 'complete') |
+            (df['Delivery_Status'].fillna('').str.lower() == 'complete')
+        )
+        
+        invoice_not_complete = df['Invoice_Status'].fillna('').str.lower() != 'complete'
+        
+        jobs_to_invoice = df[completion_conditions & invoice_not_complete].copy()
+        
+        if not jobs_to_invoice.empty:
+            # Add completion status column for display
+            jobs_to_invoice['Completion_Status'] = jobs_to_invoice.apply(
+                lambda row: ', '.join([
+                    status for status in [
+                        'Install' if row.get('Install_Status', '').lower() == 'complete' else None,
+                        'Pick Up' if row.get('Pick_Up_Status', '').lower() == 'complete' else None,
+                        'Delivery' if row.get('Delivery_Status', '').lower() == 'complete' else None
+                    ] if status is not None
+                ]), axis=1
+            )
+            
+            display_cols = ['Link', 'Job_Name', 'Salesperson', 'Completion_Status', 'Invoice_Status']
+            st.dataframe(
+                jobs_to_invoice[display_cols].sort_values(by='Job_Name'),
+                use_container_width=True, 
+                column_config={
+                    "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)"),
+                    "Completion_Status": st.column_config.TextColumn("Completed Activities"),
+                    "Invoice_Status": st.column_config.TextColumn("Invoice Status")
+                }
+            )
+            st.info(f"📋 {len(jobs_to_invoice)} jobs are ready for invoicing")
+        else:
+            st.success("✅ No jobs are currently awaiting invoicing.")
+    else:
+        missing_cols = [col for col in required_cols_invoice if col not in df.columns]
+        st.warning(f"Could not check for jobs ready for invoicing. Missing columns: {', '.join(missing_cols)}")
 
 def render_workload_card(df_filtered: pd.DataFrame, activity_name: str, date_col: str, assignee_col: str):
     st.subheader(activity_name)
@@ -944,20 +992,6 @@ def main():
     st.sidebar.header("⚙️ Configuration")
     today_dt = pd.to_datetime(st.sidebar.date_input("Select 'Today's' Date", value=datetime.now().date()))
     install_cost_sqft = st.sidebar.number_input("Install Cost per SqFt ($)", min_value=0.0, value=15.0, step=0.50)
-
-    # --- PIN Status Debugger ---
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("Secrets Debugger")
-    if st.secrets.has_key("APP_PIN"):
-        st.sidebar.success("✅ APP_PIN secret loaded.")
-    else:
-        st.sidebar.warning("⚠️ APP_PIN secret not found.")
-        st.sidebar.info("Using default PIN '1234'.")
-    
-    with st.sidebar.expander("View all loaded secret keys"):
-        st.write(st.secrets.keys())
-    st.sidebar.markdown("---")
-
 
     try:
         with st.spinner("Loading and processing all job data..."):
