@@ -37,6 +37,81 @@ TIMELINE_THRESHOLDS = {
     'stale_job_threshold': 7       # days since last activity
 }
 
+# --- Pricing Configuration ---
+MATERIAL_GROUPS = {
+    # Group 0 - $58.00/sq ft, Cost: $34.80-$34.99
+    0: {
+        'retail_price': 58.00, 'cost_min': 34.80, 'cost_max': 34.99,
+        'materials': ['black coral', 'rocky shores', 'tofino']
+    },
+    # Group 1 - $68.00/sq ft, Cost: $39.01
+    1: {
+        'retail_price': 68.00, 'cost_min': 39.01, 'cost_max': 39.01,
+        'materials': ['aspen', 'blackburn', 'leaden', 'uptown grey']
+    },
+    # Group 2 - $88.00/sq ft, Cost: $48.77
+    2: {
+        'retail_price': 88.00, 'cost_min': 48.77, 'cost_max': 48.77,
+        'materials': ['miami vena', 'whistler', 'whistler gold', 'miami white', 'silhouette', 
+                     'artisan grey', 'drift', 'specchio white', 'lazio', 'urban cloud']
+    },
+    # Group 3 - $98.00/sq ft, Cost: $54.17
+    3: {
+        'retail_price': 98.00, 'cost_min': 54.17, 'cost_max': 54.17,
+        'materials': ['carrara codena', 'desert silver', 'calacatta west', 'organic white', 'aterra blanca']
+    },
+    # Group 4 - $110.00/sq ft, Cost: $58.69-$60.47
+    4: {
+        'retail_price': 110.00, 'cost_min': 58.69, 'cost_max': 60.47,
+        'materials': ['aterra verity', 'brava marfil', 'charcoal soapstone', 'antello', 'celestial sky',
+                     'embrace', 'empress', 'fresh concrete', 'frosty carrina', 'oceana', 'raw concrete',
+                     'stellar snow', 'tranquility', 'bianco drift']
+    },
+    # Group 5 - $118.00/sq ft, Cost: $61.67
+    5: {
+        'retail_price': 118.00, 'cost_min': 61.67, 'cost_max': 61.67,
+        'materials': ['clouds rest', 'desert wind', 'haida', 'glencoe', 'marathi marble', 'moorland fog',
+                     'nova serrana', 'river glen', 'rugged concrete', 'santiago', 'serene', 'verde peak',
+                     'vicentia', 'eden', 'aurelia', 'montauk', 'chantilly']
+    },
+    # Group 6 - $128.00/sq ft, Cost: $70.68
+    6: {
+        'retail_price': 128.00, 'cost_min': 70.68, 'cost_max': 70.68,
+        'materials': ['calacatta olympos', 'fossa falls', 'calacatta volegno', 'calacatta pastino',
+                     'coastal', 'enchanted rock', 'north cascades', 'raw a', 'raw g', 'et statuario',
+                     'calacatta extra', 'calacatta mont']
+    },
+    # Group 7 - $144.00/sq ft, Cost: $73.38-$83.29
+    7: {
+        'retail_price': 144.00, 'cost_min': 73.38, 'cost_max': 83.29,
+        'materials': ['tyrol', 'verdelia', 'et calacatta gold', 'ethereal glow', 'ethereal dusk',
+                     'ethereal noctis', 'elba white', 'le blanc', 'matterhorn']
+    },
+    # Group 8 - $168.00/sq ft, Cost: $98.75
+    8: {
+        'retail_price': 168.00, 'cost_min': 98.75, 'cost_max': 98.75,
+        'materials': ['amarcord', 'berwyn', 'colton', 'calacatta nuvo', 'solenna', 'versailles ivory',
+                     'romantic ash', 'riviere rose']
+    },
+    # Group 9 - $198.00/sq ft, Cost: $115.46
+    9: {
+        'retail_price': 198.00, 'cost_min': 115.46, 'cost_max': 115.46,
+        'materials': ['brittanicca', 'brittanicca gold warm', 'skara brae', 'inverness frost',
+                     'everleigh', 'portrush', 'ironsbridge']
+    }
+}
+
+CUSTOMER_DISCOUNTS = {
+    'Retail': {'discount': 0.0, 'install_rate': 34.00},
+    'Dealer': {'discount': 0.15, 'install_rate': 28.90},
+    'Contractor': {'discount': 0.25, 'install_rate': 25.50},
+    'Home Builder': {'discount': 0.25, 'install_rate': 25.50},
+    'Commercial': {'discount': 0.25, 'install_rate': 25.50},
+    'LIA': {'discount': 0.30, 'install_rate': 0.00},
+    'Home Depot': {'discount': 'special', 'install_rate': 'special'},
+    'Costco': {'discount': 'special', 'install_rate': 'special'}
+}
+
 # --- Division-Specific Processing Configuration (from Profitability Dashboard) ---
 STONE_CONFIG = {
     "name": "Stone/Quartz",
@@ -128,6 +203,182 @@ def render_login_screen():
 
     st.markdown('</div>', unsafe_allow_html=True)
     return False
+
+# --- Pricing Validation Functions ---
+
+def detect_material_group(material_description):
+    """
+    Detect material group from job material description.
+    Returns (group_number, confidence, matched_material) or (None, 0, None) if not found.
+    """
+    if pd.isna(material_description):
+        return None, 0, None
+    
+    material_desc = str(material_description).lower()
+    
+    # Check each group for material matches
+    for group_num, group_data in MATERIAL_GROUPS.items():
+        for material in group_data['materials']:
+            # Check for material name in description
+            if material in material_desc:
+                # Higher confidence for longer, more specific matches
+                confidence = len(material) / len(material_desc) * 100
+                return group_num, confidence, material
+    
+    # Special handling for common variations
+    material_variants = {
+        'calacatta': [6, 7],  # Multiple calacatta types
+        'bianco': [4, 9],     # Bianco variations
+        'concrete': [4, 5],   # Concrete variations
+    }
+    
+    for variant, possible_groups in material_variants.items():
+        if variant in material_desc:
+            return possible_groups[0], 50, f"{variant} (variant)"
+    
+    return None, 0, None
+
+def calculate_expected_pricing(material_group, total_sqft, job_type, order_type):
+    """
+    Calculate expected pricing based on material group and customer type.
+    Returns dict with expected pricing breakdown.
+    """
+    if material_group is None or material_group not in MATERIAL_GROUPS:
+        return None
+    
+    group_data = MATERIAL_GROUPS[material_group]
+    base_material_price = group_data['retail_price']
+    
+    # Determine customer discount
+    customer_config = CUSTOMER_DISCOUNTS.get(job_type, {'discount': 0.0, 'install_rate': 34.00})
+    
+    if customer_config['discount'] == 'special':
+        return {
+            'material_group': material_group,
+            'base_price_per_sqft': base_material_price,
+            'customer_type': job_type,
+            'status': 'special_pricing',
+            'message': f'{job_type} requires manual review - special pricing'
+        }
+    
+    # Calculate material pricing
+    discount = customer_config['discount']
+    discounted_material_price = base_material_price * (1 - discount)
+    
+    # Installation pricing - Order Type overrides Job Type
+    install_rate = 0.0
+    if order_type and order_type.lower() in ['supply only', 'pick up', 'delivery']:
+        install_rate = 0.0
+    elif job_type == 'LIA':
+        install_rate = 0.0
+    else:
+        install_rate = customer_config['install_rate']
+    
+    # Calculate totals
+    expected_material_revenue = discounted_material_price * total_sqft
+    expected_install_revenue = install_rate * total_sqft
+    expected_total_revenue = expected_material_revenue + expected_install_revenue
+    
+    # Expected costs
+    avg_material_cost = (group_data['cost_min'] + group_data['cost_max']) / 2
+    expected_material_cost = avg_material_cost * total_sqft
+    
+    return {
+        'material_group': material_group,
+        'base_price_per_sqft': base_material_price,
+        'discounted_price_per_sqft': discounted_material_price,
+        'install_rate_per_sqft': install_rate,
+        'customer_type': job_type,
+        'discount_percent': discount * 100,
+        'expected_material_revenue': expected_material_revenue,
+        'expected_install_revenue': expected_install_revenue,
+        'expected_total_revenue': expected_total_revenue,
+        'expected_material_cost': expected_material_cost,
+        'expected_cost_per_sqft': avg_material_cost,
+        'cost_range_min': group_data['cost_min'] * total_sqft,
+        'cost_range_max': group_data['cost_max'] * total_sqft,
+        'status': 'calculated'
+    }
+
+def validate_job_pricing(row):
+    """
+    Validate a single job's pricing and return analysis.
+    """
+    # Extract key data
+    material_desc = row.get('Job_Material', '')
+    total_sqft = row.get('Total_Job_SqFt', 0) or 0
+    actual_revenue = row.get('Revenue', 0) or 0
+    actual_plant_cost = row.get('Cost_From_Plant', 0) or 0
+    job_type = row.get('Job_Type', '')
+    order_type = row.get('Order_Type', '')
+    
+    if total_sqft <= 0:
+        return {'status': 'insufficient_data', 'message': 'No square footage data'}
+    
+    # Detect material group
+    material_group, confidence, matched_material = detect_material_group(material_desc)
+    
+    if material_group is None:
+        return {
+            'status': 'unrecognized_material',
+            'message': f'Could not identify material group for: {material_desc[:50]}...',
+            'material_description': material_desc
+        }
+    
+    # Calculate expected pricing
+    expected = calculate_expected_pricing(material_group, total_sqft, job_type, order_type)
+    
+    if expected is None:
+        return {'status': 'calculation_error', 'message': 'Could not calculate expected pricing'}
+    
+    if expected['status'] == 'special_pricing':
+        return expected
+    
+    # Perform validations
+    issues = []
+    
+    # Revenue validation
+    revenue_variance = actual_revenue - expected['expected_total_revenue']
+    revenue_variance_pct = (revenue_variance / expected['expected_total_revenue'] * 100) if expected['expected_total_revenue'] > 0 else 0
+    
+    if abs(revenue_variance) > 50:  # More than $50 difference
+        severity = 'critical' if abs(revenue_variance) > 500 else 'warning'
+        issues.append({
+            'type': 'revenue_variance',
+            'severity': severity,
+            'message': f'Revenue ${actual_revenue:,.2f} vs expected ${expected["expected_total_revenue"]:,.2f} ({revenue_variance_pct:+.1f}%)',
+            'variance_amount': revenue_variance
+        })
+    
+    # Plant cost validation
+    cost_variance = actual_plant_cost - expected['expected_material_cost']
+    cost_variance_pct = (cost_variance / expected['expected_material_cost'] * 100) if expected['expected_material_cost'] > 0 else 0
+    
+    if actual_plant_cost < expected['cost_range_min'] or actual_plant_cost > expected['cost_range_max']:
+        severity = 'critical' if abs(cost_variance) > 500 else 'warning'
+        issues.append({
+            'type': 'plant_cost_variance',
+            'severity': severity,
+            'message': f'Plant cost ${actual_plant_cost:,.2f} outside expected range ${expected["cost_range_min"]:,.2f}-${expected["cost_range_max"]:,.2f}',
+            'variance_amount': cost_variance
+        })
+    
+    return {
+        'status': 'analyzed',
+        'material_group': material_group,
+        'matched_material': matched_material,
+        'confidence': confidence,
+        'expected': expected,
+        'actual_revenue': actual_revenue,
+        'actual_plant_cost': actual_plant_cost,
+        'revenue_variance': revenue_variance,
+        'revenue_variance_pct': revenue_variance_pct,
+        'cost_variance': cost_variance,
+        'cost_variance_pct': cost_variance_pct,
+        'issues': issues,
+        'total_issues': len([i for i in issues if i['severity'] == 'critical']),
+        'warnings': len([i for i in issues if i['severity'] == 'warning'])
+    }
 
 # --- Helper & Calculation Functions (Consolidated) ---
 
@@ -292,6 +543,17 @@ def load_and_process_data(today: pd.Timestamp, install_cost: float):
     df['Has_Rework'] = df['Rework_Stone_Shop_Rework_Price'].notna() & (df['Rework_Stone_Shop_Rework_Price'] != '')
     df['Risk_Score'] = df.apply(calculate_risk_score, axis=1)
     df[['Delay_Probability', 'Risk_Factors']] = df.apply(lambda row: pd.Series(calculate_delay_probability(row)), axis=1)
+
+    # Add pricing validation analysis
+    pricing_analysis = df.apply(validate_job_pricing, axis=1)
+    df['Pricing_Analysis'] = pricing_analysis
+    
+    # Extract key pricing metrics for easier filtering
+    df['Material_Group'] = pricing_analysis.apply(lambda x: x.get('material_group') if isinstance(x, dict) else None)
+    df['Pricing_Issues_Count'] = pricing_analysis.apply(lambda x: x.get('total_issues', 0) if isinstance(x, dict) else 0)
+    df['Pricing_Warnings_Count'] = pricing_analysis.apply(lambda x: x.get('warnings', 0) if isinstance(x, dict) else 0)
+    df['Revenue_Variance'] = pricing_analysis.apply(lambda x: x.get('revenue_variance', 0) if isinstance(x, dict) else 0)
+    df['Cost_Variance'] = pricing_analysis.apply(lambda x: x.get('cost_variance', 0) if isinstance(x, dict) else 0)
 
     df_stone = df[df['Division_Type'] == 'Stone/Quartz'].copy()
     df_laminate = df[df['Division_Type'] == 'Laminate'].copy()
@@ -637,24 +899,185 @@ def render_profitability_tabs(df_stone, df_laminate, today_dt):
     profit_sub_tabs = st.tabs(["💎 Stone/Quartz", "🪵 Laminate"])
     
     with profit_sub_tabs[0]:
-        stone_tabs = st.tabs(["📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "🔬 Rework & Variance", "🚧 Pipeline & Issues", "👷 Field Workload", "🔮 Forecasting"])
+        stone_tabs = st.tabs(["📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "🔬 Rework & Variance", "🚧 Pipeline & Issues", "🔍 Pricing Validation", "👷 Field Workload", "🔮 Forecasting"])
         with stone_tabs[0]: render_overview_tab(df_stone, "Stone/Quartz")
         with stone_tabs[1]: render_detailed_data_tab(df_stone, "Stone/Quartz")
         with stone_tabs[2]: render_profit_drivers_tab(df_stone, "Stone/Quartz")
         with stone_tabs[3]: render_rework_tab(df_stone, "Stone/Quartz")
         with stone_tabs[4]: render_pipeline_issues_tab(df_stone, "Stone/Quartz", today_dt)
-        with stone_tabs[5]: render_field_workload_tab(df_stone, "Stone/Quartz")
-        with stone_tabs[6]: render_forecasting_tab(df_stone, "Stone/Quartz")
+        with stone_tabs[5]: render_pricing_validation_tab(df_stone, "Stone/Quartz")
+        with stone_tabs[6]: render_field_workload_tab(df_stone, "Stone/Quartz")
+        with stone_tabs[7]: render_forecasting_tab(df_stone, "Stone/Quartz")
 
     with profit_sub_tabs[1]:
-        laminate_tabs = st.tabs(["📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "🔬 Rework & Variance", "🚧 Pipeline & Issues", "👷 Field Workload", "🔮 Forecasting"])
+        laminate_tabs = st.tabs(["📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "🔬 Rework & Variance", "🚧 Pipeline & Issues", "🔍 Pricing Validation", "👷 Field Workload", "🔮 Forecasting"])
         with laminate_tabs[0]: render_overview_tab(df_laminate, "Laminate")
         with laminate_tabs[1]: render_detailed_data_tab(df_laminate, "Laminate")
         with laminate_tabs[2]: render_profit_drivers_tab(df_laminate, "Laminate")
         with laminate_tabs[3]: render_rework_tab(df_laminate, "Laminate")
         with laminate_tabs[4]: render_pipeline_issues_tab(df_laminate, "Laminate", today_dt)
-        with laminate_tabs[5]: render_field_workload_tab(df_laminate, "Laminate")
-        with laminate_tabs[6]: render_forecasting_tab(df_laminate, "Laminate")
+        with laminate_tabs[5]: render_pricing_validation_tab(df_laminate, "Laminate")
+        with laminate_tabs[6]: render_field_workload_tab(df_laminate, "Laminate")
+        with laminate_tabs[7]: render_forecasting_tab(df_laminate, "Laminate")
+
+def render_pricing_validation_tab(df: pd.DataFrame, division_name: str):
+    st.header(f"🔍 {division_name} Pricing Validation")
+    
+    if df.empty:
+        st.warning(f"No {division_name} data available.")
+        return
+    
+    # Summary metrics
+    total_jobs = len(df)
+    critical_issues = len(df[df['Pricing_Issues_Count'] > 0])
+    warnings = len(df[df['Pricing_Warnings_Count'] > 0])
+    total_revenue_variance = df['Revenue_Variance'].sum()
+    total_cost_variance = df['Cost_Variance'].sum()
+    
+    # Display summary
+    col1, col2, col3, col4, col5 = st.columns(5)
+    with col1:
+        st.metric("Total Jobs", total_jobs)
+    with col2:
+        st.metric("🔴 Critical Issues", critical_issues, delta_color="inverse")
+    with col3:
+        st.metric("🟡 Warnings", warnings, delta_color="inverse")
+    with col4:
+        variance_color = "normal" if total_revenue_variance >= 0 else "inverse"
+        st.metric("Revenue Variance", f"${total_revenue_variance:,.0f}", delta_color=variance_color)
+    with col5:
+        cost_color = "inverse" if total_cost_variance >= 0 else "normal"
+        st.metric("Cost Variance", f"${total_cost_variance:,.0f}", delta_color=cost_color)
+    
+    st.markdown("---")
+    
+    # Filter options
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        issue_filter = st.selectbox("Filter by Issues", 
+                                   ["All Jobs", "Critical Issues Only", "Warnings Only", "No Issues"], 
+                                   key=f"issue_filter_{division_name}")
+    with col2:
+        material_groups = sorted([g for g in df['Material_Group'].dropna().unique()])
+        group_filter = st.selectbox("Filter by Material Group", 
+                                   ["All Groups"] + [f"Group {g}" for g in material_groups],
+                                   key=f"group_filter_{division_name}")
+    with col3:
+        customer_types = sorted(df['Job_Type'].dropna().unique())
+        customer_filter = st.selectbox("Filter by Customer Type",
+                                      ["All Types"] + customer_types,
+                                      key=f"customer_filter_{division_name}")
+    
+    # Apply filters
+    df_filtered = df.copy()
+    
+    if issue_filter == "Critical Issues Only":
+        df_filtered = df_filtered[df_filtered['Pricing_Issues_Count'] > 0]
+    elif issue_filter == "Warnings Only":
+        df_filtered = df_filtered[df_filtered['Pricing_Warnings_Count'] > 0]
+    elif issue_filter == "No Issues":
+        df_filtered = df_filtered[(df_filtered['Pricing_Issues_Count'] == 0) & (df_filtered['Pricing_Warnings_Count'] == 0)]
+    
+    if group_filter != "All Groups":
+        group_num = int(group_filter.split()[-1])
+        df_filtered = df_filtered[df_filtered['Material_Group'] == group_num]
+    
+    if customer_filter != "All Types":
+        df_filtered = df_filtered[df_filtered['Job_Type'] == customer_filter]
+    
+    if df_filtered.empty:
+        st.info("No jobs match the selected filters.")
+        return
+    
+    # Critical Issues Section
+    critical_jobs = df_filtered[df_filtered['Pricing_Issues_Count'] > 0]
+    if not critical_jobs.empty:
+        st.subheader(f"🔴 Critical Pricing Issues ({len(critical_jobs)} jobs)")
+        
+        for _, row in critical_jobs.head(10).iterrows():
+            analysis = row.get('Pricing_Analysis', {})
+            if isinstance(analysis, dict) and analysis.get('issues'):
+                with st.container(border=True):
+                    col_a, col_b = st.columns([3, 1])
+                    with col_a:
+                        st.markdown(f"**{row.get('Job_Name', 'Unknown')}** - Group {row.get('Material_Group', 'Unknown')}")
+                        st.caption(f"Customer: {row.get('Job_Type', 'N/A')} | Order: {row.get('Order_Type', 'N/A')}")
+                        
+                        for issue in analysis['issues']:
+                            if issue['severity'] == 'critical':
+                                st.error(f"🔴 {issue['message']}")
+                            else:
+                                st.warning(f"🟡 {issue['message']}")
+                    
+                    with col_b:
+                        if 'Link' in row and row['Link']:
+                            st.link_button("View Job", row['Link'])
+                        revenue_var = row.get('Revenue_Variance', 0)
+                        st.metric("Revenue Impact", f"${revenue_var:+,.0f}")
+        
+        if len(critical_jobs) > 10:
+            st.info(f"Showing 10 of {len(critical_jobs)} critical issues. Use filters to see more.")
+    
+    # Material Group Analysis
+    st.markdown("---")
+    st.subheader("📊 Material Group Analysis")
+    
+    if 'Material_Group' in df_filtered.columns:
+        group_summary = df_filtered.groupby('Material_Group').agg({
+            'Job_Name': 'count',
+            'Revenue_Variance': 'sum',
+            'Cost_Variance': 'sum',
+            'Pricing_Issues_Count': 'sum',
+            'Pricing_Warnings_Count': 'sum'
+        }).rename(columns={'Job_Name': 'Job_Count'})
+        
+        if not group_summary.empty:
+            group_summary['Avg_Revenue_Variance'] = group_summary['Revenue_Variance'] / group_summary['Job_Count']
+            group_summary['Avg_Cost_Variance'] = group_summary['Cost_Variance'] / group_summary['Job_Count']
+            
+            st.dataframe(group_summary.style.format({
+                'Revenue_Variance': '${:,.0f}',
+                'Cost_Variance': '${:,.0f}',
+                'Avg_Revenue_Variance': '${:,.0f}',
+                'Avg_Cost_Variance': '${:,.0f}'
+            }), use_container_width=True)
+    
+    # Detailed Job Analysis
+    st.markdown("---")
+    st.subheader("📋 Detailed Job Analysis")
+    
+    # Prepare display data
+    display_data = []
+    for _, row in df_filtered.iterrows():
+        analysis = row.get('Pricing_Analysis', {})
+        if isinstance(analysis, dict):
+            display_data.append({
+                'Link': row.get('Link'),
+                'Job_Name': row.get('Job_Name'),
+                'Customer_Type': row.get('Job_Type'),
+                'Material_Group': row.get('Material_Group'),
+                'SqFt': row.get('Total_Job_SqFt', 0),
+                'Actual_Revenue': row.get('Revenue', 0),
+                'Revenue_Variance': row.get('Revenue_Variance', 0),
+                'Cost_Variance': row.get('Cost_Variance', 0),
+                'Critical_Issues': row.get('Pricing_Issues_Count', 0),
+                'Warnings': row.get('Pricing_Warnings_Count', 0),
+                'Status': analysis.get('status', 'unknown')
+            })
+    
+    if display_data:
+        display_df = pd.DataFrame(display_data)
+        st.dataframe(display_df, use_container_width=True,
+            column_config={
+                "Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)"),
+                "SqFt": st.column_config.NumberColumn("Sq Ft", format='%.1f'),
+                "Actual_Revenue": st.column_config.NumberColumn("Revenue", format='$%.2f'),
+                "Revenue_Variance": st.column_config.NumberColumn("Rev Variance", format='$%.2f'),
+                "Cost_Variance": st.column_config.NumberColumn("Cost Variance", format='$%.2f'),
+                "Critical_Issues": st.column_config.NumberColumn("🔴", format='%d'),
+                "Warnings": st.column_config.NumberColumn("🟡", format='%d')
+            }
+        )
 
 # --- UI Rendering Functions for PROFITABILITY ANALYSIS ---
 
@@ -977,6 +1400,40 @@ def render_overall_health_tab(df: pd.DataFrame, today: pd.Timestamp):
     with col4:
         st.metric("⏰ Behind Schedule", len(df_active[df_active['Days_Behind'] > 0]))
 
+    # Pricing Validation Alerts
+    st.markdown("---")
+    st.markdown("### 💰 Pricing Validation Alerts")
+    
+    # Get pricing issues
+    critical_pricing = df[df['Pricing_Issues_Count'] > 0]
+    warning_pricing = df[df['Pricing_Warnings_Count'] > 0]
+    total_revenue_variance = df['Revenue_Variance'].sum()
+    total_cost_variance = df['Cost_Variance'].sum()
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("🔴 Critical Pricing Issues", len(critical_pricing), delta_color="inverse")
+    with col2:
+        st.metric("🟡 Pricing Warnings", len(warning_pricing), delta_color="inverse")
+    with col3:
+        revenue_color = "normal" if total_revenue_variance >= 0 else "inverse"
+        st.metric("Revenue Variance", f"${total_revenue_variance:,.0f}", delta_color=revenue_color)
+    with col4:
+        cost_color = "inverse" if total_cost_variance >= 0 else "normal"
+        st.metric("Plant Cost Variance", f"${total_cost_variance:,.0f}", delta_color=cost_color)
+    
+    # Show top pricing issues
+    if not critical_pricing.empty:
+        st.subheader("🚨 Top Pricing Issues Requiring Attention")
+        top_issues = critical_pricing.nlargest(5, 'Revenue_Variance')[['Job_Name', 'Job_Type', 'Revenue_Variance', 'Cost_Variance', 'Material_Group']]
+        st.dataframe(top_issues, use_container_width=True,
+            column_config={
+                "Revenue_Variance": st.column_config.NumberColumn("Revenue Impact", format='$%.0f'),
+                "Cost_Variance": st.column_config.NumberColumn("Cost Impact", format='$%.0f'),
+                "Material_Group": st.column_config.NumberColumn("Group", format='%d')
+            }
+        )
+
     st.markdown("---")
     c1, c2 = st.columns(2)
     with c1:
@@ -1002,7 +1459,7 @@ def main():
     install_cost_sqft = st.sidebar.number_input("Install Cost per SqFt ($)", min_value=0.0, value=15.0, step=0.50)
 
     try:
-        with st.spinner("Loading and processing all job data..."):
+        with st.spinner("Loading and processing job data with pricing validation..."):
             df_stone, df_laminate, df_full = load_and_process_data(today_dt, install_cost_sqft)
     except Exception as e:
         st.error(f"An unexpected error occurred during data loading: {e}")
@@ -1014,6 +1471,15 @@ def main():
         st.stop()
 
     st.sidebar.info(f"Data loaded for {len(df_full)} jobs.")
+    
+    # Pricing validation summary in sidebar
+    if not df_full.empty and 'Pricing_Issues_Count' in df_full.columns:
+        critical_issues = len(df_full[df_full['Pricing_Issues_Count'] > 0])
+        warnings = len(df_full[df_full['Pricing_Warnings_Count'] > 0])
+        st.sidebar.markdown("**🔍 Pricing Validation:**")
+        st.sidebar.markdown(f"- 🔴 {critical_issues} critical issues")
+        st.sidebar.markdown(f"- 🟡 {warnings} warnings")
+    
     st.sidebar.info(f"Last refreshed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     main_tabs = st.tabs(["📈 Overall Business Health", "⚙️ Operational Performance", "💰 Profitability Analysis"])
