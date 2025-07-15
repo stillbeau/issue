@@ -232,59 +232,63 @@ def detect_material_group(material_description):
     # Extract material names using manufacturer-specific patterns
     extracted_materials = []
     
-    # Pattern 1: Hanstone (ABB ) [MATERIAL NAME] (EX) 3cm
-    hanstone_pattern = r'hanstone \(abb \)\s*([^(]+?)\s*\([^)]*\)\s*3cm'
-    hanstone_matches = re.findall(hanstone_pattern, material_desc)
+    # Pattern 1: Hanstone (ABB ) [MATERIAL NAME] (EX) 3cm or (EX) (SS) 3cm
+    hanstone_pattern = r'hanstone\s*\([^)]*\)\s*([^(]+?)\s*\([^)]*\)(?:\s*\([^)]*\))?\s*3cm'
+    hanstone_matches = re.findall(hanstone_pattern, material_desc, re.IGNORECASE)
     extracted_materials.extend([m.strip() for m in hanstone_matches])
     
     # Pattern 2: Rona Quartz/FF Signature (ABB) UHD-XXX - [MATERIAL NAME] (SS)/...
-    rona_pattern = r'rona quartz/ff signature \(abb\)[^-]*-\s*([^(/]+)'
-    rona_matches = re.findall(rona_pattern, material_desc)
+    rona_pattern = r'rona\s+quartz[^-]*-\s*([^(/]+)'
+    rona_matches = re.findall(rona_pattern, material_desc, re.IGNORECASE)
     extracted_materials.extend([m.strip() for m in rona_matches])
     
     # Pattern 3: Vicostone (ABB) [MATERIAL NAME] BQXXXX (EX) 3cm
-    vicostone_pattern = r'vicostone \(abb\)\s*([^b]+?)\s*bq\d+'
-    vicostone_matches = re.findall(vicostone_pattern, material_desc)
+    vicostone_pattern = r'vicostone\s*\([^)]*\)\s*([^b]+?)\s*bq\d+'
+    vicostone_matches = re.findall(vicostone_pattern, material_desc, re.IGNORECASE)
     extracted_materials.extend([m.strip() for m in vicostone_matches])
     
     # Pattern 4: Wilsonart Quartz (ABB) [MATERIAL NAME] matte QXXXX (EX) 3cm
-    wilsonart_quartz_pattern = r'wilsonart quartz \(abb\)\s*([^mq]+?)(?:\s*matte)?\s*q\d+'
-    wilsonart_matches = re.findall(wilsonart_quartz_pattern, material_desc)
+    wilsonart_quartz_pattern = r'wilsonart\s+quartz\s*\([^)]*\)\s*([^mq]+?)(?:\s*matte)?\s*q\d+'
+    wilsonart_matches = re.findall(wilsonart_quartz_pattern, material_desc, re.IGNORECASE)
     extracted_materials.extend([m.strip() for m in wilsonart_matches])
     
     # Pattern 5: Silestone (ABB) [MATERIAL NAME] (EX) 3cm
-    silestone_pattern = r'silestone \(abb\)\s*([^(]+?)\s*\([^)]*\)\s*[23]cm'
-    silestone_matches = re.findall(silestone_pattern, material_desc)
+    silestone_pattern = r'silestone\s*\([^)]*\)\s*([^(]+?)\s*\([^)]*\)\s*[23]cm'
+    silestone_matches = re.findall(silestone_pattern, material_desc, re.IGNORECASE)
     extracted_materials.extend([m.strip() for m in silestone_matches])
     
     # Pattern 6: Cambria (ABB) [MATERIAL NAME] 3cm Matte
-    cambria_pattern = r'cambria \(abb\)\s*([^2-3]+?)\s*[23]cm'
-    cambria_matches = re.findall(cambria_pattern, material_desc)
+    cambria_pattern = r'cambria\s*\([^)]*\)\s*([^2-3]+?)\s*[23]cm'
+    cambria_matches = re.findall(cambria_pattern, material_desc, re.IGNORECASE)
     extracted_materials.extend([m.strip() for m in cambria_matches])
     
     # Pattern 7: Caesarstone (VER) [MATERIAL NAME] #XXXX 2cm
-    caesarstone_pattern = r'caesarstone \([^)]+\)\s*([^#]+?)\s*#\d+'
-    caesarstone_matches = re.findall(caesarstone_pattern, material_desc)
+    caesarstone_pattern = r'caesarstone\s*\([^)]+\)\s*([^#]+?)\s*#\d+'
+    caesarstone_matches = re.findall(caesarstone_pattern, material_desc, re.IGNORECASE)
     extracted_materials.extend([m.strip() for m in caesarstone_matches])
     
     # Pattern 8: Dekton (ABB ) [MATERIAL NAME] Matte 2cm
-    dekton_pattern = r'dekton \([^)]+\)\s*([^m]+?)\s*matte'
-    dekton_matches = re.findall(dekton_pattern, material_desc)
+    dekton_pattern = r'dekton\s*\([^)]+\)\s*([^m]+?)\s*matte'
+    dekton_matches = re.findall(dekton_pattern, material_desc, re.IGNORECASE)
     extracted_materials.extend([m.strip() for m in dekton_matches])
     
     # Pattern 9: Natural Stone (ABB) [MATERIAL NAME] 3cm
-    natural_stone_pattern = r'natural stone \([^)]+\)\s*([^2-3]+?)\s*[23]cm'
-    natural_stone_matches = re.findall(natural_stone_pattern, material_desc)
+    natural_stone_pattern = r'natural\s+stone\s*\([^)]+\)\s*([^2-3]+?)\s*[23]cm'
+    natural_stone_matches = re.findall(natural_stone_pattern, material_desc, re.IGNORECASE)
     extracted_materials.extend([m.strip() for m in natural_stone_matches])
     
     # Clean up extracted materials
     cleaned_materials = []
     for material in extracted_materials:
         # Remove common suffixes and prefixes
-        cleaned = re.sub(r'\s*(ex|ss|eternal|leathered|polished|matte)\s*', ' ', material).strip()
+        cleaned = re.sub(r'\s*(ex|ss|eternal|leathered|polished|matte)\s*', ' ', material, flags=re.IGNORECASE).strip()
         cleaned = re.sub(r'\s+', ' ', cleaned)  # Normalize whitespace
         if len(cleaned) > 2:  # Ignore very short matches
             cleaned_materials.append(cleaned)
+    
+    # Debug output (temporary)
+    if cleaned_materials:
+        print(f"DEBUG: Extracted materials: {cleaned_materials} from: {material_desc[:100]}...")
     
     # Look for matches in material groups
     best_match = None
@@ -294,13 +298,16 @@ def detect_material_group(material_description):
     for material in cleaned_materials:
         for group_num, group_data in MATERIAL_GROUPS.items():
             for known_material in group_data['materials']:
-                # Check for exact or partial matches
+                # Check for exact or partial matches (case insensitive)
+                material_lower = material.lower()
+                known_lower = known_material.lower()
+                
                 similarity = 0
-                if known_material in material:
-                    similarity = len(known_material) / len(material) * 100
-                elif material in known_material:
-                    similarity = len(material) / len(known_material) * 100
-                elif known_material == material:
+                if known_lower in material_lower:
+                    similarity = len(known_lower) / len(material_lower) * 100
+                elif material_lower in known_lower:
+                    similarity = len(material_lower) / len(known_lower) * 100
+                elif known_lower == material_lower:
                     similarity = 100
                 
                 if similarity > best_confidence:
@@ -310,17 +317,20 @@ def detect_material_group(material_description):
     
     # If we found a good match (>50% confidence), return it
     if best_confidence > 50:
+        print(f"DEBUG: Found match - {best_match} in Group {best_group} (confidence: {best_confidence:.1f}%)")
         return best_group, best_confidence, best_match
     
     # Check for unassigned materials that need manual review
     for material in cleaned_materials:
-        if material in UNASSIGNED_MATERIALS:
+        if material.lower() in UNASSIGNED_MATERIALS:
             return 'unassigned', 75, material
     
     # If we extracted materials but couldn't match them, return for review
     if cleaned_materials:
+        print(f"DEBUG: Extracted but not matched: {cleaned_materials}")
         return 'unknown', 25, f"extracted: {', '.join(cleaned_materials[:2])}"
     
+    print(f"DEBUG: No materials extracted from: {material_desc[:100]}...")
     return None, 0, None
 
 def calculate_expected_pricing(material_group, total_sqft, job_type, order_type):
@@ -660,7 +670,7 @@ def load_and_process_data(today: pd.Timestamp, install_cost: float):
     df['Pricing_Analysis'] = pricing_analysis
     
     # Extract key pricing metrics for easier filtering
-    df['Material_Group'] = pricing_analysis.apply(lambda x: x.get('material_group') if isinstance(x, dict) else None)
+    df['Material_Group'] = pricing_analysis.apply(lambda x: x.get('material_group') if isinstance(x, dict) and x.get('material_group') not in ['laminate_skipped', 'unassigned', 'unknown'] else None)
     df['Pricing_Issues_Count'] = pricing_analysis.apply(lambda x: x.get('total_issues', 0) if isinstance(x, dict) else 0)
     df['Pricing_Warnings_Count'] = pricing_analysis.apply(lambda x: x.get('warnings', 0) if isinstance(x, dict) else 0)
     df['Revenue_Variance'] = pricing_analysis.apply(lambda x: x.get('revenue_variance', 0) if isinstance(x, dict) else 0)
