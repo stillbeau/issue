@@ -85,7 +85,7 @@ MATERIAL_GROUPS = {
     7: {
         'retail_price': 144.00, 'cost_min': 73.38, 'cost_max': 83.29,
         'materials': ['tyrol', 'verdelia', 'et calacatta gold', 'ethereal glow', 'ethereal dusk',
-                     'ethereal noctis', 'elba white', 'le blanc', 'matterhorn']
+                     'ethereal noctis', 'elba white', 'le blanc', 'matterhorn', 'eternal calacatta gold']
     },
     # Group 8 - $168.00/sq ft, Cost: $98.75
     8: {
@@ -99,6 +99,14 @@ MATERIAL_GROUPS = {
         'materials': ['brittanicca', 'brittanicca gold warm', 'skara brae', 'inverness frost',
                      'everleigh', 'portrush', 'ironsbridge']
     }
+}
+
+# Additional materials found in data - need to be categorized
+UNASSIGNED_MATERIALS = {
+    'royal blanc', 'mount royal', 'bianco delicato', 'upper canada', 'bianco modesto', 
+    'noir terrain', 'calacatta nero', 'lithic luxe', 'calacatta marmo', 'markina leathered',
+    'eternal bella', 'weybourne', 'crystal ice', 'alpine mist', 'super white', 'domoos',
+    'tetons oro', 'brezza oro'
 }
 
 CUSTOMER_DISCOUNTS = {
@@ -208,7 +216,7 @@ def render_login_screen():
 
 def detect_material_group(material_description):
     """
-    Detect material group from job material description.
+    Detect material group from job material description using manufacturer-specific parsing.
     Returns (group_number, confidence, matched_material) or (None, 0, None) if not found.
     """
     if pd.isna(material_description):
@@ -216,25 +224,102 @@ def detect_material_group(material_description):
     
     material_desc = str(material_description).lower()
     
-    # Check each group for material matches
-    for group_num, group_data in MATERIAL_GROUPS.items():
-        for material in group_data['materials']:
-            # Check for material name in description
-            if material in material_desc:
-                # Higher confidence for longer, more specific matches
-                confidence = len(material) / len(material_desc) * 100
-                return group_num, confidence, material
+    # Skip laminate materials - focus on stone/quartz only
+    laminate_indicators = ['wilsonart pl', 'formica', 'corian']
+    if any(indicator in material_desc for indicator in laminate_indicators):
+        return None, 0, "laminate_skipped"
     
-    # Special handling for common variations
-    material_variants = {
-        'calacatta': [6, 7],  # Multiple calacatta types
-        'bianco': [4, 9],     # Bianco variations
-        'concrete': [4, 5],   # Concrete variations
-    }
+    # Extract material names using manufacturer-specific patterns
+    extracted_materials = []
     
-    for variant, possible_groups in material_variants.items():
-        if variant in material_desc:
-            return possible_groups[0], 50, f"{variant} (variant)"
+    # Pattern 1: Hanstone (ABB ) [MATERIAL NAME] (EX) 3cm
+    hanstone_pattern = r'hanstone \(abb \)\s*([^(]+?)\s*\([^)]*\)\s*3cm'
+    hanstone_matches = re.findall(hanstone_pattern, material_desc)
+    extracted_materials.extend([m.strip() for m in hanstone_matches])
+    
+    # Pattern 2: Rona Quartz/FF Signature (ABB) UHD-XXX - [MATERIAL NAME] (SS)/...
+    rona_pattern = r'rona quartz/ff signature \(abb\)[^-]*-\s*([^(/]+)'
+    rona_matches = re.findall(rona_pattern, material_desc)
+    extracted_materials.extend([m.strip() for m in rona_matches])
+    
+    # Pattern 3: Vicostone (ABB) [MATERIAL NAME] BQXXXX (EX) 3cm
+    vicostone_pattern = r'vicostone \(abb\)\s*([^b]+?)\s*bq\d+'
+    vicostone_matches = re.findall(vicostone_pattern, material_desc)
+    extracted_materials.extend([m.strip() for m in vicostone_matches])
+    
+    # Pattern 4: Wilsonart Quartz (ABB) [MATERIAL NAME] matte QXXXX (EX) 3cm
+    wilsonart_quartz_pattern = r'wilsonart quartz \(abb\)\s*([^mq]+?)(?:\s*matte)?\s*q\d+'
+    wilsonart_matches = re.findall(wilsonart_quartz_pattern, material_desc)
+    extracted_materials.extend([m.strip() for m in wilsonart_matches])
+    
+    # Pattern 5: Silestone (ABB) [MATERIAL NAME] (EX) 3cm
+    silestone_pattern = r'silestone \(abb\)\s*([^(]+?)\s*\([^)]*\)\s*[23]cm'
+    silestone_matches = re.findall(silestone_pattern, material_desc)
+    extracted_materials.extend([m.strip() for m in silestone_matches])
+    
+    # Pattern 6: Cambria (ABB) [MATERIAL NAME] 3cm Matte
+    cambria_pattern = r'cambria \(abb\)\s*([^2-3]+?)\s*[23]cm'
+    cambria_matches = re.findall(cambria_pattern, material_desc)
+    extracted_materials.extend([m.strip() for m in cambria_matches])
+    
+    # Pattern 7: Caesarstone (VER) [MATERIAL NAME] #XXXX 2cm
+    caesarstone_pattern = r'caesarstone \([^)]+\)\s*([^#]+?)\s*#\d+'
+    caesarstone_matches = re.findall(caesarstone_pattern, material_desc)
+    extracted_materials.extend([m.strip() for m in caesarstone_matches])
+    
+    # Pattern 8: Dekton (ABB ) [MATERIAL NAME] Matte 2cm
+    dekton_pattern = r'dekton \([^)]+\)\s*([^m]+?)\s*matte'
+    dekton_matches = re.findall(dekton_pattern, material_desc)
+    extracted_materials.extend([m.strip() for m in dekton_matches])
+    
+    # Pattern 9: Natural Stone (ABB) [MATERIAL NAME] 3cm
+    natural_stone_pattern = r'natural stone \([^)]+\)\s*([^2-3]+?)\s*[23]cm'
+    natural_stone_matches = re.findall(natural_stone_pattern, material_desc)
+    extracted_materials.extend([m.strip() for m in natural_stone_matches])
+    
+    # Clean up extracted materials
+    cleaned_materials = []
+    for material in extracted_materials:
+        # Remove common suffixes and prefixes
+        cleaned = re.sub(r'\s*(ex|ss|eternal|leathered|polished|matte)\s*', ' ', material).strip()
+        cleaned = re.sub(r'\s+', ' ', cleaned)  # Normalize whitespace
+        if len(cleaned) > 2:  # Ignore very short matches
+            cleaned_materials.append(cleaned)
+    
+    # Look for matches in material groups
+    best_match = None
+    best_confidence = 0
+    best_group = None
+    
+    for material in cleaned_materials:
+        for group_num, group_data in MATERIAL_GROUPS.items():
+            for known_material in group_data['materials']:
+                # Check for exact or partial matches
+                similarity = 0
+                if known_material in material:
+                    similarity = len(known_material) / len(material) * 100
+                elif material in known_material:
+                    similarity = len(material) / len(known_material) * 100
+                elif known_material == material:
+                    similarity = 100
+                
+                if similarity > best_confidence:
+                    best_confidence = similarity
+                    best_match = known_material
+                    best_group = group_num
+    
+    # If we found a good match (>50% confidence), return it
+    if best_confidence > 50:
+        return best_group, best_confidence, best_match
+    
+    # Check for unassigned materials that need manual review
+    for material in cleaned_materials:
+        if material in UNASSIGNED_MATERIALS:
+            return 'unassigned', 75, material
+    
+    # If we extracted materials but couldn't match them, return for review
+    if cleaned_materials:
+        return 'unknown', 25, f"extracted: {', '.join(cleaned_materials[:2])}"
     
     return None, 0, None
 
@@ -318,14 +403,40 @@ def validate_job_pricing(row):
     # Detect material group
     material_group, confidence, matched_material = detect_material_group(material_desc)
     
+    # Handle special cases
+    if material_group == 'laminate_skipped':
+        return {
+            'status': 'laminate_skipped',
+            'message': 'Laminate material - pricing validation skipped',
+            'material_description': material_desc[:50] + '...'
+        }
+    
+    if material_group == 'unassigned':
+        return {
+            'status': 'unassigned_material',
+            'message': f'Material "{matched_material}" found but not assigned to pricing group',
+            'material_description': material_desc[:50] + '...',
+            'matched_material': matched_material,
+            'confidence': confidence
+        }
+    
+    if material_group == 'unknown':
+        return {
+            'status': 'unknown_material',
+            'message': f'Material extracted but not recognized: {matched_material}',
+            'material_description': material_desc[:50] + '...',
+            'extracted_materials': matched_material,
+            'confidence': confidence
+        }
+    
     if material_group is None:
         return {
             'status': 'unrecognized_material',
-            'message': f'Could not identify material group for: {material_desc[:50]}...',
+            'message': f'Could not identify material from: {material_desc[:50]}...',
             'material_description': material_desc
         }
     
-    # Calculate expected pricing
+    # Calculate expected pricing for recognized materials
     expected = calculate_expected_pricing(material_group, total_sqft, job_type, order_type)
     
     if expected is None:
@@ -934,6 +1045,11 @@ def render_pricing_validation_tab(df: pd.DataFrame, division_name: str):
     total_revenue_variance = df['Revenue_Variance'].sum()
     total_cost_variance = df['Cost_Variance'].sum()
     
+    # Count material detection results
+    unassigned_materials = len(df[df['Pricing_Analysis'].apply(lambda x: x.get('status') == 'unassigned_material' if isinstance(x, dict) else False)])
+    unknown_materials = len(df[df['Pricing_Analysis'].apply(lambda x: x.get('status') == 'unknown_material' if isinstance(x, dict) else False)])
+    unrecognized_materials = len(df[df['Pricing_Analysis'].apply(lambda x: x.get('status') == 'unrecognized_material' if isinstance(x, dict) else False)])
+    
     # Display summary
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
@@ -949,18 +1065,76 @@ def render_pricing_validation_tab(df: pd.DataFrame, division_name: str):
         cost_color = "inverse" if total_cost_variance >= 0 else "normal"
         st.metric("Cost Variance", f"${total_cost_variance:,.0f}", delta_color=cost_color)
     
+    # Material Detection Summary
+    st.markdown("### 🧬 Material Detection Summary")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        recognized = len(df[df['Material_Group'].notna() & (df['Material_Group'] != 'unassigned') & (df['Material_Group'] != 'unknown')])
+        st.metric("✅ Recognized", recognized)
+    with col2:
+        st.metric("🔶 Unassigned", unassigned_materials, help="Materials found but not assigned to pricing groups")
+    with col3:
+        st.metric("❓ Unknown", unknown_materials, help="Materials extracted but not recognized")
+    with col4:
+        st.metric("❌ Unrecognized", unrecognized_materials, help="Could not extract material names")
+    
     st.markdown("---")
     
+    # Material Issues Section
+    if unassigned_materials > 0 or unknown_materials > 0:
+        st.subheader("🔶 Materials Requiring Review")
+        
+        # Unassigned materials
+        unassigned_jobs = df[df['Pricing_Analysis'].apply(lambda x: x.get('status') == 'unassigned_material' if isinstance(x, dict) else False)]
+        if not unassigned_jobs.empty:
+            with st.expander(f"🔶 Unassigned Materials ({len(unassigned_jobs)} jobs)", expanded=True):
+                st.info("These materials were found but need to be assigned to pricing groups.")
+                unassigned_materials_list = []
+                for _, row in unassigned_jobs.iterrows():
+                    analysis = row.get('Pricing_Analysis', {})
+                    if isinstance(analysis, dict):
+                        unassigned_materials_list.append({
+                            'Job_Name': row.get('Job_Name'),
+                            'Material_Found': analysis.get('matched_material'),
+                            'Link': row.get('Link')
+                        })
+                
+                if unassigned_materials_list:
+                    unassigned_df = pd.DataFrame(unassigned_materials_list)
+                    st.dataframe(unassigned_df, use_container_width=True,
+                        column_config={"Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)")})
+        
+        # Unknown materials
+        unknown_jobs = df[df['Pricing_Analysis'].apply(lambda x: x.get('status') == 'unknown_material' if isinstance(x, dict) else False)]
+        if not unknown_jobs.empty:
+            with st.expander(f"❓ Unknown Materials ({len(unknown_jobs)} jobs)"):
+                st.info("Material names were extracted but not recognized in pricing groups.")
+                unknown_materials_list = []
+                for _, row in unknown_jobs.iterrows():
+                    analysis = row.get('Pricing_Analysis', {})
+                    if isinstance(analysis, dict):
+                        unknown_materials_list.append({
+                            'Job_Name': row.get('Job_Name'),
+                            'Extracted_Materials': analysis.get('extracted_materials'),
+                            'Link': row.get('Link')
+                        })
+                
+                if unknown_materials_list:
+                    unknown_df = pd.DataFrame(unknown_materials_list)
+                    st.dataframe(unknown_df, use_container_width=True,
+                        column_config={"Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)")})
+    
     # Filter options
+    st.markdown("---")
     col1, col2, col3 = st.columns(3)
     with col1:
         issue_filter = st.selectbox("Filter by Issues", 
-                                   ["All Jobs", "Critical Issues Only", "Warnings Only", "No Issues"], 
+                                   ["All Jobs", "Critical Issues Only", "Warnings Only", "No Issues", "Material Issues"], 
                                    key=f"issue_filter_{division_name}")
     with col2:
-        material_groups = sorted([g for g in df['Material_Group'].dropna().unique()])
+        material_groups = sorted([g for g in df['Material_Group'].dropna().unique() if isinstance(g, (int, float))])
         group_filter = st.selectbox("Filter by Material Group", 
-                                   ["All Groups"] + [f"Group {g}" for g in material_groups],
+                                   ["All Groups"] + [f"Group {int(g)}" for g in material_groups],
                                    key=f"group_filter_{division_name}")
     with col3:
         customer_types = sorted(df['Job_Type'].dropna().unique())
@@ -977,6 +1151,10 @@ def render_pricing_validation_tab(df: pd.DataFrame, division_name: str):
         df_filtered = df_filtered[df_filtered['Pricing_Warnings_Count'] > 0]
     elif issue_filter == "No Issues":
         df_filtered = df_filtered[(df_filtered['Pricing_Issues_Count'] == 0) & (df_filtered['Pricing_Warnings_Count'] == 0)]
+    elif issue_filter == "Material Issues":
+        material_issue_statuses = ['unassigned_material', 'unknown_material', 'unrecognized_material']
+        df_filtered = df_filtered[df_filtered['Pricing_Analysis'].apply(
+            lambda x: x.get('status') in material_issue_statuses if isinstance(x, dict) else False)]
     
     if group_filter != "All Groups":
         group_num = int(group_filter.split()[-1])
@@ -1022,8 +1200,11 @@ def render_pricing_validation_tab(df: pd.DataFrame, division_name: str):
     st.markdown("---")
     st.subheader("📊 Material Group Analysis")
     
-    if 'Material_Group' in df_filtered.columns:
-        group_summary = df_filtered.groupby('Material_Group').agg({
+    # Only include numeric material groups for analysis
+    numeric_groups = df_filtered[df_filtered['Material_Group'].apply(lambda x: isinstance(x, (int, float)) and not pd.isna(x))]
+    
+    if not numeric_groups.empty:
+        group_summary = numeric_groups.groupby('Material_Group').agg({
             'Job_Name': 'count',
             'Revenue_Variance': 'sum',
             'Cost_Variance': 'sum',
@@ -1041,6 +1222,8 @@ def render_pricing_validation_tab(df: pd.DataFrame, division_name: str):
                 'Avg_Revenue_Variance': '${:,.0f}',
                 'Avg_Cost_Variance': '${:,.0f}'
             }), use_container_width=True)
+    else:
+        st.info("No recognized material groups to analyze in the current filter.")
     
     # Detailed Job Analysis
     st.markdown("---")
@@ -1051,11 +1234,17 @@ def render_pricing_validation_tab(df: pd.DataFrame, division_name: str):
     for _, row in df_filtered.iterrows():
         analysis = row.get('Pricing_Analysis', {})
         if isinstance(analysis, dict):
+            material_group = row.get('Material_Group')
+            if isinstance(material_group, (int, float)) and not pd.isna(material_group):
+                group_display = int(material_group)
+            else:
+                group_display = str(material_group) if material_group else 'N/A'
+                
             display_data.append({
                 'Link': row.get('Link'),
                 'Job_Name': row.get('Job_Name'),
                 'Customer_Type': row.get('Job_Type'),
-                'Material_Group': row.get('Material_Group'),
+                'Material_Group': group_display,
                 'SqFt': row.get('Total_Job_SqFt', 0),
                 'Actual_Revenue': row.get('Revenue', 0),
                 'Revenue_Variance': row.get('Revenue_Variance', 0),
