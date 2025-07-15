@@ -401,17 +401,31 @@ def validate_job_pricing(row):
     """
     # Debug: Check what data we're getting
     print(f"DEBUG: Processing job - {row.get('Job_Name', 'Unknown')}")
-    print(f"DEBUG: Available columns: {list(row.keys())[:10]}...")  # Show first 10 columns
+    
+    # Debug: Check SqFt fields specifically
+    sqft_fields = [col for col in row.keys() if 'sqf' in col.lower()]
+    print(f"DEBUG: SqFt related fields: {sqft_fields}")
+    for field in sqft_fields:
+        print(f"DEBUG: {field} = {row.get(field)}")
     
     # Extract key data
     material_desc = row.get('Job_Material', '')
-    total_sqft = row.get('Total_Job_SqFt', 0) or 0
+    total_sqft = row.get('Total_Job_SqFt', 0) or 0  # This comes from the processed mapping
     actual_revenue = row.get('Revenue', 0) or 0
     actual_plant_cost = row.get('Cost_From_Plant', 0) or 0
     job_type = row.get('Job_Type', '')
     order_type = row.get('Order_Type', '')
     
-    print(f"DEBUG: Material desc length: {len(str(material_desc))}, SqFt: {total_sqft}")
+    # Try alternative SqFt field names if primary is 0
+    if total_sqft == 0:
+        alternatives = ['Total_Job_SqFT', 'Total_Job_Sq_Ft', 'Orders_Total_Sq_Ft']
+        for alt_field in alternatives:
+            if alt_field in row and row[alt_field] and row[alt_field] != 0:
+                total_sqft = float(row[alt_field]) if row[alt_field] else 0
+                print(f"DEBUG: Found SqFt in {alt_field}: {total_sqft}")
+                break
+    
+    print(f"DEBUG: Final values - SqFt: {total_sqft}, Revenue: {actual_revenue}")
     print(f"DEBUG: Material desc preview: {str(material_desc)[:100]}...")
     
     if total_sqft <= 0:
