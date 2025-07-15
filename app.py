@@ -399,6 +399,10 @@ def validate_job_pricing(row):
     """
     Validate a single job's pricing and return analysis.
     """
+    # Debug: Check what data we're getting
+    print(f"DEBUG: Processing job - {row.get('Job_Name', 'Unknown')}")
+    print(f"DEBUG: Available columns: {list(row.keys())[:10]}...")  # Show first 10 columns
+    
     # Extract key data
     material_desc = row.get('Job_Material', '')
     total_sqft = row.get('Total_Job_SqFt', 0) or 0
@@ -407,8 +411,12 @@ def validate_job_pricing(row):
     job_type = row.get('Job_Type', '')
     order_type = row.get('Order_Type', '')
     
+    print(f"DEBUG: Material desc length: {len(str(material_desc))}, SqFt: {total_sqft}")
+    print(f"DEBUG: Material desc preview: {str(material_desc)[:100]}...")
+    
     if total_sqft <= 0:
-        return {'status': 'insufficient_data', 'message': 'No square footage data'}
+        print(f"DEBUG: Insufficient data - SqFt is {total_sqft}")
+        return {'status': 'insufficient_data', 'message': f'No square footage data (SqFt: {total_sqft})'}
     
     # Detect material group
     material_group, confidence, matched_material = detect_material_group(material_desc)
