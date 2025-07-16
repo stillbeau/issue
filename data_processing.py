@@ -1,12 +1,13 @@
 """
-Data Processing Module for FloForm Dashboard
+Data Processing Module for FloForm Dashboard - Fixed for Python 3.13
 Handles all data loading, cleaning, and preprocessing operations
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
-from streamlit_gsheets import GSheetsConnection
+import gspread
+from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta
 from business_logic import (
     parse_material, get_current_stage, calculate_days_in_stage,
@@ -260,22 +261,48 @@ def process_financial_data(df, config, install_cost_per_sqft):
 
 @st.cache_data(ttl=300, show_spinner="Loading job data from Google Sheets...")
 def load_raw_data():
-    """Load raw data from Google Sheets with caching."""
+    """Load raw data from Google Sheets using gspread (compatible with Python 3.13)."""
     
     try:
-        conn = st.connection("gsheets", type=GSheetsConnection)
-        df = conn.read(worksheet=WORKSHEET_NAME, ttl=300)
-        df = pd.DataFrame(df)
+        # Setup Google Sheets connection using gspread
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
+        
+        # Get credentials from Streamlit secrets
+        credentials_dict = dict(st.secrets["gsheets"])
+        credentials = Credentials.from_service_account_info(credentials_dict, scopes=scopes)
+        
+        # Authorize and create client
+        client = gspread.authorize(credentials)
+        
+        # Open spreadsheet by URL
+        spreadsheet = client.open_by_url(st.secrets["gsheets"]["spreadsheet"])
+        worksheet = spreadsheet.worksheet(WORKSHEET_NAME)
+        
+        # Get all records as list of dictionaries
+        data = worksheet.get_all_records()
+        
+        # Convert to DataFrame
+        df = pd.DataFrame(data)
         
         if df.empty:
             st.warning("No data received from Google Sheets.")
             return pd.DataFrame()
-            
+        
+        st.success(f"✅ Successfully loaded {len(df)} rows from Google Sheets")
         return df
         
     except Exception as e:
         st.error(f"Failed to load data from Google Sheets: {e}")
-        st.info("Please check your Streamlit secrets configuration for gsheets.")
+        st.info("Please check your Google Sheets connection and credentials.")
+        
+        # Show debug info
+        with st.expander("🔍 Debug Information"):
+            st.write("Error details:", str(e))
+            st.write("Secrets available:", list(st.secrets.keys()) if hasattr(st, 'secrets') else "No secrets found")
+        
         return pd.DataFrame()
 
 @st.cache_data(ttl=300, show_spinner="Processing and analyzing job data...")
