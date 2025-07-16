@@ -163,6 +163,7 @@ def render_pricing_overview(pricing_results, summary_stats):
             {
                 'Job Name': r['Job_Name'],
                 'Production #': r['Production_'],
+                'Moraware Link': f"https://floformcountertops.moraware.net/sys/search?&search={r['Production_']}" if r['Production_'] else None,
                 'Expected Cost': f"${r['Analysis']['total_expected_cost']:,.2f}",
                 'Actual Cost': f"${r['Analysis']['actual_plant_cost']:,.2f}",
                 'Variance': f"${r['Analysis']['variance_analysis']['variance_amount']:+,.2f}",
@@ -179,6 +180,10 @@ def render_pricing_overview(pricing_results, summary_stats):
             use_container_width=True,
             hide_index=True,
             column_config={
+                "Moraware Link": st.column_config.LinkColumn(
+                    "🔗 Moraware",
+                    display_text="Open Job"
+                ),
                 "Severity": st.column_config.TextColumn(
                     "Severity",
                     help="Variance severity level"
@@ -210,7 +215,7 @@ def render_critical_variances(pricing_results):
             f"🔴 {job['Job_Name']} - Variance: {variance['variance_percent']:+.1f}%",
             expanded=True
         ):
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
             
             with col1:
                 st.metric("Expected Cost", f"${analysis['total_expected_cost']:,.2f}")
@@ -218,6 +223,11 @@ def render_critical_variances(pricing_results):
                 st.metric("Actual Cost", f"${analysis['actual_plant_cost']:,.2f}")
             with col3:
                 st.metric("Variance", f"${variance['variance_amount']:+,.2f}")
+            with col4:
+                # Add Moraware link button
+                if job['Production_']:
+                    moraware_url = f"https://floformcountertops.moraware.net/sys/search?&search={job['Production_']}"
+                    st.link_button("🔗 Open in Moraware", moraware_url)
             
             # Material breakdown
             st.subheader("Material Breakdown:")
@@ -252,6 +262,7 @@ def render_variance_warnings(pricing_results):
         {
             'Job Name': job['Job_Name'],
             'Production #': job['Production_'],
+            'Moraware Link': f"https://floformcountertops.moraware.net/sys/search?&search={job['Production_']}" if job['Production_'] else None,
             'Total SqFt': job['Total_SqFt'],
             'Expected Cost': job['Analysis']['total_expected_cost'],
             'Actual Cost': job['Analysis']['actual_plant_cost'],
@@ -266,6 +277,10 @@ def render_variance_warnings(pricing_results):
         use_container_width=True,
         hide_index=True,
         column_config={
+            "Moraware Link": st.column_config.LinkColumn(
+                "🔗 Moraware",
+                display_text="Open Job"
+            ),
             "Expected Cost": st.column_config.NumberColumn("Expected Cost", format="$%.2f"),
             "Actual Cost": st.column_config.NumberColumn("Actual Cost", format="$%.2f"),
             "Variance Amount": st.column_config.NumberColumn("Variance Amount", format="$%.2f"),
@@ -305,6 +320,7 @@ def render_detailed_analysis(pricing_results):
             detailed_data.append({
                 'Job Name': job['Job_Name'],
                 'Production #': job['Production_'],
+                'Moraware Link': f"https://floformcountertops.moraware.net/sys/search?&search={job['Production_']}" if job['Production_'] else None,
                 'Material': material['material'],
                 'SqFt': material['sqft'],
                 'Material Type': material.get('material_type', 'Unknown'),
@@ -323,6 +339,10 @@ def render_detailed_analysis(pricing_results):
             use_container_width=True,
             hide_index=True,
             column_config={
+                "Moraware Link": st.column_config.LinkColumn(
+                    "🔗 Moraware",
+                    display_text="Open Job"
+                ),
                 "Expected Cost/SqFt": st.column_config.NumberColumn("Expected Cost/SqFt", format="$%.2f"),
                 "Expected Total": st.column_config.NumberColumn("Expected Total", format="$%.2f")
             }
