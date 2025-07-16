@@ -1,26 +1,6 @@
-# FloForm Dashboard Requirements
-# Core Streamlit and data processing
-streamlit>=1.28.0
-pandas>=2.0.0
-numpy>=1.24.0
-
-# Google Sheets integration
-streamlit-gsheets>=0.0.6
-
-# Visualization libraries
-plotly>=5.15.0
-matplotlib>=3.7.0
-seaborn>=0.12.0
-
-# Additional data processing
-openpyxl>=3.1.0
-xlsxwriter>=3.1.0
-
-# Performance monitoring (optional)
-psutil>=5.9.0
-
-# Date/time handling
-python-dateutil>=2.8.0
-
-# Additional utilities
-requests>=2.31.0
+streamlit
+pandas
+numpy
+streamlit-gsheets
+plotly
+python-dateutil
