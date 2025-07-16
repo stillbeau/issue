@@ -9,7 +9,6 @@ import pandas as pd
 import time
 from datetime import datetime, timedelta
 import warnings
-from pricing_analysis_ui import render_pricing_analysis_tab
 warnings.filterwarnings('ignore')
 
 # Import custom modules
@@ -24,6 +23,7 @@ try:
         render_profitability_dashboard
     )
     from visualization import setup_plotly_theme
+    from pricing_analysis_ui import render_pricing_analysis_tab
     import pricing_config as pc
 except ImportError as e:
     st.error(f"❌ **Module Import Error**: {e}")
@@ -97,7 +97,7 @@ def main():
     # Sidebar configuration
     config = render_sidebar_config()
     
-    # Data loading with error handling
+    # Data loading with error handling and fallback
     try:
         with st.spinner("🔄 Loading and processing job data..."):
             df_stone, df_laminate, df_full = load_and_process_data(
@@ -118,59 +118,67 @@ def main():
         - Ensure the pricing_config.py file is up to date
         - Try refreshing the page or clearing cache
         """)
-        st.stop()
+        
+        # Create empty dataframes as fallback to prevent further errors
+        df_stone = pd.DataFrame()
+        df_laminate = pd.DataFrame()
+        df_full = pd.DataFrame()
     
-    # Data validation
+    # Data validation - show warning but don't stop
     if df_full.empty:
         st.error("❌ **No Data Available**")
         st.error("No data was loaded from Google Sheets. Please check your connection and data source.")
-        st.stop()
-    
-    # Update sidebar with data summary
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("📊 **Data Summary**")
-    st.sidebar.info(f"✅ {len(df_full)} total jobs loaded")
-    
-    if 'Division_Type' in df_full.columns:
-        division_counts = df_full['Division_Type'].value_counts()
-        for division, count in division_counts.items():
-            st.sidebar.caption(f"• {division}: {count} jobs")
-    
-    # Pricing validation summary
-    if 'Pricing_Issues_Count' in df_full.columns:
-        critical_issues = df_full['Pricing_Issues_Count'].sum()
-        warnings_count = df_full['Pricing_Warnings_Count'].sum()
-        st.sidebar.markdown("🔍 **Pricing Status:**")
-        st.sidebar.caption(f"• 🔴 {critical_issues} critical issues")
-        st.sidebar.caption(f"• 🟡 {warnings_count} warnings")
+        
+        # Continue with empty dataframes
+        df_stone = pd.DataFrame()
+        df_laminate = pd.DataFrame()
+        df_full = pd.DataFrame()
+    else:
+        # Update sidebar with data summary only if we have data
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("📊 **Data Summary**")
+        st.sidebar.info(f"✅ {len(df_full)} total jobs loaded")
+        
+        if 'Division_Type' in df_full.columns:
+            division_counts = df_full['Division_Type'].value_counts()
+            for division, count in division_counts.items():
+                st.sidebar.caption(f"• {division}: {count} jobs")
+        
+        # Pricing validation summary
+        if 'Pricing_Issues_Count' in df_full.columns:
+            critical_issues = df_full['Pricing_Issues_Count'].sum()
+            warnings_count = df_full['Pricing_Warnings_Count'].sum()
+            st.sidebar.markdown("🔍 **Pricing Status:**")
+            st.sidebar.caption(f"• 🔴 {critical_issues} critical issues")
+            st.sidebar.caption(f"• 🟡 {warnings_count} warnings")
     
     # Last refresh timestamp
     st.sidebar.markdown("---")
     st.sidebar.caption(f"🕒 Last refreshed: {datetime.now().strftime('%H:%M:%S')}")
     
-# Main dashboard tabs
-main_tabs = st.tabs([
-    "📈 Business Health",
-    "⚙️ Operations", 
-    "💰 Profitability",
-    "🔍 Pricing Analysis"
-])
-
-# Business Health Tab
-with main_tabs[0]:
-    render_overall_health_tab(df_full, config['today_dt'])
-
-# Operations Tab  
-with main_tabs[1]:
-    render_operational_dashboard(df_full, config['today_dt'])
-
-# Profitability Tab
-with main_tabs[2]:
-    render_profitability_dashboard(df_stone, df_laminate, config['today_dt'])
-
-# Pricing Analysis Tab
-with main_tabs[3]:
-    render_pricing_analysis_tab(df_full)  # Make sure this is indented!
+    # Main dashboard tabs (moved inside main function)
+    main_tabs = st.tabs([
+        "📈 Business Health",
+        "⚙️ Operations", 
+        "💰 Profitability",
+        "🔍 Pricing Analysis"
+    ])
+    
+    # Business Health Tab
+    with main_tabs[0]:
+        render_overall_health_tab(df_full, config['today_dt'])
+    
+    # Operations Tab  
+    with main_tabs[1]:
+        render_operational_dashboard(df_full, config['today_dt'])
+    
+    # Profitability Tab
+    with main_tabs[2]:
+        render_profitability_dashboard(df_stone, df_laminate, config['today_dt'])
+    
+    # Pricing Analysis Tab
+    with main_tabs[3]:
+        render_pricing_analysis_tab(df_full)
     
     # Render footer
     render_footer()
