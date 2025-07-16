@@ -15,8 +15,29 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import time
 
-# --- NEW: Import the dedicated pricing module with a clean alias ---
-import pricing_config as pc
+# --- NEW: Robustly import the dedicated pricing module ---
+try:
+    import pricing_config as pc
+    # Check for essential functions to provide a helpful error message
+    required_items = ['get_material_group', 'validate_job_pricing', 'UNASSIGNED_MATERIALS']
+    if not all(hasattr(pc, item) for item in required_items):
+        st.error(
+            "**Error: Your `pricing_config.py` file is incomplete or outdated.**\n\n"
+            "It is missing required functions or variables. Please ensure you have the correct version of `pricing_config.py` saved in the same directory as this app. "
+            "I am providing the correct version in a new 'pricing_config.py' document."
+        )
+        st.stop()
+except ImportError:
+    st.error(
+        "**Error: `pricing_config.py` not found.**\n\n"
+        "Please make sure the `pricing_config.py` file is saved in the same directory as this app. "
+        "I am providing the correct version in a new 'pricing_config.py' document for you to save."
+    )
+    st.stop()
+except Exception as e:
+    st.error(f"An unexpected error occurred while importing `pricing_config.py`: {e}")
+    st.stop()
+
 
 # --- Page & App Configuration ---
 st.set_page_config(layout="wide", page_title="Unified Business Dashboard", page_icon="🚀")
@@ -124,21 +145,15 @@ def extract_material_from_description(material_description: str):
 
     material_desc = str(material_description).lower()
     
-    # Skip laminate materials
     laminate_indicators = ['wilsonart pl', 'formica', 'corian']
     if any(indicator in material_desc for indicator in laminate_indicators):
         return None, "laminate_skipped"
 
-    # Define regex patterns to find material names from various suppliers
     patterns = [
-        r'hanstone\s*\([^)]*\)\s*([^(]+?)\s*\([^)]*\)',
-        r'rona\s+quartz[^-]*-\s*([^(/]+)',
-        r'vicostone\s*\([^)]*\)\s*([^b]+?)\s*bq\d+',
-        r'wilsonart\s+quartz\s*\([^)]*\)\s*([^mq]+?)(?:\s*matte)?\s*q\d+',
-        r'silestone\s*\([^)]*\)\s*([^(]+?)\s*\([^)]*\)',
-        r'cambria\s*\([^)]*\)\s*([^2-3]+?)\s*[23]cm',
-        r'caesarstone\s*\([^)]+\)\s*([^#]+?)\s*#\d+',
-        r'dekton\s*\([^)]+\)\s*([^m]+?)\s*matte',
+        r'hanstone\s*\([^)]*\)\s*([^(]+?)\s*\([^)]*\)', r'rona\s+quartz[^-]*-\s*([^(/]+)',
+        r'vicostone\s*\([^)]*\)\s*([^b]+?)\s*bq\d+', r'wilsonart\s+quartz\s*\([^)]*\)\s*([^mq]+?)(?:\s*matte)?\s*q\d+',
+        r'silestone\s*\([^)]*\)\s*([^(]+?)\s*\([^)]*\)', r'cambria\s*\([^)]*\)\s*([^2-3]+?)\s*[23]cm',
+        r'caesarstone\s*\([^)]+\)\s*([^#]+?)\s*#\d+', r'dekton\s*\([^)]+\)\s*([^m]+?)\s*matte',
         r'natural\s+stone\s*\([^)]+\)\s*([^2-3]+?)\s*[23]cm'
     ]
 
@@ -157,8 +172,6 @@ def extract_material_from_description(material_description: str):
 def analyze_job_pricing(row):
     """
     Orchestrates the full pricing validation for a single job row.
-    1. Extracts material name from description.
-    2. Uses pricing_config to get group and validate pricing.
     """
     material_desc = row.get('Job_Material', '')
     extracted_material, status = extract_material_from_description(material_desc)
@@ -211,28 +224,17 @@ def parse_material(s: str) -> tuple[str, str]:
 
 def get_current_stage(row):
     """Determine the current operational stage of a job based on dates."""
-    if pd.notna(row.get('Install_Date')) or pd.notna(row.get('Pick_Up_Date')):
-        return 'Completed'
-    elif pd.notna(row.get('Ship_Date')):
-        return 'Shipped'
-    elif pd.notna(row.get('Product_Rcvd_Date')):
-        return 'Product Received'
-    elif pd.notna(row.get('Ready_to_Fab_Date')):
-        return 'In Fabrication'
-    elif pd.notna(row.get('Template_Date')):
-        return 'Post-Template'
-    else:
-        return 'Pre-Template'
+    if pd.notna(row.get('Install_Date')) or pd.notna(row.get('Pick_Up_Date')): return 'Completed'
+    elif pd.notna(row.get('Ship_Date')): return 'Shipped'
+    elif pd.notna(row.get('Product_Rcvd_Date')): return 'Product Received'
+    elif pd.notna(row.get('Ready_to_Fab_Date')): return 'In Fabrication'
+    elif pd.notna(row.get('Template_Date')): return 'Post-Template'
+    else: return 'Pre-Template'
 
 def calculate_days_in_stage(row, today):
     """Calculate how many days a job has been in its current stage."""
     stage = row['Current_Stage']
-    date_map = {
-        'Shipped': 'Ship_Date',
-        'Product Received': 'Product_Rcvd_Date',
-        'In Fabrication': 'Ready_to_Fab_Date',
-        'Post-Template': 'Template_Date'
-    }
+    date_map = {'Shipped': 'Ship_Date', 'Product Received': 'Product_Rcvd_Date', 'In Fabrication': 'Ready_to_Fab_Date', 'Post-Template': 'Template_Date'}
     if stage in date_map and pd.notna(row.get(date_map[stage])):
         return (today - row[date_map[stage]]).days
     return 0 if stage == 'Completed' else np.nan
@@ -240,71 +242,49 @@ def calculate_days_in_stage(row, today):
 def calculate_risk_score(row):
     """Calculate an operational risk score for each job."""
     score = 0
-    if pd.notna(row.get('Days_Behind', np.nan)) and row['Days_Behind'] > 0:
-        score += min(row['Days_Behind'] * 2, 20)
-    if pd.notna(row.get('Days_In_Current_Stage', np.nan)) and row['Days_In_Current_Stage'] > TIMELINE_THRESHOLDS['days_in_stage_warning']:
-        score += 10
+    if pd.notna(row.get('Days_Behind')) and row['Days_Behind'] > 0: score += min(row['Days_Behind'] * 2, 20)
+    if pd.notna(row.get('Days_In_Current_Stage')) and row['Days_In_Current_Stage'] > TIMELINE_THRESHOLDS['days_in_stage_warning']: score += 10
     if pd.isna(row.get('Ready_to_Fab_Date')) and pd.notna(row.get('Template_Date')):
-        days_since_template = (pd.Timestamp.now() - row['Template_Date']).days
-        if days_since_template > TIMELINE_THRESHOLDS['template_to_rtf']:
-            score += 15
-    if row.get('Has_Rework', False):
-        score += 10
-    if pd.isna(row.get('Next_Sched_Activity')):
-        score += 5
+        if (pd.Timestamp.now() - row['Template_Date']).days > TIMELINE_THRESHOLDS['template_to_rtf']: score += 15
+    if row.get('Has_Rework', False): score += 10
+    if pd.isna(row.get('Next_Sched_Activity')): score += 5
     return score
 
 def calculate_delay_probability(row):
     """Calculate a simple probability of delay based on risk factors."""
-    risk_score = 0
-    factors = []
+    risk_score, factors = 0, []
     if pd.notna(row.get('Days_Behind')) and row['Days_Behind'] > 0:
-        risk_score += 40
-        factors.append(f"Already {row['Days_Behind']:.0f} days behind")
+        risk_score += 40; factors.append(f"Already {row['Days_Behind']:.0f} days behind")
     if pd.notna(row.get('Days_In_Current_Stage')):
         avg_durations = TIMELINE_THRESHOLDS['avg_stage_durations']
         expected_duration = avg_durations.get(row.get('Current_Stage', ''), avg_durations['default'])
         if row['Days_In_Current_Stage'] > expected_duration:
-            risk_score += 20
-            factors.append(f"Stuck in {row['Current_Stage']} for {row['Days_In_Current_Stage']:.0f} days")
-    if row.get('Has_Rework', False):
-        risk_score += 15
-        factors.append("Has rework")
-    if pd.isna(row.get('Next_Sched_Activity')):
-        risk_score += 15
-        factors.append("No next activity scheduled")
+            risk_score += 20; factors.append(f"Stuck in {row['Current_Stage']} for {row['Days_In_Current_Stage']:.0f} days")
+    if row.get('Has_Rework', False): risk_score += 15; factors.append("Has rework")
+    if pd.isna(row.get('Next_Sched_Activity')): risk_score += 15; factors.append("No next activity scheduled")
     return min(risk_score, 100), ", ".join(factors)
 
 
 # --- Data Loading and Processing ---
 def _process_financial_data(df: pd.DataFrame, config: dict, install_cost_per_sqft: float) -> pd.DataFrame:
-    """Processes financial data for a specific division using a configuration dictionary."""
+    """Processes financial data for a specific division."""
     df_processed = df.copy()
     for original, new in config["numeric_map"].items():
         if original in df_processed.columns:
             df_processed[new] = pd.to_numeric(df_processed[original].astype(str).str.replace(r'[$,%]', '', regex=True), errors='coerce').fillna(0)
-        else:
-            df_processed[new] = 0.0
-            
+        else: df_processed[new] = 0.0
     df_processed['Install_Cost'] = df_processed.get('Total_Job_SqFt', 0) * install_cost_per_sqft
-    
-    rework_costs = [df_processed.get(c, 0) for c in config["rework_components"]]
-    df_processed['Total_Rework_Cost'] = sum(rework_costs)
-    
-    branch_costs = [df_processed.get(c, 0) for c in config["cost_components"]]
-    df_processed['Total_Branch_Cost'] = sum(branch_costs)
-
+    df_processed['Total_Rework_Cost'] = sum([df_processed.get(c, 0) for c in config["rework_components"]])
+    df_processed['Total_Branch_Cost'] = sum([df_processed.get(c, 0) for c in config["cost_components"]])
     revenue = df_processed.get('Revenue', 0)
     df_processed['Branch_Profit'] = revenue - df_processed['Total_Branch_Cost']
     df_processed['Branch_Profit_Margin_%'] = np.where(revenue != 0, (df_processed['Branch_Profit'] / revenue * 100), 0)
     df_processed['Profit_Variance'] = df_processed['Branch_Profit'] - df_processed.get('Original_GM', 0)
-
     if config["has_shop_profit"]:
         cost_from_plant = df_processed.get('Cost_From_Plant', 0)
         total_cogs = df_processed.get('Total_COGS', 0)
         df_processed['Shop_Profit'] = cost_from_plant - total_cogs
         df_processed['Shop_Profit_Margin_%'] = np.where(cost_from_plant != 0, (df_processed['Shop_Profit'] / cost_from_plant * 100), 0)
-        
     return df_processed
 
 @st.cache_data(ttl=300)
@@ -320,7 +300,6 @@ def load_and_process_data(today: pd.Timestamp, install_cost: float):
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     df.columns = df.columns.str.strip().str.replace(r'[\s-]+', '_', regex=True).str.replace(r'[^\w]', '', regex=True)
-
     all_expected_cols = [
         'Template_Date', 'Ready_to_Fab_Date', 'Ship_Date', 'Install_Date', 'Service_Date', 'Delivery_Date',
         'Job_Creation', 'Next_Sched_Date', 'Product_Rcvd_Date', 'Pick_Up_Date', 'Job_Material',
@@ -332,15 +311,9 @@ def load_and_process_data(today: pd.Timestamp, install_cost: float):
         'Branch_INV_', 'Plant_INV_', 'Job_Status', 'Invoice_Status', 'Install_Status', 'Pick_Up_Status', 'Delivery_Status'
     ]
     for col in all_expected_cols:
-        if col not in df.columns:
-            df[col] = None
-
-    date_cols = ['Template_Date', 'Ready_to_Fab_Date', 'Ship_Date', 'Install_Date', 'Service_Date',
-                 'Delivery_Date', 'Job_Creation', 'Next_Sched_Date', 'Product_Rcvd_Date', 'Pick_Up_Date']
-    for col in date_cols:
-        df[col] = pd.to_datetime(df[col], errors='coerce')
-
-    # --- Operational Calculations ---
+        if col not in df.columns: df[col] = None
+    date_cols = ['Template_Date', 'Ready_to_Fab_Date', 'Ship_Date', 'Install_Date', 'Service_Date', 'Delivery_Date', 'Job_Creation', 'Next_Sched_Date', 'Product_Rcvd_Date', 'Pick_Up_Date']
+    for col in date_cols: df[col] = pd.to_datetime(df[col], errors='coerce')
     df['Last_Activity_Date'] = df[date_cols].max(axis=1)
     df['Days_Since_Last_Activity'] = (today - df['Last_Activity_Date']).dt.days
     df['Days_Behind'] = np.where(df['Next_Sched_Date'].notna(), (today - df['Next_Sched_Date']).dt.days, np.nan)
@@ -358,13 +331,9 @@ def load_and_process_data(today: pd.Timestamp, install_cost: float):
     df['Has_Rework'] = df['Rework_Stone_Shop_Rework_Price'].notna() & (df['Rework_Stone_Shop_Rework_Price'] != '')
     df['Risk_Score'] = df.apply(calculate_risk_score, axis=1)
     df[['Delay_Probability', 'Risk_Factors']] = df.apply(lambda row: pd.Series(calculate_delay_probability(row)), axis=1)
-
-    # --- REFACTORED PRICING VALIDATION ---
-    pricing_analysis_series = df.apply(analyze_job_pricing, axis=1)
     
-    def get_metric(analysis, key, default=None):
-        return analysis.get(key, default) if isinstance(analysis, dict) else default
-
+    pricing_analysis_series = df.apply(analyze_job_pricing, axis=1)
+    def get_metric(analysis, key, default=None): return analysis.get(key, default) if isinstance(analysis, dict) else default
     df['Pricing_Analysis'] = pricing_analysis_series
     df['Material_Group'] = pricing_analysis_series.apply(lambda x: get_metric(x.get('expected_retail', {}), 'material_group'))
     df['Pricing_Issues_Count'] = pricing_analysis_series.apply(lambda x: get_metric(x, 'critical_issues', 0))
@@ -372,77 +341,36 @@ def load_and_process_data(today: pd.Timestamp, install_cost: float):
     df['Revenue_Variance'] = pricing_analysis_series.apply(lambda x: get_metric(x, 'revenue_variance', 0))
     df['Cost_Variance'] = pricing_analysis_series.apply(lambda x: get_metric(x, 'plant_cost_variance', 0))
 
-    # --- Financial Processing ---
     df_stone = df[df['Division_Type'] == 'Stone/Quartz'].copy()
     df_laminate = df[df['Division_Type'] == 'Laminate'].copy()
-    
     df_stone_processed = _process_financial_data(df_stone, STONE_CONFIG, install_cost)
     df_laminate_processed = _process_financial_data(df_laminate, LAMINATE_CONFIG, install_cost)
-
     df_combined = pd.concat([df_stone_processed, df_laminate_processed], ignore_index=True)
-
     return df_stone_processed, df_laminate_processed, df_combined
 
 
-# --- UI Rendering Functions ---
-# NOTE: All UI rendering functions are assumed to be here.
-# They are hidden for brevity but are required for the app to run.
-def render_daily_priorities(df: pd.DataFrame, today: pd.Timestamp):
-    # ... your existing code ...
-    pass
-def render_workload_calendar(df: pd.DataFrame, today: pd.Timestamp):
-    # ... your existing code ...
-    pass
-def render_timeline_analytics(df: pd.DataFrame):
-    # ... your existing code ...
-    pass
-def render_predictive_analytics(df: pd.DataFrame):
-    # ... your existing code ...
-    pass
-def render_performance_scorecards(df: pd.DataFrame):
-    # ... your existing code ...
-    pass
-def render_historical_trends(df: pd.DataFrame):
-    # ... your existing code ...
-    pass
-def render_profitability_tabs(df_stone, df_laminate, today_dt):
-    # ... your existing code ...
-    pass
-def render_pricing_validation_tab(df: pd.DataFrame, division_name: str):
-    # ... your existing code ...
-    pass
-def render_overview_tab(df: pd.DataFrame, division_name: str):
-    # ... your existing code ...
-    pass
-def render_detailed_data_tab(df: pd.DataFrame, division_name: str):
-    # ... your existing code ...
-    pass
-def render_profit_drivers_tab(df: pd.DataFrame, division_name: str):
-    # ... your existing code ...
-    pass
-def render_rework_tab(df: pd.DataFrame, division_name: str):
-    # ... your existing code ...
-    pass
-def render_pipeline_issues_tab(df: pd.DataFrame, division_name: str, today: pd.Timestamp):
-    # ... your existing code ...
-    pass
-def render_field_workload_tab(df: pd.DataFrame, division_name: str):
-    # ... your existing code ...
-    pass
-def render_forecasting_tab(df: pd.DataFrame, division_name: str):
-    # ... your existing code ...
-    pass
-def render_overall_health_tab(df: pd.DataFrame, today: pd.Timestamp):
-    # ... your existing code ...
-    pass
+# --- UI Rendering Functions (Placeholders) ---
+# NOTE: The full implementation of these functions is required for the app to run.
+def render_daily_priorities(df: pd.DataFrame, today: pd.Timestamp): pass
+def render_workload_calendar(df: pd.DataFrame, today: pd.Timestamp): pass
+def render_timeline_analytics(df: pd.DataFrame): pass
+def render_predictive_analytics(df: pd.DataFrame): pass
+def render_performance_scorecards(df: pd.DataFrame): pass
+def render_historical_trends(df: pd.DataFrame): pass
+def render_profitability_tabs(df_stone, df_laminate, today_dt): pass
+def render_pricing_validation_tab(df: pd.DataFrame, division_name: str): pass
+def render_overview_tab(df: pd.DataFrame, division_name: str): pass
+def render_detailed_data_tab(df: pd.DataFrame, division_name: str): pass
+def render_profit_drivers_tab(df: pd.DataFrame, division_name: str): pass
+def render_rework_tab(df: pd.DataFrame, division_name: str): pass
+def render_pipeline_issues_tab(df: pd.DataFrame, division_name: str, today: pd.Timestamp): pass
+def render_field_workload_tab(df: pd.DataFrame, division_name: str): pass
+def render_forecasting_tab(df: pd.DataFrame, division_name: str): pass
+def render_overall_health_tab(df: pd.DataFrame, today: pd.Timestamp): pass
 
 
 # --- Main Application ---
 def main():
-    # For development, you can bypass login by setting session_state
-    # if 'authenticated' not in st.session_state:
-    #     st.session_state.authenticated = True # Uncomment for easy testing
-
     if not render_login_screen():
         return
 
@@ -499,23 +427,18 @@ def main():
 
         if status_filter:
             final_mask = pd.Series([False] * len(df_full), index=df_full.index)
-            if "Active" in status_filter:
-                final_mask |= (df_full['Job_Status'] != 'Complete')
-            if "Complete" in status_filter:
-                final_mask |= (df_full['Job_Status'] == 'Complete')
+            if "Active" in status_filter: final_mask |= (df_full['Job_Status'] != 'Complete')
+            if "Complete" in status_filter: final_mask |= (df_full['Job_Status'] == 'Complete')
             if "30+ Days Old" in status_filter:
                 thirty_days_ago = today_dt - timedelta(days=30)
                 final_mask |= ((df_full['Job_Creation'] < thirty_days_ago) & (df_full['Job_Status'] != 'Complete'))
-            if "Unscheduled" in status_filter:
-                final_mask |= (df_full['Next_Sched_Date'].isna() & (df_full['Job_Status'] != 'Complete'))
+            if "Unscheduled" in status_filter: final_mask |= (df_full['Next_Sched_Date'].isna() & (df_full['Job_Status'] != 'Complete'))
             df_op_filtered = df_full[final_mask]
         else:
             df_op_filtered = pd.DataFrame(columns=df_full.columns)
 
-        if salesperson_filter != 'All':
-            df_op_filtered = df_op_filtered[df_op_filtered['Salesperson'] == salesperson_filter]
-        if division_filter != 'All':
-            df_op_filtered = df_op_filtered[df_op_filtered['Division_Type'] == division_filter]
+        if salesperson_filter != 'All': df_op_filtered = df_op_filtered[df_op_filtered['Salesperson'] == salesperson_filter]
+        if division_filter != 'All': df_op_filtered = df_op_filtered[df_op_filtered['Division_Type'] == division_filter]
         
         st.info(f"Displaying {len(df_op_filtered)} jobs based on filters.")
 
@@ -531,8 +454,4 @@ def main():
         render_profitability_tabs(df_stone, df_laminate, today_dt)
 
 if __name__ == "__main__":
-    # To run this script, you need two files:
-    # 1. app.py (this file)
-    # 2. pricing_config.py (the file with your pricing data)
-    # You also need to set up your Streamlit secrets for the Google Sheets connection.
     main()
