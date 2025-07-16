@@ -18,6 +18,18 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import time
 
+# Import pricing configuration
+from pricing_config import (
+    MATERIAL_GROUPS, 
+    CUSTOMER_DISCOUNTS, 
+    UNASSIGNED_MATERIALS,
+    get_material_group,
+    get_retail_price,
+    get_expected_plant_cost,
+    validate_job_pricing as validate_pricing,
+    find_material_matches
+)
+
 # --- Page & App Configuration (Must be the first Streamlit command) ---
 st.set_page_config(layout="wide", page_title="Unified Business Dashboard", page_icon="🚀")
 
@@ -25,7 +37,7 @@ st.set_page_config(layout="wide", page_title="Unified Business Dashboard", page_
 WORKSHEET_NAME = "jobs"
 MORAWARE_SEARCH_URL = "https://floformcountertops.moraware.net/sys/search?&search="
 
-# --- Timeline & Risk Thresholds (from Operations Dashboard) ---
+# --- Timeline & Risk Thresholds ---
 TIMELINE_THRESHOLDS = {
     'template_to_rtf': 3,          # days
     'rtf_to_product_rcvd': 7,      # days
@@ -37,90 +49,8 @@ TIMELINE_THRESHOLDS = {
     'stale_job_threshold': 7       # days since last activity
 }
 
-# --- Pricing Configuration ---
-MATERIAL_GROUPS = {
-    # Group 0 - $58.00/sq ft, Cost: $34.80-$34.99
-    0: {
-        'retail_price': 58.00, 'cost_min': 34.80, 'cost_max': 34.99,
-        'materials': ['black coral', 'rocky shores', 'tofino']
-    },
-    # Group 1 - $68.00/sq ft, Cost: $39.01
-    1: {
-        'retail_price': 68.00, 'cost_min': 39.01, 'cost_max': 39.01,
-        'materials': ['aspen', 'blackburn', 'leaden', 'uptown grey']
-    },
-    # Group 2 - $88.00/sq ft, Cost: $48.77
-    2: {
-        'retail_price': 88.00, 'cost_min': 48.77, 'cost_max': 48.77,
-        'materials': ['miami vena', 'whistler', 'whistler gold', 'miami white', 'silhouette', 
-                     'artisan grey', 'drift', 'specchio white', 'lazio', 'urban cloud']
-    },
-    # Group 3 - $98.00/sq ft, Cost: $54.17
-    3: {
-        'retail_price': 98.00, 'cost_min': 54.17, 'cost_max': 54.17,
-        'materials': ['carrara codena', 'desert silver', 'calacatta west', 'organic white', 'aterra blanca']
-    },
-    # Group 4 - $110.00/sq ft, Cost: $58.69-$60.47
-    4: {
-        'retail_price': 110.00, 'cost_min': 58.69, 'cost_max': 60.47,
-        'materials': ['aterra verity', 'brava marfil', 'charcoal soapstone', 'antello', 'celestial sky',
-                     'embrace', 'empress', 'fresh concrete', 'frosty carrina', 'oceana', 'raw concrete',
-                     'stellar snow', 'tranquility', 'bianco drift']
-    },
-    # Group 5 - $118.00/sq ft, Cost: $61.67
-    5: {
-        'retail_price': 118.00, 'cost_min': 61.67, 'cost_max': 61.67,
-        'materials': ['clouds rest', 'desert wind', 'haida', 'glencoe', 'marathi marble', 'moorland fog',
-                     'nova serrana', 'river glen', 'rugged concrete', 'santiago', 'serene', 'verde peak',
-                     'vicentia', 'eden', 'aurelia', 'montauk', 'chantilly']
-    },
-    # Group 6 - $128.00/sq ft, Cost: $70.68
-    6: {
-        'retail_price': 128.00, 'cost_min': 70.68, 'cost_max': 70.68,
-        'materials': ['calacatta olympos', 'fossa falls', 'calacatta volegno', 'calacatta pastino',
-                     'coastal', 'enchanted rock', 'north cascades', 'raw a', 'raw g', 'et statuario',
-                     'calacatta extra', 'calacatta mont']
-    },
-    # Group 7 - $144.00/sq ft, Cost: $73.38-$83.29
-    7: {
-        'retail_price': 144.00, 'cost_min': 73.38, 'cost_max': 83.29,
-        'materials': ['tyrol', 'verdelia', 'et calacatta gold', 'ethereal glow', 'ethereal dusk',
-                     'ethereal noctis', 'elba white', 'le blanc', 'matterhorn', 'eternal calacatta gold']
-    },
-    # Group 8 - $168.00/sq ft, Cost: $98.75
-    8: {
-        'retail_price': 168.00, 'cost_min': 98.75, 'cost_max': 98.75,
-        'materials': ['amarcord', 'berwyn', 'colton', 'calacatta nuvo', 'solenna', 'versailles ivory',
-                     'romantic ash', 'riviere rose']
-    },
-    # Group 9 - $198.00/sq ft, Cost: $115.46
-    9: {
-        'retail_price': 198.00, 'cost_min': 115.46, 'cost_max': 115.46,
-        'materials': ['brittanicca', 'brittanicca gold warm', 'skara brae', 'inverness frost',
-                     'everleigh', 'portrush', 'ironsbridge']
-    }
-}
-
-# Additional materials found in data - need to be categorized
-UNASSIGNED_MATERIALS = {
-    'royal blanc', 'mount royal', 'bianco delicato', 'upper canada', 'bianco modesto', 
-    'noir terrain', 'calacatta nero', 'lithic luxe', 'calacatta marmo', 'markina leathered',
-    'eternal bella', 'weybourne', 'crystal ice', 'alpine mist', 'super white', 'domoos',
-    'tetons oro', 'brezza oro'
-}
-
-CUSTOMER_DISCOUNTS = {
-    'Retail': {'discount': 0.0, 'install_rate': 34.00},
-    'Dealer': {'discount': 0.15, 'install_rate': 28.90},
-    'Contractor': {'discount': 0.25, 'install_rate': 25.50},
-    'Home Builder': {'discount': 0.25, 'install_rate': 25.50},
-    'Commercial': {'discount': 0.25, 'install_rate': 25.50},
-    'LIA': {'discount': 0.30, 'install_rate': 0.00},
-    'Home Depot': {'discount': 'special', 'install_rate': 'special'},
-    'Costco': {'discount': 'special', 'install_rate': 'special'}
-}
-
 # --- Division-Specific Processing Configuration (from Profitability Dashboard) ---
+# --- Division-Specific Processing Configuration ---
 STONE_CONFIG = {
     "name": "Stone/Quartz",
     "numeric_map": {
@@ -571,16 +501,16 @@ def load_and_process_data(today: pd.Timestamp, install_cost: float):
     df['Risk_Score'] = df.apply(calculate_risk_score, axis=1)
     df[['Delay_Probability', 'Risk_Factors']] = df.apply(lambda row: pd.Series(calculate_delay_probability(row)), axis=1)
 
-    # Add pricing validation analysis
-    pricing_analysis = df.apply(validate_job_pricing, axis=1)
+    # Add pricing validation analysis using new pricing_config module
+    pricing_analysis = df.apply(validate_job_pricing_enhanced, axis=1)
     df['Pricing_Analysis'] = pricing_analysis
     
     # Extract key pricing metrics for easier filtering
     df['Material_Group'] = pricing_analysis.apply(lambda x: x.get('material_group') if isinstance(x, dict) and x.get('material_group') not in ['laminate_skipped', 'unassigned', 'unknown'] else None)
-    df['Pricing_Issues_Count'] = pricing_analysis.apply(lambda x: x.get('total_issues', 0) if isinstance(x, dict) else 0)
+    df['Pricing_Issues_Count'] = pricing_analysis.apply(lambda x: x.get('critical_issues', 0) if isinstance(x, dict) else 0)
     df['Pricing_Warnings_Count'] = pricing_analysis.apply(lambda x: x.get('warnings', 0) if isinstance(x, dict) else 0)
     df['Revenue_Variance'] = pricing_analysis.apply(lambda x: x.get('revenue_variance', 0) if isinstance(x, dict) else 0)
-    df['Cost_Variance'] = pricing_analysis.apply(lambda x: x.get('cost_variance', 0) if isinstance(x, dict) else 0)
+    df['Cost_Variance'] = pricing_analysis.apply(lambda x: x.get('plant_cost_variance', 0) if isinstance(x, dict) else 0)
 
     df_stone = df[df['Division_Type'] == 'Stone/Quartz'].copy()
     df_laminate = df[df['Division_Type'] == 'Laminate'].copy()
@@ -985,7 +915,7 @@ def render_pricing_validation_tab(df: pd.DataFrame, division_name: str):
     st.markdown("### 🧬 Material Detection Summary")
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        recognized = len(df[df['Material_Group'].notna() & (df['Material_Group'] != 'unassigned') & (df['Material_Group'] != 'unknown')])
+        recognized = len(df[df['Material_Group'].notna()])
         st.metric("✅ Recognized", recognized)
     with col2:
         st.metric("🔶 Unassigned", unassigned_materials, help="Materials found but not assigned to pricing groups")
@@ -1012,6 +942,7 @@ def render_pricing_validation_tab(df: pd.DataFrame, division_name: str):
                         unassigned_materials_list.append({
                             'Job_Name': row.get('Job_Name'),
                             'Material_Found': analysis.get('matched_material'),
+                            'Data_Source': analysis.get('data_source', 'Unknown'),
                             'Link': row.get('Link')
                         })
                 
@@ -1032,6 +963,7 @@ def render_pricing_validation_tab(df: pd.DataFrame, division_name: str):
                         unknown_materials_list.append({
                             'Job_Name': row.get('Job_Name'),
                             'Extracted_Materials': analysis.get('extracted_materials'),
+                            'Data_Source': analysis.get('data_source', 'Unknown'),
                             'Link': row.get('Link')
                         })
                 
@@ -1095,13 +1027,13 @@ def render_pricing_validation_tab(df: pd.DataFrame, division_name: str):
                     col_a, col_b = st.columns([3, 1])
                     with col_a:
                         st.markdown(f"**{row.get('Job_Name', 'Unknown')}** - Group {row.get('Material_Group', 'Unknown')}")
-                        st.caption(f"Customer: {row.get('Job_Type', 'N/A')} | Order: {row.get('Order_Type', 'N/A')}")
+                        st.caption(f"Customer: {row.get('Job_Type', 'N/A')} | Data Source: {analysis.get('data_source', 'Unknown')}")
                         
-                        for issue in analysis['issues']:
-                            if issue['severity'] == 'critical':
-                                st.error(f"🔴 {issue['message']}")
+                        for issue in analysis.get('issues', []):
+                            if issue.get('severity') == 'critical':
+                                st.error(f"🔴 {issue.get('message', 'Unknown issue')}")
                             else:
-                                st.warning(f"🟡 {issue['message']}")
+                                st.warning(f"🟡 {issue.get('message', 'Unknown issue')}")
                     
                     with col_b:
                         if 'Link' in row and row['Link']:
@@ -1161,8 +1093,9 @@ def render_pricing_validation_tab(df: pd.DataFrame, division_name: str):
                 'Job_Name': row.get('Job_Name'),
                 'Customer_Type': row.get('Job_Type'),
                 'Material_Group': group_display,
-                'SqFt': row.get('Total_Job_SqFt', 0),
-                'Actual_Revenue': row.get('Revenue', 0),
+                'Data_Source': analysis.get('data_source', 'Unknown'),
+                'SqFt': analysis.get('total_sqft_used', row.get('Total_Job_SqFt', 0)),
+                'Actual_Revenue': analysis.get('actual_revenue', 0),
                 'Revenue_Variance': row.get('Revenue_Variance', 0),
                 'Cost_Variance': row.get('Cost_Variance', 0),
                 'Critical_Issues': row.get('Pricing_Issues_Count', 0),
@@ -1531,13 +1464,33 @@ def render_overall_health_tab(df: pd.DataFrame, today: pd.Timestamp):
     if not critical_pricing.empty:
         st.subheader("🚨 Top Pricing Issues Requiring Attention")
         top_issues = critical_pricing.nlargest(5, 'Revenue_Variance')[['Job_Name', 'Job_Type', 'Revenue_Variance', 'Cost_Variance', 'Material_Group']]
-        st.dataframe(top_issues, use_container_width=True,
-            column_config={
-                "Revenue_Variance": st.column_config.NumberColumn("Revenue Impact", format='$%.0f'),
-                "Cost_Variance": st.column_config.NumberColumn("Cost Impact", format='$%.0f'),
-                "Material_Group": st.column_config.NumberColumn("Group", format='%d')
-            }
-        )
+        
+        # Clean up the display data
+        display_issues = []
+        for _, row in top_issues.iterrows():
+            material_group = row['Material_Group']
+            if isinstance(material_group, (int, float)) and not pd.isna(material_group):
+                group_display = int(material_group)
+            else:
+                group_display = str(material_group) if material_group else 'N/A'
+            
+            display_issues.append({
+                'Job_Name': row['Job_Name'],
+                'Job_Type': row['Job_Type'],
+                'Revenue_Variance': row['Revenue_Variance'],
+                'Cost_Variance': row['Cost_Variance'],
+                'Material_Group': group_display
+            })
+        
+        if display_issues:
+            issues_df = pd.DataFrame(display_issues)
+            st.dataframe(issues_df, use_container_width=True,
+                column_config={
+                    "Revenue_Variance": st.column_config.NumberColumn("Revenue Impact", format='$%.0f'),
+                    "Cost_Variance": st.column_config.NumberColumn("Cost Impact", format='$%.0f'),
+                    "Material_Group": st.column_config.TextColumn("Group")
+                }
+            )
 
     st.markdown("---")
     c1, c2 = st.columns(2)
