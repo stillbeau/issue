@@ -395,31 +395,341 @@ def render_daily_priorities(df: pd.DataFrame, today: pd.Timestamp):
             st.dataframe(upcoming_installs_display[display_cols].sort_values('Days_Until_Install'), column_config={"Link": st.column_config.LinkColumn("Prod #", display_text=r".*search=(.*)")}, use_container_width=True)
 
 def render_workload_calendar(df: pd.DataFrame, today: pd.Timestamp):
-    # ... (Full function implementation) ...
-    pass
+    st.header("📅 Workload Calendar")
+    col1, col2 = st.columns(2)
+    with col1:
+        start_date = st.date_input("Start Date", value=today.date(), key="cal_start")
+    with col2:
+        end_date = st.date_input("End Date", value=(today + timedelta(days=14)).date(), key="cal_end")
+    date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+    
+    activity_type = st.selectbox("Select Activity Type", ["Templates", "Installs", "All Activities"], key="cal_activity")
+    
+    activity_df = pd.DataFrame()
+    if activity_type == "Templates":
+        if 'Template_Date' in df.columns:
+            activity_df = df[df['Template_Date'].notna()].copy()
+            date_col, assignee_col = 'Template_Date', 'Template_Assigned_To'
+    elif activity_type == "Installs":
+        if 'Install_Date' in df.columns:
+            activity_df = df[df['Install_Date'].notna()].copy()
+            date_col, assignee_col = 'Install_Date', 'Install_Assigned_To'
+    else:
+        activities = []
+        if 'Template_Date' in df.columns:
+            temp_df = df[df['Template_Date'].notna()].copy()
+            temp_df.rename(columns={'Template_Date': 'Activity_Date', 'Template_Assigned_To': 'Assignee'}, inplace=True)
+            temp_df['Activity_Type'] = 'Template'
+            activities.append(temp_df)
+        if 'Install_Date' in df.columns:
+            inst_df = df[df['Install_Date'].notna()].copy()
+            inst_df.rename(columns={'Install_Date': 'Activity_Date', 'Install_Assigned_To': 'Assignee'}, inplace=True)
+            inst_df['Activity_Type'] = 'Install'
+            activities.append(inst_df)
+        if activities:
+            activity_df = pd.concat(activities, ignore_index=True)
+        date_col, assignee_col = 'Activity_Date', 'Assignee'
+
+    if activity_df.empty or date_col not in activity_df.columns:
+        st.warning("No activities found for the selected type and filters.")
+        return
+        
+    activity_df = activity_df[(activity_df[date_col] >= pd.Timestamp(start_date)) & (activity_df[date_col] <= pd.Timestamp(end_date))]
+    
+    daily_summary = []
+    if assignee_col in activity_df.columns:
+        for date in date_range:
+            day_activities = activity_df[activity_df[date_col].dt.date == date.date()]
+            if not day_activities.empty:
+                assignee_counts = day_activities[assignee_col].value_counts()
+                for assignee, count in assignee_counts.items():
+                    if assignee and str(assignee).strip():
+                        assignee_jobs = day_activities[day_activities[assignee_col] == assignee]
+                        total_sqft = assignee_jobs['Total_Job_SqFt'].sum() if 'Total_Job_SqFt' in assignee_jobs else 0
+                        daily_summary.append({'Date': date, 'Assignee': str(assignee), 'Job_Count': int(count), 'Total_SqFt': float(total_sqft)})
+
+    if daily_summary:
+        summary_df = pd.DataFrame(daily_summary)
+        try:
+            pivot_df = summary_df.pivot_table(index='Assignee', columns=summary_df['Date'].dt.strftime('%m/%d'), values='Job_Count', fill_value=0, aggfunc='sum').astype(int)
+            if not pivot_df.empty:
+                fig, ax = plt.subplots(figsize=(12, max(6, len(pivot_df) * 0.5)))
+                sns.heatmap(pivot_df, annot=True, fmt='d', cmap='YlOrRd', ax=ax, cbar_kws={'label': 'Number of Jobs'})
+                ax.set_title('Jobs by Assignee and Date'); ax.set_xlabel('Date'); ax.set_ylabel('Assignee')
+                plt.tight_layout(); st.pyplot(fig); plt.close()
+        except Exception as e:
+            st.warning(f"Unable to create heatmap visualization. Error: {e}")
+            st.dataframe(summary_df)
+            
+        st.subheader("💡 Days with Light Workload")
+        threshold = st.slider("Jobs threshold for 'light' day", 1, 10, 3, key="cal_slider")
+        daily_totals = summary_df.groupby('Date')['Job_Count'].sum()
+        light_days_data = [{'Date': date.strftime('%A, %m/%d'), 'Total_Jobs': int(daily_totals.get(date, 0)), 'Available_Capacity': int(threshold - daily_totals.get(date, 0))} for date in date_range if daily_totals.get(date, 0) < threshold]
+        if light_days_data:
+            st.dataframe(pd.DataFrame(light_days_data), use_container_width=True)
+        else:
+            st.success(f"No days found with fewer than {threshold} jobs.")
 
 def render_timeline_analytics(df: pd.DataFrame):
-    # ... (Full function implementation) ...
-    pass
+    st.header("📊 Timeline Analytics & Bottlenecks")
+    timeline_metrics = {
+        "Template to Install": "Days_Template_to_Install", "Ready to Fab to Product Received": "Days_RTF_to_Product_Rcvd",
+        "Template to Ready to Fab": "Days_Template_to_RTF", "Product Received to Install": "Days_Product_Rcvd_to_Install",
+        "Template to Ship": "Days_Template_to_Ship", "Ship to Install": "Days_Ship_to_Install",
+    }
+    
+    st.subheader("⏱️ Average Timeline by Division")
+    divisions = df['Division_Type'].unique()
+    cols = st.columns(len(divisions))
+    
+    for idx, division in enumerate(divisions):
+        with cols[idx]:
+            st.markdown(f"**{division}**")
+            division_df = df[df['Division_Type'] == division]
+            for metric_name, col_name in timeline_metrics.items():
+                if col_name in division_df.columns:
+                    avg_days = division_df[col_name].mean()
+                    if pd.notna(avg_days):
+                        st.metric(metric_name, f"{avg_days:.1f} days")
+
+    st.markdown("---")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Current Bottlenecks")
+        stage_counts = df['Current_Stage'].value_counts()
+        if not stage_counts.empty:
+            st.bar_chart(stage_counts)
+            bottleneck_stage = stage_counts.idxmax()
+            st.info(f"📍 Potential bottleneck: **{bottleneck_stage}** ({stage_counts[bottleneck_stage]} jobs)")
+    with col2:
+        st.subheader("Stage Duration Analysis")
+        stuck_threshold = st.number_input("Days threshold for 'stuck' jobs", min_value=3, max_value=30, value=7, key="stuck_threshold")
+        stuck_jobs = df[df['Days_In_Current_Stage'] > stuck_threshold]
+        if not stuck_jobs.empty:
+            stuck_by_stage = stuck_jobs['Current_Stage'].value_counts()
+            st.bar_chart(stuck_by_stage)
+            st.warning(f"⚠️ {len(stuck_jobs)} jobs stuck > {stuck_threshold} days")
+        else:
+            st.success(f"✅ No jobs stuck > {stuck_threshold} days")
 
 def render_predictive_analytics(df: pd.DataFrame):
-    # ... (Full function implementation) ...
-    pass
+    st.header("🔮 Predictive Analytics")
+    active_jobs = df[~df['Current_Stage'].isin(['Completed'])].copy()
+    if active_jobs.empty:
+        st.warning("No active jobs to analyze.")
+        return
+        
+    high_risk_threshold = st.slider("High risk threshold (%)", min_value=50, max_value=90, value=70, key="risk_threshold")
+    high_risk_jobs = active_jobs[active_jobs['Delay_Probability'] >= high_risk_threshold].sort_values('Delay_Probability', ascending=False)
+    
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        st.subheader(f"🚨 Jobs with >{high_risk_threshold}% Delay Risk ({len(high_risk_jobs)} jobs)")
+        if not high_risk_jobs.empty:
+            for _, row in high_risk_jobs.head(10).iterrows():
+                with st.container(border=True):
+                    col_a, col_b = st.columns([3, 1])
+                    with col_a:
+                        st.markdown(f"**{row.get('Job_Name', 'Unknown')}** - {row.get('Current_Stage', 'Unknown')}")
+                        st.caption(f"Salesperson: {row.get('Salesperson', 'N/A')} | Next: {row.get('Next_Sched_Activity', 'None scheduled')}")
+                        if row['Risk_Factors']:
+                            st.warning(f"Risk factors: {row['Risk_Factors']}")
+                    with col_b:
+                        color = "🔴" if row['Delay_Probability'] >= 80 else "🟡"
+                        st.metric("Delay Risk", f"{color} {row['Delay_Probability']:.0f}%")
+        else:
+            st.success(f"No jobs with delay risk above {high_risk_threshold}%")
+    with col2:
+        st.subheader("📊 Risk Distribution")
+        risk_bins = [0, 30, 50, 70, 101]; risk_labels = ['Low (0-30%)', 'Medium (30-50%)', 'High (50-70%)', 'Critical (70-100%)']
+        active_jobs['Risk_Category'] = pd.cut(active_jobs['Delay_Probability'], bins=risk_bins, labels=risk_labels, right=False)
+        risk_dist = active_jobs['Risk_Category'].value_counts()
+        for category in risk_labels:
+            st.metric(f"{'🔴' if 'Critical' in category else '🟡' if 'High' in category else '🟠' if 'Medium' in category else '🟢'} {category}", risk_dist.get(category, 0))
 
 def render_performance_scorecards(df: pd.DataFrame):
-    # ... (Full function implementation) ...
-    pass
+    st.header("🎯 Performance Scorecards")
+    role_type = st.selectbox("Select Role to Analyze", ["Salesperson", "Template Assigned To", "Install Assigned To"], key="role_select")
+    role_col = {"Salesperson": "Salesperson", "Template Assigned To": "Template_Assigned_To", "Install Assigned To": "Install_Assigned_To"}[role_type]
+    
+    if role_col not in df.columns:
+        st.warning(f"Column '{role_col}' not found in data.")
+        return
+        
+    employees = [e for e in df[role_col].dropna().unique() if str(e).strip()]
+    if not employees:
+        st.warning(f"No {role_type} data available.")
+        return
+        
+    scorecards = []
+    now = pd.Timestamp.now()
+    week_ago = now - pd.Timedelta(days=7)
+
+    for employee in employees:
+        emp_jobs = df[df[role_col] == employee]
+        if role_type == "Salesperson":
+            metrics = {
+                'Employee': employee, 'Total Jobs': len(emp_jobs), 'Active Jobs': len(emp_jobs[~emp_jobs['Current_Stage'].isin(['Completed'])]),
+                'Avg Days Behind': emp_jobs['Days_Behind'].mean(), 'Jobs w/ Rework': len(emp_jobs[emp_jobs.get('Has_Rework', False) == True]),
+                'Avg Timeline': emp_jobs['Days_Template_to_Install'].mean(), 'High Risk Jobs': len(emp_jobs[emp_jobs.get('Risk_Score', 0) >= 30])
+            }
+        elif role_type == "Template Assigned To":
+            template_jobs = emp_jobs[emp_jobs['Template_Date'].notna()]
+            metrics = {
+                'Employee': employee, 'Total Templates': len(template_jobs), 'Avg Template to RTF': template_jobs['Days_Template_to_RTF'].mean(),
+                'Templates This Week': len(template_jobs[(template_jobs['Template_Date'] >= week_ago) & (template_jobs['Template_Date'] <= now)]),
+                'Upcoming Templates': len(template_jobs[template_jobs['Template_Date'] > now]),
+                'Overdue RTF': len(template_jobs[(template_jobs.get('Ready_to_Fab_Date', pd.NaT) < template_jobs['Template_Date'])])
+            }
+        else: # Install Assigned To
+            install_jobs = emp_jobs[emp_jobs['Install_Date'].notna()]
+            metrics = {
+                'Employee': employee, 'Total Installs': len(install_jobs),
+                'Installs This Week': len(install_jobs[(install_jobs['Install_Date'] >= week_ago) & (install_jobs['Install_Date'] <= now)]),
+                'Upcoming Installs': len(install_jobs[install_jobs['Install_Date'] > now]),
+                'Avg Ship to Install': install_jobs['Days_Ship_to_Install'].mean(), 'Total SqFt': install_jobs['Total_Job_SqFt'].sum()
+            }
+        scorecards.append(metrics)
+        
+    if not scorecards:
+        st.warning(f"No performance data available for {role_type}.")
+        return
+        
+    scorecards_df = pd.DataFrame(scorecards).sort_values("Active Jobs" if role_type == "Salesperson" else "Total Templates" if role_type == "Template Assigned To" else "Total Installs", ascending=False)
+    st.subheader(f"🏆 Top Performers: {role_type}")
+    cols = st.columns(min(3, len(scorecards_df)))
+    for idx, (_, row) in enumerate(scorecards_df.head(3).iterrows()):
+        if idx < len(cols):
+            with cols[idx], st.container(border=True):
+                st.markdown(f"### {row['Employee']}")
+                if role_type == "Salesperson":
+                    st.metric("Active Jobs", f"{row['Active Jobs']:.0f}")
+                    st.metric("Avg Days Behind", f"{row['Avg Days Behind']:.1f}" if pd.notna(row['Avg Days Behind']) else "N/A")
+                    st.metric("High Risk Jobs", f"{row['High Risk Jobs']:.0f}", delta_color="inverse")
+                elif role_type == "Template Assigned To":
+                    st.metric("Templates This Week", f"{row['Templates This Week']:.0f}")
+                    st.metric("Avg Template→RTF", f"{row['Avg Template to RTF']:.1f} days" if pd.notna(row['Avg Template to RTF']) else "N/A")
+                    st.metric("Overdue RTF", f"{row['Overdue RTF']:.0f}", delta_color="inverse")
+                else:
+                    st.metric("Installs This Week", f"{row['Installs This Week']:.0f}")
+                    st.metric("Upcoming Installs", f"{row['Upcoming Installs']:.0f}")
+                    st.metric("Total SqFt", f"{row['Total SqFt']:,.0f}")
+    
+    with st.expander("View All Employees"):
+        st.dataframe(scorecards_df.style.format({col: '{:.1f}' for col in scorecards_df.columns if 'Avg' in col or 'Days' in col} | {col: '{:,.0f}' for col in scorecards_df.columns if 'SqFt' in col}, na_rep='N/A'), use_container_width=True)
 
 def render_historical_trends(df: pd.DataFrame):
-    # ... (Full function implementation) ...
-    pass
+    st.header("📈 Historical Trends")
+    st.markdown("Analyze performance and quality trends over time. This view uses all data, ignoring local filters.")
+
+    df['Job_Creation'] = pd.to_datetime(df['Job_Creation'], errors='coerce')
+    df['Install_Date'] = pd.to_datetime(df['Install_Date'], errors='coerce')
+    df.dropna(subset=['Job_Creation', 'Install_Date'], how='all', inplace=True)
+
+    if df.empty:
+        st.warning("Not enough data to build historical trends.")
+        return
+
+    st.subheader("Job Throughput (Monthly)")
+    created = df.set_index('Job_Creation').resample('M').size().rename('Jobs Created')
+    completed = df[df['Current_Stage'] == 'Completed'].set_index('Install_Date').resample('M').size().rename('Jobs Completed')
+    throughput_df = pd.concat([created, completed], axis=1).fillna(0).astype(int)
+    throughput_df.index = throughput_df.index.strftime('%Y-%m')
+    st.line_chart(throughput_df)
+    st.caption("Compares new jobs created vs. jobs completed each month.")
+
+    st.markdown("---")
+    st.subheader("Average Job Cycle Time Trend (Template to Install)")
+    completed_jobs = df[df['Days_Template_to_Install'].notna()].copy()
+    if not completed_jobs.empty:
+        cycle_time_trend = completed_jobs.set_index('Install_Date')['Days_Template_to_Install'].resample('M').mean().fillna(0)
+        cycle_time_trend.index = cycle_time_trend.index.strftime('%Y-%m')
+        st.line_chart(cycle_time_trend)
+        st.caption("Tracks the average number of days from template to installation.")
+    else:
+        st.info("No completed jobs with both Template and Install dates to analyze cycle time.")
+
+    st.markdown("---")
+    st.subheader("Rework Rate Trend (%)")
+    rework_jobs = df[df['Install_Date'].notna()].copy()
+    if not rework_jobs.empty:
+        rework_jobs['Month'] = rework_jobs['Install_Date'].dt.to_period('M')
+        monthly_rework = rework_jobs.groupby('Month').agg(
+            Total_Jobs=('Job_Name', 'count'),
+            Rework_Jobs=('Has_Rework', 'sum')
+        )
+        monthly_rework['Rework_Rate'] = (monthly_rework['Rework_Jobs'] / monthly_rework['Total_Jobs']) * 100
+        rework_rate_trend = monthly_rework['Rework_Rate'].fillna(0)
+        rework_rate_trend.index = rework_rate_trend.index.strftime('%Y-%m')
+        st.line_chart(rework_rate_trend)
+        st.caption("Monitors the percentage of completed jobs that required rework.")
+    else:
+        st.info("No completed jobs to analyze rework trends.")
 
 def render_profitability_tabs(df_stone, df_laminate, today_dt):
-    # ... (Full function implementation) ...
-    pass
+    st.header("Profitability Analysis Dashboard")
+    st.markdown("Analyze financial performance, costs, and profit drivers by division.")
+
+    profit_sub_tabs = st.tabs(["💎 Stone/Quartz", "🪵 Laminate"])
+    
+    with profit_sub_tabs[0]:
+        stone_tabs = st.tabs(["📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "🔬 Rework & Variance", "🚧 Pipeline & Issues", "🔍 Pricing Validation", "👷 Field Workload", "🔮 Forecasting"])
+        with stone_tabs[0]: render_overview_tab(df_stone, "Stone/Quartz")
+        with stone_tabs[1]: render_detailed_data_tab(df_stone, "Stone/Quartz")
+        with stone_tabs[2]: render_profit_drivers_tab(df_stone, "Stone/Quartz")
+        with stone_tabs[3]: render_rework_tab(df_stone, "Stone/Quartz")
+        with stone_tabs[4]: render_pipeline_issues_tab(df_stone, "Stone/Quartz", today_dt)
+        with stone_tabs[5]: render_pricing_validation_tab(df_stone, "Stone/Quartz")
+        with stone_tabs[6]: render_field_workload_tab(df_stone, "Stone/Quartz")
+        with stone_tabs[7]: render_forecasting_tab(df_stone, "Stone/Quartz")
+
+    with profit_sub_tabs[1]:
+        laminate_tabs = st.tabs(["📈 Overview", "📋 Detailed Data", "💸 Profit Drivers", "🔬 Rework & Variance", "🚧 Pipeline & Issues", "🔍 Pricing Validation", "👷 Field Workload", "🔮 Forecasting"])
+        with laminate_tabs[0]: render_overview_tab(df_laminate, "Laminate")
+        with laminate_tabs[1]: render_detailed_data_tab(df_laminate, "Laminate")
+        with laminate_tabs[2]: render_profit_drivers_tab(df_laminate, "Laminate")
+        with laminate_tabs[3]: render_rework_tab(df_laminate, "Laminate")
+        with laminate_tabs[4]: render_pipeline_issues_tab(df_laminate, "Laminate", today_dt)
+        with laminate_tabs[5]: render_pricing_validation_tab(df_laminate, "Laminate")
+        with laminate_tabs[6]: render_field_workload_tab(df_laminate, "Laminate")
+        with laminate_tabs[7]: render_forecasting_tab(df_laminate, "Laminate")
 
 def render_pricing_validation_tab(df: pd.DataFrame, division_name: str):
-    # ... (Full function implementation) ...
+    st.header(f"� {division_name} Pricing Validation")
+    
+    if df.empty:
+        st.warning(f"No {division_name} data available.")
+        return
+    
+    total_jobs = len(df)
+    critical_issues = df['Pricing_Issues_Count'].sum()
+    warnings = df['Pricing_Warnings_Count'].sum()
+    total_revenue_variance = df['Revenue_Variance'].sum()
+    total_cost_variance = df['Cost_Variance'].sum()
+    
+    unassigned_materials = len(df[df['Pricing_Analysis'].apply(lambda x: x.get('status') == 'unassigned_material' if isinstance(x, dict) else False)])
+    unknown_materials = len(df[df['Pricing_Analysis'].apply(lambda x: x.get('status') == 'unknown_material' if isinstance(x, dict) else False)])
+    unrecognized_materials = len(df[df['Pricing_Analysis'].apply(lambda x: x.get('status') == 'unrecognized_material' if isinstance(x, dict) else False)])
+    
+    col1, col2, col3, col4, col5 = st.columns(5)
+    with col1: st.metric("Total Jobs", total_jobs)
+    with col2: st.metric("🔴 Critical Issues", critical_issues, delta_color="inverse")
+    with col3: st.metric("🟡 Warnings", warnings, delta_color="inverse")
+    with col4: st.metric("Revenue Variance", f"${total_revenue_variance:,.0f}", delta_color="normal" if total_revenue_variance >= 0 else "inverse")
+    with col5: st.metric("Cost Variance", f"${total_cost_variance:,.0f}", delta_color="inverse" if total_cost_variance >= 0 else "normal")
+    
+    st.markdown("### 🧬 Material Detection Summary")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        recognized = len(df[df['Material_Group'].notna()])
+        st.metric("✅ Recognized", recognized)
+    with col2: st.metric("🔶 Unassigned", unassigned_materials, help="Materials found but not assigned to pricing groups")
+    with col3: st.metric("❓ Unknown", unknown_materials, help="Materials extracted but not recognized")
+    with col4: st.metric("❌ Unrecognized", unrecognized_materials, help="Could not extract material names")
+    
+    st.markdown("---")
+    
+    # ... (Rest of the function implementation) ...
     pass
 
 def render_overview_tab(df: pd.DataFrame, division_name: str):
@@ -541,3 +851,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+�
