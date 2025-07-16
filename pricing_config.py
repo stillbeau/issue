@@ -1,390 +1,335 @@
+# -*- coding: utf-8 -*-
 """
-FloForm Express Pricing Configuration
-June 2025 Pricing Structure
+Unified Operations and Profitability Dashboard
 
-This module contains all pricing data and logic for the FloForm Express quartz program.
-Includes retail pricing, interbranch billing costs, and customer discount structures.
+This script provides a holistic view of the business, integrating operational performance
+and financial analysis. It uses a dedicated pricing module for all financial calculations.
 """
 
+import streamlit as st
 import pandas as pd
 import numpy as np
+from streamlit_gsheets import GSheetsConnection
+import re
+from datetime import datetime, timedelta
+import matplotlib.pyplot as plt
+import seaborn as sns
+import time
 
-# --- MATERIAL GROUPS WITH JUNE 2025 PRICING ---
-MATERIAL_GROUPS = {
-    0: {
-        'name': 'Group 0',
-        'retail_price': 92.00,  # Includes installation
-        'ib_cost_min': 34.80,   # Interbranch billing - what shop charges branch (min)
-        'ib_cost_max': 34.99,   # Interbranch billing - what shop charges branch (max)
-        'materials': ['black coral', 'rocky shores', 'tofino grey', 'tofino']
-    },
-    1: {
-        'name': 'Group 1', 
-        'retail_price': 102.00,
-        'ib_cost_min': 39.01,
-        'ib_cost_max': 39.01,
-        'materials': ['aspen', 'blackburn', 'leaden', 'uptown grey']
-    },
-    2: {
-        'name': 'Group 2',
-        'retail_price': 122.00,
-        'ib_cost_min': 48.77,
-        'ib_cost_max': 48.77,
-        'materials': ['miami vena', 'whistler', 'whistler gold', 'miami white', 'silhouette', 
-                     'artisan grey', 'drift', 'specchio white', 'lazio', 'urban cloud']
-    },
-    3: {
-        'name': 'Group 3',
-        'retail_price': 132.00,
-        'ib_cost_min': 54.17,
-        'ib_cost_max': 54.17,
-        'materials': ['carrara codena', 'desert silver', 'calacatta west', 'organic white', 'aterra blanca']
-    },
-    4: {
-        'name': 'Group 4',
-        'retail_price': 144.00,
-        'ib_cost_min': 58.69,
-        'ib_cost_max': 60.47,
-        'materials': ['aterra verity', 'brava marfil', 'charcoal soapstone', 'antello', 'celestial sky',
-                     'embrace', 'empress', 'fresh concrete', 'frosty carrina', 'oceana', 'raw concrete',
-                     'stellar snow', 'tranquility', 'bianco drift']
-    },
-    5: {
-        'name': 'Group 5',
-        'retail_price': 152.00,
-        'ib_cost_min': 61.67,
-        'ib_cost_max': 61.67,
-        'materials': ['clouds rest', 'desert wind', 'haida', 'glencoe', 'marathi marble', 'moorland fog',
-                     'nova serrana', 'river glen', 'rugged concrete', 'santiago', 'serene', 'verde peak',
-                     'vicentia', 'eden', 'aurelia', 'montauk', 'chantilly']
-    },
-    6: {
-        'name': 'Group 6',
-        'retail_price': 162.00,
-        'ib_cost_min': 70.68,
-        'ib_cost_max': 70.68,
-        'materials': ['calacatta olympos', 'fossa falls', 'calacatta volegno', 'calacatta pastino',
-                     'coastal', 'enchanted rock', 'north cascades', 'raw a', 'raw g', 'et statuario',
-                     'calacatta extra', 'calacatta mont']
-    },
-    7: {
-        'name': 'Group 7',
-        'retail_price': 178.00,
-        'ib_cost_min': 73.38,
-        'ib_cost_max': 83.29,
-        'materials': ['tyrol', 'verdelia', 'et calacatta gold', 'ethereal glow', 'ethereal dusk',
-                     'ethereal noctis', 'elba white', 'le blanc', 'matterhorn', 'eternal calacatta gold']
-    },
-    8: {
-        'name': 'Group 8',
-        'retail_price': 202.00,
-        'ib_cost_min': 98.75,
-        'ib_cost_max': 98.75,
-        'materials': ['amarcord', 'berwyn', 'colton', 'calacatta nuvo', 'solenna', 'versailles ivory',
-                     'romantic ash', 'riviere rose']
-    },
-    9: {
-        'name': 'Group 9',
-        'retail_price': 232.00,
-        'ib_cost_min': 115.46,
-        'ib_cost_max': 115.46,
-        'materials': ['brittanicca', 'brittanicca gold warm', 'skara brae', 'inverness frost',
-                     'everleigh', 'portrush', 'ironsbridge']
+# --- NEW: Import the dedicated pricing module ---
+import pricing_config as pc
+
+# --- Page & App Configuration (Must be the first Streamlit command) ---
+st.set_page_config(layout="wide", page_title="Unified Business Dashboard", page_icon="🚀")
+
+# --- Constants & Global Configuration ---
+WORKSHEET_NAME = "jobs"
+MORAWARE_SEARCH_URL = "https://floformcountertops.moraware.net/sys/search?&search="
+
+# --- Timeline & Risk Thresholds (Operational constants remain here) ---
+TIMELINE_THRESHOLDS = {
+    'template_to_rtf': 3,
+    'rtf_to_product_rcvd': 7,
+    'product_rcvd_to_install': 5,
+    'template_to_install': 15,
+    'template_to_ship': 10,
+    'ship_to_install': 5,
+    'days_in_stage_warning': 5,
+    'stale_job_threshold': 7,
+    'avg_stage_durations': {
+        'Post-Template': 3,
+        'In Fabrication': 7,
+        'Product Received': 5,
+        'Shipped': 5,
+        'default': 5
     }
 }
 
-# --- CUSTOMER DISCOUNT STRUCTURE ---
-CUSTOMER_DISCOUNTS = {
-    'Retail': 0.00,        # Full retail price
-    'Dealer': 0.15,        # 15% discount
-    'Contractor': 0.25,    # 25% discount
-    'Home Builder': 0.25,  # 25% discount
-    'Commercial': 0.25,    # 25% discount
-    'LIA': 0.30,          # 30% discount
-    'Home Depot': 'special',  # Requires manual review
-    'Costco': 'special'       # Requires manual review
+# --- Division-Specific Processing Configuration ---
+STONE_CONFIG = {
+    "name": "Stone/Quartz",
+    "numeric_map": {
+        'Total_Job_Price_': 'Revenue', 'Phase_Dollars_Plant_Invoice_': 'Cost_From_Plant',
+        'Total_Job_SqFT': 'Total_Job_SqFt', 'Job_Throughput_Job_GM_original': 'Original_GM',
+        'Rework_Stone_Shop_Rework_Price': 'Rework_Price', 'Job_Throughput_Rework_COGS': 'Rework_COGS',
+        'Job_Throughput_Rework_Job_Labor': 'Rework_Labor', 'Job_Throughput_Total_COGS': 'Total_COGS'
+    },
+    "cost_components": ['Cost_From_Plant', 'Install_Cost', 'Total_Rework_Cost'],
+    "rework_components": ['Rework_Price', 'Rework_COGS', 'Rework_Labor'],
+    "has_shop_profit": True
 }
 
-# --- SPECIAL PRICING NOTES ---
-PRICING_NOTES = {
-    'effective_date': 'June 2025',
-    'currency': 'CAD',
-    'includes_gst': False,
-    'gst_rate': 0.05,
-    'standard_thickness': '3cm',
-    'standard_finish': 'Polished',
-    'price_includes': ['Material', 'Fabrication', 'Installation'],
-    'price_excludes': ['GST', 'Delivery charges', 'Special cuts']
+LAMINATE_CONFIG = {
+    "name": "Laminate",
+    "numeric_map": {
+        'Total_Job_Price_': 'Revenue', 'Branch_INV_': 'Shop_Cost', 'Plant_INV_': 'Material_Cost',
+        'Total_Job_SqFT': 'Total_Job_SqFt', 'Job_Throughput_Job_GM_original': 'Original_GM',
+        'Rework_Stone_Shop_Rework_Price': 'Rework_Price',
+    },
+    "cost_components": ['Shop_Cost', 'Material_Cost', 'Install_Cost', 'Total_Rework_Cost'],
+    "rework_components": ['Rework_Price'],
+    "has_shop_profit": False
 }
 
-# --- MATERIALS PENDING ASSIGNMENT ---
-UNASSIGNED_MATERIALS = {
-    'royal blanc', 'mount royal', 'bianco delicato', 'upper canada', 'bianco modesto', 
-    'noir terrain', 'calacatta nero', 'lithic luxe', 'calacatta marmo', 'markina leathered',
-    'eternal bella', 'weybourne', 'crystal ice', 'alpine mist', 'super white', 'domoos',
-    'tetons oro', 'brezza oro'
-}
 
-# --- PRICING FUNCTIONS ---
+# --- Authentication Function ---
+def render_login_screen():
+    """ Displays a PIN-based login screen. Returns True if authenticated, False otherwise. """
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
 
-def get_material_group(material_name):
+    if st.session_state.authenticated:
+        return True
+
+    st.markdown("""<style>...</style>""", unsafe_allow_html=True) # CSS hidden for brevity
+
+    st.markdown('<div class="login-container">', unsafe_allow_html=True)
+    st.markdown('<div class="login-title">🔐 Secure Access</div>', unsafe_allow_html=True)
+    st.markdown('<div class="login-subtitle">Enter your PIN to access the dashboard</div>', unsafe_allow_html=True)
+
+    with st.form("pin_auth_form"):
+        pin = st.text_input("PIN", type="password", label_visibility="collapsed", placeholder="Enter PIN")
+        submitted = st.form_submit_button("🔓 Unlock", use_container_width=True)
+        if submitted:
+            correct_pin = st.secrets.get("APP_PIN", "1234")
+            if pin == correct_pin:
+                st.session_state.authenticated = True
+                st.success("Authentication successful!")
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.error("❌ Invalid PIN. Please try again.")
+    st.markdown('</div>', unsafe_allow_html=True)
+    return False
+
+
+# --- NEW: Data Cleaning and Pricing Logic (Refactored) ---
+
+def extract_material_from_description(material_description):
     """
-    Find the material group for a given material name.
+    Extracts a plausible material name from a raw job material description string using regex.
+    This is a data-cleaning step before looking up the material in the pricing config.
+    """
+    if pd.isna(material_description):
+        return None, "no_description"
+
+    material_desc = str(material_description).lower()
     
-    Args:
-        material_name (str): Name of the material to look up
+    # Skip laminate materials
+    if any(indicator in material_desc for indicator in ['wilsonart pl', 'formica', 'corian']):
+        return None, "laminate_skipped"
+
+    # Define regex patterns to find material names from various suppliers
+    patterns = [
+        r'hanstone\s*\([^)]*\)\s*([^(]+?)\s*\([^)]*\)',
+        r'rona\s+quartz[^-]*-\s*([^(/]+)',
+        r'vicostone\s*\([^)]*\)\s*([^b]+?)\s*bq\d+',
+        r'wilsonart\s+quartz\s*\([^)]*\)\s*([^mq]+?)(?:\s*matte)?\s*q\d+',
+        r'silestone\s*\([^)]*\)\s*([^(]+?)\s*\([^)]*\)',
+        r'cambria\s*\([^)]*\)\s*([^2-3]+?)\s*[23]cm',
+        r'caesarstone\s*\([^)]+\)\s*([^#]+?)\s*#\d+',
+        r'dekton\s*\([^)]+\)\s*([^m]+?)\s*matte',
+        r'natural\s+stone\s*\([^)]+\)\s*([^2-3]+?)\s*[23]cm'
+    ]
+
+    for pattern in patterns:
+        matches = re.findall(pattern, material_desc, re.IGNORECASE)
+        if matches:
+            # Clean up and return the first valid match
+            material = matches[0].strip()
+            cleaned = re.sub(r'\s*(ex|ss|eternal|leathered|polished|matte)\s*', ' ', material, flags=re.IGNORECASE).strip()
+            cleaned = re.sub(r'\s+', ' ', cleaned)
+            if len(cleaned) > 2:
+                return cleaned, "extracted"
+    
+    return None, "unrecognized_pattern"
+
+
+def detect_and_validate_pricing(row):
+    """
+    Orchestrates the full pricing validation for a single job row.
+    1. Extracts material name from description.
+    2. Uses pricing_config to get group and validate pricing.
+    """
+    material_desc = row.get('Job_Material', '')
+    
+    # 1. Extract a clean material name
+    extracted_material, status = extract_material_from_description(material_desc)
+
+    # Handle cases where extraction fails
+    if status == "laminate_skipped":
+        return {'status': 'laminate_skipped', 'message': 'Laminate material'}
+    if status == "unrecognized_pattern":
+        return {'status': 'unrecognized_material', 'message': f'Could not identify material from: {material_desc[:50]}...'}
+    if not extracted_material:
+        return {'status': 'error', 'message': 'Material name could not be extracted.'}
         
-    Returns:
-        int or None: Material group number, or None if not found
-    """
-    if not material_name:
-        return None
-    
-    material_lower = material_name.lower().strip()
-    
-    for group_num, group_data in MATERIAL_GROUPS.items():
-        for known_material in group_data['materials']:
-            if known_material.lower() in material_lower or material_lower in known_material.lower():
-                return group_num
-    
-    return None
+    # 2. Get material group from the pricing module
+    material_group = pc.get_material_group(extracted_material)
 
-def get_retail_price(material_group, sqft, customer_type):
+    if material_group is None:
+        # Check if it's a known but unassigned material
+        if extracted_material.lower() in pc.UNASSIGNED_MATERIALS:
+            return {'status': 'unassigned_material', 'message': f'Material "{extracted_material}" needs group assignment.'}
+        else:
+            return {'status': 'unknown_material', 'message': f'Extracted material "{extracted_material}" not in any group.'}
+
+    # 3. Get all necessary values for validation
+    try:
+        sqft = float(str(row.get('Total_Job_SqFT', 0)).replace(',', ''))
+        revenue = float(str(row.get('Total_Job_Price_', 0)).replace('$', '').replace(',', ''))
+        plant_cost = float(str(row.get('Phase_Dollars_Plant_Invoice_', 0)).replace('$', '').replace(',', ''))
+        customer_type = row.get('Job_Type', 'Retail') # Default to Retail if missing
+    except (ValueError, TypeError):
+        return {'status': 'error', 'message': 'Invalid numeric data for SqFt, Revenue, or Cost.'}
+
+    if sqft <= 0:
+        return {'status': 'error', 'message': 'Job has zero or invalid SqFt.'}
+
+    # 4. Perform validation using the pricing module
+    validation_results = pc.validate_job_pricing(
+        material_group=material_group,
+        sqft=sqft,
+        customer_type=customer_type,
+        actual_revenue=revenue,
+        actual_plant_cost=plant_cost
+    )
+    # Add extracted material name for reference
+    validation_results['extracted_material'] = extracted_material
+    return validation_results
+
+
+# --- Helper & Calculation Functions (Operational) ---
+
+def parse_material_brand(s: str) -> tuple[str, str]:
+    # ... (function remains the same)
+    pass
+
+def get_current_stage(row):
+    # ... (function remains the same)
+    pass
+
+def calculate_days_in_stage(row, today):
+    # ... (function remains the same)
+    pass
+
+def calculate_risk_score(row):
+    # ... (function remains the same)
+    pass
+
+def calculate_delay_probability(row):
+    # ... (function remains the same, but uses TIMELINE_THRESHOLDS constant)
+    risk_score = 0
+    factors = []
+    if pd.notna(row.get('Days_Behind')) and row['Days_Behind'] > 0:
+        risk_score += 40
+        factors.append(f"Already {row['Days_Behind']:.0f} days behind")
+    if pd.notna(row.get('Days_In_Current_Stage')):
+        avg_durations = TIMELINE_THRESHOLDS['avg_stage_durations']
+        expected_duration = avg_durations.get(row.get('Current_Stage', ''), avg_durations['default'])
+        if row['Days_In_Current_Stage'] > expected_duration:
+            risk_score += 20
+            factors.append(f"Stuck in {row['Current_Stage']} for {row['Days_In_Current_Stage']:.0f} days")
+    if row.get('Has_Rework', False):
+        risk_score += 15
+        factors.append("Has rework")
+    if pd.isna(row.get('Next_Sched_Activity')):
+        risk_score += 15
+        factors.append("No next activity scheduled")
+    return min(risk_score, 100), ", ".join(factors)
+
+
+# --- Data Loading and Processing ---
+
+def _process_financial_data(df: pd.DataFrame, config: dict, install_cost_per_sqft: float) -> pd.DataFrame:
+    # ... (function remains the same)
+    pass
+
+@st.cache_data(ttl=300)
+def load_and_process_data(today: pd.Timestamp, install_cost: float):
     """
-    Calculate retail price for a material group, square footage, and customer type.
-    
-    Args:
-        material_group (int): Material group number (0-9)
-        sqft (float): Square footage
-        customer_type (str): Customer type ('Retail', 'Dealer', 'Contractor', etc.)
+    Loads data from Google Sheets and performs all processing.
+    """
+    # ... (GSheets connection and initial column cleaning remains the same)
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        df = conn.read(worksheet=WORKSHEET_NAME, ttl=300)
+        df = pd.DataFrame(df)
+    except Exception as e:
+        st.error(f"Failed to load data from Google Sheets: {e}")
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
         
-    Returns:
-        dict: Pricing breakdown with retail price, discount, and final price
-    """
-    if material_group not in MATERIAL_GROUPS:
-        return None
+    # Standardize columns
+    df.columns = df.columns.str.strip().str.replace(r'[\s-]+', '_', regex=True).str.replace(r'[^\w]', '', regex=True)
+    # ... (ensuring all expected columns exist remains the same)
     
-    if customer_type not in CUSTOMER_DISCOUNTS:
-        return None
+    # ... (date parsing and operational calculations remain the same)
+    # e.g., Last_Activity_Date, Days_Behind, Current_Stage, Risk_Score, etc.
     
-    group_data = MATERIAL_GROUPS[material_group]
-    base_price = group_data['retail_price']
-    discount_rate = CUSTOMER_DISCOUNTS[customer_type]
+    # --- REFACTORED PRICING VALIDATION ---
+    # Apply the new, streamlined validation function
+    pricing_analysis_series = df.apply(detect_and_validate_pricing, axis=1)
+    df['Pricing_Analysis'] = pricing_analysis_series
     
-    if discount_rate == 'special':
-        return {
-            'status': 'special_pricing',
-            'base_price_per_sqft': base_price,
-            'customer_type': customer_type,
-            'message': f'{customer_type} requires manual pricing review'
-        }
-    
-    # Calculate pricing
-    total_base_price = base_price * sqft
-    discount_amount = total_base_price * discount_rate
-    final_price = total_base_price - discount_amount
-    
-    return {
-        'status': 'calculated',
-        'material_group': material_group,
-        'group_name': group_data['name'],
-        'customer_type': customer_type,
-        'sqft': sqft,
-        'base_price_per_sqft': base_price,
-        'discount_rate': discount_rate,
-        'discount_percent': discount_rate * 100,
-        'total_base_price': total_base_price,
-        'discount_amount': discount_amount,
-        'final_price': final_price,
-        'price_per_sqft': final_price / sqft if sqft > 0 else 0
-    }
+    # Extract key metrics for easier filtering, using keys from the new config module
+    def get_metric(analysis, key, default=None):
+        return analysis.get(key, default) if isinstance(analysis, dict) else default
 
-def get_expected_plant_cost(material_group, sqft):
-    """
-    Calculate expected interbranch billing cost (what the shop charges the branch).
+    df['Material_Group'] = pricing_analysis_series.apply(lambda x: get_metric(x, 'material_group'))
+    df['Pricing_Issues_Count'] = pricing_analysis_series.apply(lambda x: get_metric(x, 'critical_issues', 0))
+    df['Pricing_Warnings_Count'] = pricing_analysis_series.apply(lambda x: get_metric(x, 'warnings', 0))
+    df['Revenue_Variance'] = pricing_analysis_series.apply(lambda x: get_metric(x, 'revenue_variance', 0))
+    df['Cost_Variance'] = pricing_analysis_series.apply(lambda x: get_metric(x, 'plant_cost_variance', 0)) # Note key change
     
-    Args:
-        material_group (int): Material group number (0-9)
-        sqft (float): Square footage
-        
-    Returns:
-        dict: Expected cost breakdown with min/max range
-    """
-    if material_group not in MATERIAL_GROUPS:
-        return None
+    # --- Financial Processing (remains the same) ---
+    df_stone = df[df['Division_Type'] == 'Stone/Quartz'].copy()
+    df_laminate = df[df['Division_Type'] == 'Laminate'].copy()
     
-    group_data = MATERIAL_GROUPS[material_group]
-    
-    cost_min = group_data['ib_cost_min'] * sqft
-    cost_max = group_data['ib_cost_max'] * sqft
-    cost_avg = (cost_min + cost_max) / 2
-    
-    return {
-        'material_group': material_group,
-        'group_name': group_data['name'],
-        'sqft': sqft,
-        'cost_per_sqft_min': group_data['ib_cost_min'],
-        'cost_per_sqft_max': group_data['ib_cost_max'],
-        'cost_per_sqft_avg': (group_data['ib_cost_min'] + group_data['ib_cost_max']) / 2,
-        'total_cost_min': cost_min,
-        'total_cost_max': cost_max,
-        'total_cost_avg': cost_avg
-    }
+    df_stone_processed = _process_financial_data(df_stone, STONE_CONFIG, install_cost)
+    df_laminate_processed = _process_financial_data(df_laminate, LAMINATE_CONFIG, install_cost)
 
-def validate_job_pricing(material_group, sqft, customer_type, actual_revenue, actual_plant_cost):
-    """
-    Validate job pricing against expected pricing structure.
-    
-    Args:
-        material_group (int): Material group number
-        sqft (float): Square footage
-        customer_type (str): Customer type
-        actual_revenue (float): Actual revenue charged
-        actual_plant_cost (float): Actual plant cost charged
-        
-    Returns:
-        dict: Validation results with variances and issues
-    """
-    # Get expected pricing
-    expected_retail = get_retail_price(material_group, sqft, customer_type)
-    expected_plant = get_expected_plant_cost(material_group, sqft)
-    
-    if not expected_retail or not expected_plant:
-        return {
-            'status': 'error',
-            'message': 'Could not calculate expected pricing'
-        }
-    
-    if expected_retail['status'] == 'special_pricing':
-        return expected_retail
-    
-    # Calculate variances
-    revenue_variance = actual_revenue - expected_retail['final_price']
-    revenue_variance_pct = (revenue_variance / expected_retail['final_price'] * 100) if expected_retail['final_price'] > 0 else 0
-    
-    plant_cost_variance = actual_plant_cost - expected_plant['total_cost_avg']
-    plant_cost_variance_pct = (plant_cost_variance / expected_plant['total_cost_avg'] * 100) if expected_plant['total_cost_avg'] > 0 else 0
-    
-    # Identify issues
-    issues = []
-    
-    # Revenue variance check
-    if abs(revenue_variance) > 50:
-        severity = 'critical' if abs(revenue_variance) > 500 else 'warning'
-        issues.append({
-            'type': 'revenue_variance',
-            'severity': severity,
-            'message': f'Revenue ${actual_revenue:,.2f} vs expected ${expected_retail["final_price"]:,.2f} ({revenue_variance_pct:+.1f}%)',
-            'variance_amount': revenue_variance
-        })
-    
-    # Plant cost variance check
-    if actual_plant_cost < expected_plant['total_cost_min'] or actual_plant_cost > expected_plant['total_cost_max']:
-        severity = 'critical' if abs(plant_cost_variance) > 500 else 'warning'
-        issues.append({
-            'type': 'plant_cost_variance',
-            'severity': severity,
-            'message': f'Plant cost ${actual_plant_cost:,.2f} outside expected range ${expected_plant["total_cost_min"]:,.2f}-${expected_plant["total_cost_max"]:,.2f}',
-            'variance_amount': plant_cost_variance
-        })
-    
-    return {
-        'status': 'analyzed',
-        'expected_retail': expected_retail,
-        'expected_plant': expected_plant,
-        'actual_revenue': actual_revenue,
-        'actual_plant_cost': actual_plant_cost,
-        'revenue_variance': revenue_variance,
-        'revenue_variance_pct': revenue_variance_pct,
-        'plant_cost_variance': plant_cost_variance,
-        'plant_cost_variance_pct': plant_cost_variance_pct,
-        'issues': issues,
-        'critical_issues': len([i for i in issues if i['severity'] == 'critical']),
-        'warnings': len([i for i in issues if i['severity'] == 'warning'])
-    }
+    df_combined = pd.concat([df_stone_processed, df_laminate_processed], ignore_index=True)
 
-def get_pricing_summary():
-    """
-    Get a summary of all pricing groups and their details.
-    
-    Returns:
-        dict: Summary of pricing structure
-    """
-    summary = {
-        'total_groups': len(MATERIAL_GROUPS),
-        'total_materials': sum(len(group['materials']) for group in MATERIAL_GROUPS.values()),
-        'price_range': {
-            'min': min(group['retail_price'] for group in MATERIAL_GROUPS.values()),
-            'max': max(group['retail_price'] for group in MATERIAL_GROUPS.values())
-        },
-        'customer_types': list(CUSTOMER_DISCOUNTS.keys()),
-        'unassigned_materials': len(UNASSIGNED_MATERIALS),
-        'pricing_notes': PRICING_NOTES
-    }
-    
-    return summary
+    return df_stone_processed, df_laminate_processed, df_combined
 
-# --- UTILITY FUNCTIONS ---
 
-def find_material_matches(search_term):
-    """
-    Find materials that match a search term.
-    
-    Args:
-        search_term (str): Term to search for
-        
-    Returns:
-        list: List of matching materials with their groups
-    """
-    matches = []
-    search_lower = search_term.lower()
-    
-    for group_num, group_data in MATERIAL_GROUPS.items():
-        for material in group_data['materials']:
-            if search_lower in material.lower():
-                matches.append({
-                    'material': material,
-                    'group': group_num,
-                    'group_name': group_data['name'],
-                    'retail_price': group_data['retail_price']
-                })
-    
-    return matches
+# --- UI Rendering Functions ---
+# All UI functions (render_daily_priorities, render_workload_calendar, etc.)
+# remain the same as they operate on the processed DataFrame.
+# The `render_pricing_validation_tab` will now use the updated column names
+# (`Cost_Variance` for plant cost) and dictionary keys (`critical_issues`).
 
-def get_group_details(group_num):
-    """
-    Get detailed information about a specific material group.
-    
-    Args:
-        group_num (int): Material group number
-        
-    Returns:
-        dict: Group details or None if not found
-    """
-    if group_num not in MATERIAL_GROUPS:
-        return None
-    
-    group_data = MATERIAL_GROUPS[group_num].copy()
-    group_data['group_number'] = group_num
-    
-    return group_data
+def render_pricing_validation_tab(df: pd.DataFrame, division_name: str):
+    st.header(f"🔍 {division_name} Pricing Validation")
+    # ... (This function's logic remains largely the same, but you might need to
+    #      update dictionary keys if you display details from the 'Pricing_Analysis' column.
+    #      For example, `analysis.get('critical_issues')` instead of `analysis.get('total_issues')`.)
 
-# --- EXAMPLE USAGE ---
+
+# --- Main Application ---
+def main():
+    if not render_login_screen():
+        return
+
+    st.title("🚀 Unified Operations & Profitability Dashboard")
+    
+    st.sidebar.header("⚙️ Configuration")
+    today_dt = pd.to_datetime(st.sidebar.date_input("Select 'Today's' Date", value=datetime.now().date()))
+    install_cost_sqft = st.sidebar.number_input("Install Cost per SqFt ($)", min_value=0.0, value=15.0, step=0.50)
+
+    try:
+        with st.spinner("Loading and processing job data..."):
+            df_stone, df_laminate, df_full = load_and_process_data(today_dt, install_cost_sqft)
+    except Exception as e:
+        st.error(f"An unexpected error occurred during data loading: {e}")
+        st.exception(e)
+        st.stop()
+
+    if df_full.empty:
+        st.error("No data loaded. Please check your Google Sheets connection and data.")
+        st.stop()
+
+    # ... (Rest of the main function, including sidebar info and tab rendering, remains the same)
+
 if __name__ == "__main__":
-    # Example usage of the pricing functions
-    
-    # Find a material group
-    material_group = get_material_group("Black Coral")
-    print(f"Black Coral is in group: {material_group}")
-    
-    # Get retail pricing
-    retail_pricing = get_retail_price(0, 71, "Contractor")
-    print(f"Retail pricing: {retail_pricing}")
-    
-    # Get expected plant cost
-    plant_cost = get_expected_plant_cost(0, 71)
-    print(f"Expected plant cost: {plant_cost}")
-    
-    # Validate job pricing
-    validation = validate_job_pricing(0, 71, "Contractor", 4772, 2483)
-    print(f"Validation results: {validation}")
+    main()
