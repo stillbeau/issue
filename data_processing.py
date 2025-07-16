@@ -71,7 +71,16 @@ def add_missing_columns(df):
         'Job_Type', 'Order_Type', 'Lead_Source', 'Phase_Dollars_Plant_Invoice_',
         'Job_Throughput_Rework_COGS', 'Job_Throughput_Rework_Job_Labor', 
         'Job_Throughput_Total_COGS', 'Branch_INV_', 'Plant_INV_', 'Job_Status', 
-        'Invoice_Status', 'Install_Status', 'Pick_Up_Status', 'Delivery_Status'
+        'Invoice_Status', 'Install_Status', 'Pick_Up_Status', 'Delivery_Status',
+        
+        # Stone Details columns (for enhanced pricing analysis)
+        'Stone_Details_Name', 'Stone_Details_Phase', 'Stone_Details_Product', 
+        'Stone_Details_Colour', 'Stone_Details_Edge_Detail', 'Stone_Details_Thickness',
+        'Stone_Details_Finish', 'Stone_Details_Special_Color', 'Stone_Details_Priced',
+        'Stone_Details_Sq_Ft', 'Stone_Details_Edge_LF',
+        
+        # Phase Dollars columns (for plant invoice tracking)
+        'Phase_Dollars_Name', 'Phase_Dollars_Phase', 'Phase_Dollars_Plant_Invoice_'
     ]
     
     for col in expected_cols:
