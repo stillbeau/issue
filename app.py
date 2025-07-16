@@ -1517,7 +1517,7 @@ def main():
     install_cost_sqft = st.sidebar.number_input("Install Cost per SqFt ($)", min_value=0.0, value=15.0, step=0.50)
 
     try:
-        with st.spinner("Loading and processing job data with pricing validation..."):
+        with st.spinner("Loading and processing job data with enhanced pricing validation..."):
             df_stone, df_laminate, df_full = load_and_process_data(today_dt, install_cost_sqft)
     except Exception as e:
         st.error(f"An unexpected error occurred during data loading: {e}")
