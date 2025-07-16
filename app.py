@@ -9,6 +9,7 @@ import pandas as pd
 import time
 from datetime import datetime, timedelta
 import warnings
+from pricing_analysis_ui import render_pricing_analysis_tab
 warnings.filterwarnings('ignore')
 
 # Import custom modules
@@ -152,6 +153,7 @@ def main():
         "📈 Business Health",
         "⚙️ Operations", 
         "💰 Profitability"
+        "🔍 Pricing Analysis" 
     ])
     
     # Business Health Tab
@@ -165,6 +167,9 @@ def main():
     # Profitability Tab
     with main_tabs[2]:
         render_profitability_dashboard(df_stone, df_laminate, config['today_dt'])
+
+    with main_tabs[3]:
+    render_pricing_analysis_tab(df_full)
     
     # Render footer
     render_footer()
