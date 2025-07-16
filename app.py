@@ -148,28 +148,29 @@ def main():
     st.sidebar.markdown("---")
     st.sidebar.caption(f"🕒 Last refreshed: {datetime.now().strftime('%H:%M:%S')}")
     
-    # Main dashboard tabs
-    main_tabs = st.tabs([
-        "📈 Business Health",
-        "⚙️ Operations", 
-        "💰 Profitability"
-        "🔍 Pricing Analysis" 
-    ])
-    
-    # Business Health Tab
-    with main_tabs[0]:
-        render_overall_health_tab(df_full, config['today_dt'])
-    
-    # Operations Tab  
-    with main_tabs[1]:
-        render_operational_dashboard(df_full, config['today_dt'])
-    
-    # Profitability Tab
-    with main_tabs[2]:
-        render_profitability_dashboard(df_stone, df_laminate, config['today_dt'])
+# Main dashboard tabs
+main_tabs = st.tabs([
+    "📈 Business Health",
+    "⚙️ Operations", 
+    "💰 Profitability",
+    "🔍 Pricing Analysis"
+])
 
-    with main_tabs[3]:
-    render_pricing_analysis_tab(df_full)
+# Business Health Tab
+with main_tabs[0]:
+    render_overall_health_tab(df_full, config['today_dt'])
+
+# Operations Tab  
+with main_tabs[1]:
+    render_operational_dashboard(df_full, config['today_dt'])
+
+# Profitability Tab
+with main_tabs[2]:
+    render_profitability_dashboard(df_stone, df_laminate, config['today_dt'])
+
+# Pricing Analysis Tab
+with main_tabs[3]:
+    render_pricing_analysis_tab(df_full)  # Make sure this is indented!
     
     # Render footer
     render_footer()
