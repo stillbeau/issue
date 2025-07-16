@@ -695,7 +695,7 @@ def render_profitability_tabs(df_stone, df_laminate, today_dt):
         with laminate_tabs[7]: render_forecasting_tab(df_laminate, "Laminate")
 
 def render_pricing_validation_tab(df: pd.DataFrame, division_name: str):
-    st.header(f"� {division_name} Pricing Validation")
+    st.header(f"🔍 {division_name} Pricing Validation")
     
     if df.empty:
         st.warning(f"No {division_name} data available.")
@@ -713,8 +713,8 @@ def render_pricing_validation_tab(df: pd.DataFrame, division_name: str):
     
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1: st.metric("Total Jobs", total_jobs)
-    with col2: st.metric("🔴 Critical Issues", critical_issues, delta_color="inverse")
-    with col3: st.metric("🟡 Warnings", warnings, delta_color="inverse")
+    with col2: st.metric("🔴 Critical Issues", f"{critical_issues:.0f}", delta_color="inverse")
+    with col3: st.metric("🟡 Warnings", f"{warnings:.0f}", delta_color="inverse")
     with col4: st.metric("Revenue Variance", f"${total_revenue_variance:,.0f}", delta_color="normal" if total_revenue_variance >= 0 else "inverse")
     with col5: st.metric("Cost Variance", f"${total_cost_variance:,.0f}", delta_color="inverse" if total_cost_variance >= 0 else "normal")
     
