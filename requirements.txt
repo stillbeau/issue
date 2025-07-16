@@ -1,5 +1,7 @@
-# requirements.txt (minimal test)
 streamlit
 pandas
+numpy
+plotly
 gspread
 google-auth
+python-dateutil
