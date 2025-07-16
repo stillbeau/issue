@@ -608,14 +608,32 @@ def render_division_profitability(df, division_name):
         with col2:
             if 'Material_Group' in df.columns:
                 st.subheader("💎 Profitability by Material Group")
-                material_profit = df.groupby('Material_Group')['Branch_Profit_Margin_%'].mean().sort_values(ascending=False)
                 
-                fig = px.bar(
-                    x=material_profit.index,
-                    y=material_profit.values,
-                    title="Average Margin by Material Group"
-                )
-                st.plotly_chart(fig, use_container_width=True)
+                # Check if we have material group data
+                material_data = df[df['Material_Group'].notna()]
+                
+                if not material_data.empty:
+                    material_profit = material_data.groupby('Material_Group')['Branch_Profit_Margin_%'].mean().sort_values(ascending=False)
+                    
+                    if not material_profit.empty:
+                        # FIXED: Create proper DataFrame for Plotly
+                        chart_data = pd.DataFrame({
+                            'Material_Group': material_profit.index.astype(str),
+                            'Avg_Margin': material_profit.values
+                        })
+                        
+                        fig = px.bar(
+                            chart_data,
+                            x='Material_Group',
+                            y='Avg_Margin',
+                            title="Average Margin by Material Group",
+                            labels={'Avg_Margin': 'Average Margin (%)', 'Material_Group': 'Material Group'}
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.info("No material group profit data available")
+                else:
+                    st.info("No recognized material groups in this division")
 
 def render_combined_profitability_analysis(df_stone, df_laminate):
     """Render combined profitability analysis across divisions."""
@@ -670,10 +688,17 @@ def render_combined_profitability_analysis(df_stone, df_laminate):
                 st.plotly_chart(fig, use_container_width=True)
             
             with col2:
+                # Create proper DataFrame for Plotly
+                margin_data = pd.DataFrame({
+                    'Division': comparison_df['Division'],
+                    'Avg_Margin_Pct': comparison_df['Avg Margin %']
+                })
+                
                 fig = px.bar(
-                    comparison_df,
+                    margin_data,
                     x='Division',
-                    y='Avg Margin %',
-                    title="Average Profit Margin by Division"
+                    y='Avg_Margin_Pct',
+                    title="Average Profit Margin by Division",
+                    labels={'Avg_Margin_Pct': 'Average Margin (%)', 'Division': 'Division'}
                 )
                 st.plotly_chart(fig, use_container_width=True)
