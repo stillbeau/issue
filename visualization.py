@@ -204,13 +204,14 @@ def create_timeline_chart(df, start_date, end_date, activity_type):
     except Exception:
         # Fallback to bar chart if heatmap fails
         daily_totals = summary_df.groupby('Date')['Job_Count'].sum().reset_index()
+        daily_totals['Date_Str'] = daily_totals['Date'].dt.strftime('%m/%d')
         
         fig = px.bar(
             daily_totals,
-            x='Date',
+            x='Date_Str',
             y='Job_Count',
             title=f"Daily {activity_type} Count",
-            labels={'Job_Count': 'Number of Jobs', 'Date': 'Date'}
+            labels={'Job_Count': 'Number of Jobs', 'Date_Str': 'Date'}
         )
         
         return fig
@@ -277,14 +278,17 @@ def create_performance_metrics_chart(scorecards_df, role_type):
         return None
     
     # Create horizontal bar chart
+    sorted_df = scorecards_df.sort_values(y_col, ascending=True)
+    
     fig = px.bar(
-        scorecards_df.sort_values(y_col, ascending=True),
+        sorted_df,
         x=y_col,
         y='Employee',
         orientation='h',
         title=title,
         color=y_col,
-        color_continuous_scale='Blues'
+        color_continuous_scale='Blues',
+        labels={y_col: y_col.replace('_', ' '), 'Employee': 'Team Member'}
     )
     
     fig.update_layout(
@@ -305,29 +309,24 @@ def create_timeline_metrics_chart(timeline_data):
     means = [timeline_data[process]['mean'] for process in processes]
     medians = [timeline_data[process]['median'] for process in processes]
     
-    fig = go.Figure()
+    # Create DataFrame for Plotly
+    chart_data = pd.DataFrame({
+        'Process': processes + processes,
+        'Days': means + medians,
+        'Metric': ['Average'] * len(processes) + ['Median'] * len(processes)
+    })
     
-    fig.add_trace(go.Bar(
-        name='Average',
-        x=processes,
-        y=means,
-        marker_color=FLOFORM_COLORS['primary']
-    ))
-    
-    fig.add_trace(go.Bar(
-        name='Median',
-        x=processes,
-        y=medians,
-        marker_color=FLOFORM_COLORS['secondary']
-    ))
-    
-    fig.update_layout(
+    fig = px.bar(
+        chart_data,
+        x='Process',
+        y='Days',
+        color='Metric',
         title='Process Timeline Comparison',
-        xaxis_title='Process',
-        yaxis_title='Days',
-        barmode='group',
-        height=400
+        labels={'Days': 'Days', 'Process': 'Process'},
+        barmode='group'
     )
+    
+    fig.update_layout(height=400)
     
     # Rotate x-axis labels for better readability
     fig.update_xaxes(tickangle=45)
@@ -349,15 +348,16 @@ def create_revenue_trend_chart(df):
     # Group by month
     df_clean['Month'] = df_clean['Job_Creation'].dt.to_period('M')
     monthly_revenue = df_clean.groupby('Month')['Revenue'].sum().reset_index()
-    monthly_revenue['Month'] = monthly_revenue['Month'].astype(str)
+    monthly_revenue['Month_Str'] = monthly_revenue['Month'].astype(str)
     
     # Create line chart
     fig = px.line(
         monthly_revenue,
-        x='Month',
+        x='Month_Str',
         y='Revenue',
         title='Monthly Revenue Trend',
-        markers=True
+        markers=True,
+        labels={'Revenue': 'Revenue ($)', 'Month_Str': 'Month'}
     )
     
     fig.update_traces(
@@ -437,10 +437,17 @@ def create_stage_distribution_chart(df):
     
     stage_counts = active_jobs['Current_Stage'].value_counts()
     
+    # Create DataFrame for Plotly
+    stage_data = pd.DataFrame({
+        'Stage': stage_counts.index,
+        'Job_Count': stage_counts.values
+    })
+    
     # Create pie chart
     fig = px.pie(
-        values=stage_counts.values,
-        names=stage_counts.index,
+        stage_data,
+        values='Job_Count',
+        names='Stage',
         title="Active Jobs by Current Stage"
     )
     
@@ -466,11 +473,17 @@ def create_material_group_chart(df):
         return None
     
     # Create bar chart
+    chart_data = pd.DataFrame({
+        'Material_Group': material_counts.index.astype(str),
+        'Job_Count': material_counts.values
+    })
+    
     fig = px.bar(
-        x=material_counts.index,
-        y=material_counts.values,
+        chart_data,
+        x='Material_Group',
+        y='Job_Count',
         title="Jobs by Material Group",
-        labels={'x': 'Material Group', 'y': 'Number of Jobs'}
+        labels={'Job_Count': 'Number of Jobs', 'Material_Group': 'Material Group'}
     )
     
     fig.update_traces(marker_color=FLOFORM_COLORS['primary'])
@@ -542,8 +555,13 @@ def create_combined_timeline_chart(df):
     averages_df = pd.DataFrame(averages)
     
     # Create horizontal bar chart
+    chart_data = pd.DataFrame({
+        'Stage': averages_df['Stage'],
+        'Average_Days': averages_df['Average_Days']
+    })
+    
     fig = px.bar(
-        averages_df,
+        chart_data,
         x='Average_Days',
         y='Stage',
         orientation='h',
