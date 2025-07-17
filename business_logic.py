@@ -144,150 +144,6 @@ def calculate_delay_probability(row):
     
     return min(risk_score, 100), "; ".join(factors)
 
-def extract_material_from_description(material_description: str):
-    """Enhanced material extraction with comprehensive pattern recognition."""
-    if pd.isna(material_description):
-        return None, "no_description"
-
-    material_desc = str(material_description).lower()
-    
-    # Skip laminate materials early
-    laminate_indicators = ['wilsonart', 'formica', 'arborite']
-    if any(indicator in material_desc for indicator in laminate_indicators):
-        return None, "laminate_skipped"
-
-    # Enhanced patterns for different material types
-    patterns = [
-        # Brand-specific patterns
-        r'hanstone\s*\([^)]*\)\s*([^(]+?)\s*\([^)]*\)',
-        r'rona\s+quartz[^-]*-\s*([^(/]+)',
-        r'vicostone\s*\([^)]*\)\s*([^b]+?)\s*bq\d+',
-        r'wilsonart\s+quartz\s*\([^)]*\)\s*([^mq]+?)(?:\s*matte)?\s*q\d+',
-        r'silestone\s*\([^)]*\)\s*([^(]+?)\s*\([^)]*\)',
-        r'cambria\s*\([^)]*\)\s*([^2-3]+?)\s*[23]cm',
-        r'caesarstone\s*\([^)]+\)\s*([^#]+?)\s*#\d+',
-        r'dekton\s*\([^)]+\)\s*([^m]+?)\s*matte',
-        r'natural\s+stone\s*\([^)]+\)\s*([^2-3]+?)\s*[23]cm',
-        r'granite\s*\([^)]*\)\s*([^2-3]+?)\s*[23]cm',
-        r'corian\s*\([^)]*\)\s*([^(]+?)\s*\(',
-        r'himacs\s*\([^)]*\)\s*([^(]+?)\s*\(',
-        # Generic patterns
-        r'\([^)]*\)\s*([^(]{3,}?)\s*\(',
-        r'-\s*([^-]{3,}?)\s*-',
-    ]
-
-    for pattern in patterns:
-        matches = re.findall(pattern, material_desc, re.IGNORECASE)
-        if matches:
-            material = matches[0].strip()
-            # Clean up the extracted material name
-            cleaned = re.sub(r'\s*(ex|ss|eternal|leathered|polished|matte|honed|suede)\s*', ' ', material, flags=re.IGNORECASE).strip()
-            cleaned = re.sub(r'\s+', ' ', cleaned)
-            if len(cleaned) > 2:
-                return cleaned, "extracted"
-    
-    return None, "unrecognized_pattern"
-
-def analyze_job_pricing(row):
-    """Enhanced pricing validation using the comprehensive pricing structure."""
-    material_desc = row.get('Job_Material', '')
-    extracted_material, status = extract_material_from_description(material_desc)
-
-    if status == "laminate_skipped":
-        return {'status': 'laminate_skipped', 'message': 'Laminate material'}
-    if status == "unrecognized_pattern":
-        return {'status': 'unrecognized_pattern', 'message': f'Could not identify material from: "{material_desc[:50]}..."'}
-    if not extracted_material:
-        return {'status': 'error', 'message': 'Material name could not be extracted.'}
-
-    # Identify material type from description
-    material_type = pc.identify_material_type(material_desc)
-    
-    # Get material group
-    material_group, detected_type = pc.get_material_group(extracted_material, material_type)
-    
-    if material_group is None:
-        if extracted_material.lower() in pc.UNASSIGNED_MATERIALS:
-            return {'status': 'unassigned_material', 'message': f'Material "{extracted_material}" needs group assignment.'}
-        else:
-            return {'status': 'unknown_material', 'message': f'Extracted material "{extracted_material}" not in any group.'}
-
-    try:
-        sqft = float(str(row.get('Total_Job_SqFT', 0)).replace(',', ''))
-        revenue = float(str(row.get('Total_Job_Price_', 0)).replace('$', '').replace(',', ''))
-        plant_cost = float(str(row.get('Phase_Dollars_Plant_Invoice_', 0)).replace('$', '').replace(',', '')) if detected_type == 'quartz' else None
-        customer_type = row.get('Job_Type', 'Retail')
-    except (ValueError, TypeError):
-        return {'status': 'error', 'message': 'Invalid numeric data for SqFt, Revenue, or Cost.'}
-
-    if sqft <= 0:
-        return {'status': 'error', 'message': 'Job has zero or invalid SqFt.'}
-
-    validation_results = pc.validate_job_pricing(
-        material_group=material_group,
-        material_type=detected_type,
-        sqft=sqft,
-        customer_type=customer_type,
-        actual_revenue=revenue,
-        actual_plant_cost=plant_cost
-    )
-    
-    validation_results['extracted_material'] = extracted_material
-    validation_results['material_type'] = detected_type
-    return validation_results
-
-def calculate_business_health_score(df):
-    """Calculate comprehensive business health score based on multiple factors."""
-    
-    if df.empty:
-        return 50, {}  # Default neutral score
-    
-    health_components = {}
-    
-    # Revenue Health (30% weight)
-    if 'Revenue' in df.columns and 'Job_Creation' in df.columns:
-        df_with_dates = df.dropna(subset=['Job_Creation'])
-        if len(df_with_dates) >= 2:
-            monthly_revenue = df_with_dates.set_index(
-                pd.to_datetime(df_with_dates['Job_Creation'], errors='coerce')
-            ).resample('M')['Revenue'].sum()
-            
-            if len(monthly_revenue) >= 2:
-                revenue_trend = (monthly_revenue.iloc[-1] - monthly_revenue.iloc[-2]) / monthly_revenue.iloc[-2] * 100
-                revenue_health = min(100, max(0, 50 + revenue_trend * 2))
-            else:
-                revenue_health = 75
-        else:
-            revenue_health = 75
-        health_components['Revenue Growth'] = (revenue_health, 30)
-    
-    # Operational Health (25% weight)
-    if 'Risk_Score' in df.columns:
-        avg_risk = df.get('Risk_Score', pd.Series([0])).mean()
-        operational_health = max(0, 100 - avg_risk)
-        health_components['Operational Efficiency'] = (operational_health, 25)
-    
-    # Quality Health (25% weight)
-    if 'Has_Rework' in df.columns:
-        rework_rate = df.get('Has_Rework', pd.Series([False])).sum() / len(df) * 100
-        quality_health = max(0, 100 - rework_rate * 5)
-        health_components['Quality'] = (quality_health, 25)
-    
-    # Profitability Health (20% weight)
-    if 'Branch_Profit_Margin_%' in df.columns:
-        avg_margin = df.get('Branch_Profit_Margin_%', pd.Series([0])).mean()
-        profitability_health = min(100, max(0, avg_margin * 2))
-        health_components['Profitability'] = (profitability_health, 20)
-    
-    # Calculate overall health score
-    if health_components:
-        total_weight = sum(weight for _, weight in health_components.values())
-        overall_health = sum(score * weight for score, weight in health_components.values()) / total_weight
-    else:
-        overall_health = 50  # Default if no components available
-    
-    return overall_health, health_components
-
 def get_critical_issues(df, today):
     """Identify and categorize critical issues requiring immediate attention."""
     
@@ -383,7 +239,6 @@ def get_critical_issues(df, today):
     # Sort issues by priority (lower number = higher priority)
     return dict(sorted(issues.items(), key=lambda x: x[1].get('priority', 999)))
 
-
 def calculate_revenue_at_risk(df, today):
     """Calculate revenue at risk from completed but not invoiced jobs."""
     
@@ -436,6 +291,165 @@ def calculate_revenue_at_risk(df, today):
         'avg_days_overdue': avg_days_overdue,
         'jobs_data': completed_not_closed
     }
+
+def extract_material_from_description(material_description: str):
+    """Enhanced material extraction with comprehensive pattern recognition."""
+    if pd.isna(material_description):
+        return None, "no_description"
+
+    material_desc = str(material_description).lower()
+    
+    # Skip laminate materials early
+    laminate_indicators = ['wilsonart', 'formica', 'arborite']
+    if any(indicator in material_desc for indicator in laminate_indicators):
+        return None, "laminate_skipped"
+
+    # Enhanced patterns for different material types
+    patterns = [
+        # Brand-specific patterns
+        r'hanstone\s*\([^)]*\)\s*([^(]+?)\s*\([^)]*\)',
+        r'rona\s+quartz[^-]*-\s*([^(/]+)',
+        r'vicostone\s*\([^)]*\)\s*([^b]+?)\s*bq\d+',
+        r'wilsonart\s+quartz\s*\([^)]*\)\s*([^mq]+?)(?:\s*matte)?\s*q\d+',
+        r'silestone\s*\([^)]*\)\s*([^(]+?)\s*\([^)]*\)',
+        r'cambria\s*\([^)]*\)\s*([^2-3]+?)\s*[23]cm',
+        r'caesarstone\s*\([^)]+\)\s*([^#]+?)\s*#\d+',
+        r'dekton\s*\([^)]+\)\s*([^m]+?)\s*matte',
+        r'natural\s+stone\s*\([^)]+\)\s*([^2-3]+?)\s*[23]cm',
+        r'granite\s*\([^)]*\)\s*([^2-3]+?)\s*[23]cm',
+        r'corian\s*\([^)]*\)\s*([^(]+?)\s*\(',
+        r'himacs\s*\([^)]*\)\s*([^(]+?)\s*\(',
+        # Generic patterns
+        r'\([^)]*\)\s*([^(]{3,}?)\s*\(',
+        r'-\s*([^-]{3,}?)\s*-',
+    ]
+
+    for pattern in patterns:
+        matches = re.findall(pattern, material_desc, re.IGNORECASE)
+        if matches:
+            material = matches[0].strip()
+            # Clean up the extracted material name
+            cleaned = re.sub(r'\s*(ex|ss|eternal|leathered|polished|matte|honed|suede)\s*', ' ', material, flags=re.IGNORECASE).strip()
+            cleaned = re.sub(r'\s+', ' ', cleaned)
+            if len(cleaned) > 2:
+                return cleaned, "extracted"
+    
+    return None, "unrecognized_pattern"
+
+def analyze_job_pricing(row):
+    """Enhanced pricing validation using the comprehensive pricing structure."""
+    material_desc = row.get('Job_Material', '')
+    extracted_material, status = extract_material_from_description(material_desc)
+
+    if status == "laminate_skipped":
+        return {'status': 'laminate_skipped', 'message': 'Laminate material'}
+    if status == "unrecognized_pattern":
+        return {'status': 'unrecognized_pattern', 'message': f'Could not identify material from: "{material_desc[:50]}..."'}
+    if not extracted_material:
+        return {'status': 'error', 'message': 'Material name could not be extracted.'}
+
+    # Identify material type from description
+    material_type = pc.identify_material_type(material_desc)
+    
+    # Get material group
+    material_group, detected_type = pc.get_material_group(extracted_material, material_type)
+    
+    if material_group is None:
+        if extracted_material.lower() in pc.UNASSIGNED_MATERIALS:
+            return {'status': 'unassigned_material', 'message': f'Material "{extracted_material}" needs group assignment.'}
+        else:
+            return {'status': 'unknown_material', 'message': f'Extracted material "{extracted_material}" not in any group.'}
+
+    try:
+        sqft = float(str(row.get('Total_Job_SqFT', 0)).replace(',', ''))
+        revenue = float(str(row.get('Total_Job_Price_', 0)).replace('$', '').replace(',', ''))
+        plant_cost = float(str(row.get('Phase_Dollars_Plant_Invoice_', 0)).replace('$', '').replace(',', '')) if detected_type == 'quartz' else None
+        customer_type = row.get('Job_Type', 'Retail')
+    except (ValueError, TypeError):
+        return {'status': 'error', 'message': 'Invalid numeric data for SqFt, Revenue, or Cost.'}
+
+    if sqft <= 0:
+        return {'status': 'error', 'message': 'Job has zero or invalid SqFt.'}
+
+    validation_results = pc.validate_job_pricing(
+        material_group=material_group,
+        material_type=detected_type,
+        sqft=sqft,
+        customer_type=customer_type,
+        actual_revenue=revenue,
+        actual_plant_cost=plant_cost
+    )
+    
+    validation_results['extracted_material'] = extracted_material
+    validation_results['material_type'] = detected_type
+    return validation_results
+
+def calculate_business_health_score(df):
+    """Calculate comprehensive business health score with invoicing component."""
+    
+    if df.empty:
+        return 50, {}  # Default neutral score
+    
+    health_components = {}
+    
+    # Revenue Health (25% weight) - reduced from 30% to make room for cash flow
+    if 'Revenue' in df.columns and 'Job_Creation' in df.columns:
+        df_with_dates = df.dropna(subset=['Job_Creation'])
+        if len(df_with_dates) >= 2:
+            monthly_revenue = df_with_dates.set_index(
+                pd.to_datetime(df_with_dates['Job_Creation'], errors='coerce')
+            ).resample('M')['Revenue'].sum()
+            
+            if len(monthly_revenue) >= 2:
+                revenue_trend = (monthly_revenue.iloc[-1] - monthly_revenue.iloc[-2]) / monthly_revenue.iloc[-2] * 100
+                revenue_health = min(100, max(0, 50 + revenue_trend * 2))
+            else:
+                revenue_health = 75
+        else:
+            revenue_health = 75
+        health_components['Revenue Growth'] = (revenue_health, 25)
+    
+    # **NEW: Cash Flow Health (20% weight)**
+    revenue_risk = calculate_revenue_at_risk(df, pd.Timestamp.now())
+    
+    if 'Revenue' in df.columns:
+        total_revenue = df['Revenue'].sum()
+        if total_revenue > 0:
+            risk_percentage = revenue_risk['total_revenue_at_risk'] / total_revenue * 100
+            cash_flow_health = max(0, 100 - risk_percentage * 3)  # Heavily penalize cash flow risk
+        else:
+            cash_flow_health = 100
+    else:
+        cash_flow_health = 100
+    
+    health_components['Cash Flow'] = (cash_flow_health, 20)
+    
+    # Operational Health (25% weight)
+    if 'Risk_Score' in df.columns:
+        avg_risk = df.get('Risk_Score', pd.Series([0])).mean()
+        operational_health = max(0, 100 - avg_risk)
+        health_components['Operational Efficiency'] = (operational_health, 25)
+    
+    # Quality Health (20% weight)
+    if 'Has_Rework' in df.columns:
+        rework_rate = df.get('Has_Rework', pd.Series([False])).sum() / len(df) * 100
+        quality_health = max(0, 100 - rework_rate * 5)
+        health_components['Quality'] = (quality_health, 20)
+    
+    # Profitability Health (10% weight) - reduced from 20%
+    if 'Branch_Profit_Margin_%' in df.columns:
+        avg_margin = df.get('Branch_Profit_Margin_%', pd.Series([0])).mean()
+        profitability_health = min(100, max(0, avg_margin * 2))
+        health_components['Profitability'] = (profitability_health, 10)
+    
+    # Calculate overall health score
+    if health_components:
+        total_weight = sum(weight for _, weight in health_components.values())
+        overall_health = sum(score * weight for score, weight in health_components.values()) / total_weight
+    else:
+        overall_health = 50  # Default if no components available
+    
+    return overall_health, health_components
 
 def calculate_performance_metrics(df, role_type, today):
     """Calculate performance metrics for different roles (Salesperson, Template, Install)."""
@@ -523,6 +537,17 @@ def generate_business_insights(df, today):
     if df.empty:
         return ["No data available for analysis"]
     
+    # **NEW: Revenue at risk from invoicing issues**
+    revenue_risk = calculate_revenue_at_risk(df, today)
+    
+    if revenue_risk['jobs_at_risk'] > 0:
+        if revenue_risk['total_revenue_at_risk'] > 50000:
+            insights.append(f"🚨 **CRITICAL CASH FLOW ISSUE:** ${revenue_risk['total_revenue_at_risk']:,.0f} in revenue at risk from {revenue_risk['jobs_at_risk']} completed but not invoiced jobs!")
+        elif revenue_risk['total_revenue_at_risk'] > 20000:
+            insights.append(f"💰 **Revenue Collection Alert:** ${revenue_risk['total_revenue_at_risk']:,.0f} pending from {revenue_risk['jobs_at_risk']} completed jobs - review invoicing process")
+        else:
+            insights.append(f"📋 **Invoicing Follow-up:** {revenue_risk['jobs_at_risk']} completed jobs need closure (${revenue_risk['total_revenue_at_risk']:,.0f})")
+    
     # Revenue insights
     if 'Revenue' in df.columns:
         high_value_jobs = df[df['Revenue'] > 15000]
@@ -562,6 +587,15 @@ def generate_business_insights(df, today):
         unrecognized = df[df['Material_Group'].isna()]
         if len(unrecognized) > 0:
             insights.append(f"🔍 **Pricing Alert:** {len(unrecognized)} jobs have unrecognized materials")
+    
+    # **Aging work insights**
+    if 'Days_Since_Last_Activity' in df.columns:
+        stale_jobs = df[
+            (df['Days_Since_Last_Activity'] > 14) & 
+            (df['Job_Status'] != 'Complete')
+        ]
+        if len(stale_jobs) > 5:
+            insights.append(f"⏰ **Workflow Concern:** {len(stale_jobs)} jobs have no activity for 14+ days")
     
     if not insights:
         insights.append("✅ **Operations Normal:** No critical issues detected in current analysis")
