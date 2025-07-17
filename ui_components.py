@@ -14,7 +14,7 @@ import plotly.graph_objects as go
 from business_logic import (
     calculate_business_health_score, get_critical_issues, 
     calculate_performance_metrics, generate_business_insights,
-    calculate_timeline_metrics, TIMELINE_THRESHOLDS
+    calculate_timeline_metrics, calculate_revenue_at_risk, TIMELINE_THRESHOLDS
 )
 from data_processing import filter_data, get_data_summary
 from visualization import (
@@ -331,26 +331,40 @@ def render_operational_dashboard(df, today):
         render_performance_scorecards(df_filtered)
 
 def render_daily_priorities(df, today):
-    """Enhanced daily priorities with actionable insights."""
+    """Enhanced daily priorities with actionable insights including invoicing issues."""
     
     st.subheader("🚨 Daily Priorities & Critical Alerts")
     
-    # Key priority metrics
-    col1, col2, col3, col4 = st.columns(4)
+    # Calculate revenue at risk from invoicing issues
+    revenue_risk = calculate_revenue_at_risk(df, today)
+    
+    # Key priority metrics - Updated with revenue at risk
+    col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
+        if revenue_risk['jobs_at_risk'] > 0:
+            st.metric(
+                "💰 Revenue at Risk", 
+                revenue_risk['jobs_at_risk'],
+                delta=f"${revenue_risk['total_revenue_at_risk']:,.0f}",
+                delta_color="inverse"
+            )
+        else:
+            st.metric("💰 Revenue at Risk", "0", delta="✅ All clear")
+    
+    with col2:
         high_risk_count = len(df[df['Risk_Score'] >= 30])
         st.metric("🔴 High Risk Jobs", high_risk_count)
     
-    with col2:
+    with col3:
         behind_schedule = len(df[df['Days_Behind'] > 0])
         st.metric("⏰ Behind Schedule", behind_schedule)
     
-    with col3:
+    with col4:
         stuck_jobs = len(df[df['Days_In_Current_Stage'] > TIMELINE_THRESHOLDS['days_in_stage_warning']])
         st.metric("🚧 Stuck Jobs", stuck_jobs)
     
-    with col4:
+    with col5:
         stale_jobs = df[
             (df['Days_Since_Last_Activity'] > TIMELINE_THRESHOLDS['stale_job_threshold']) & 
             (df['Job_Status'] != 'Complete')
@@ -364,8 +378,102 @@ def render_daily_priorities(df, today):
         st.success("✅ No critical issues found! All active jobs are on track.")
         return
     
-    # Display critical issues
-    for issue_type, issue_data in critical_issues.items():
+    # **Special handling for completed but not invoiced jobs**
+    if 'completed_not_invoiced' in critical_issues:
+        invoicing_issue = critical_issues['completed_not_invoiced']
+        
+        # Prominent invoicing alert
+        st.error(f"""
+        🚨 **URGENT - REVENUE COLLECTION ISSUE** 🚨
+        
+        **{invoicing_issue['count']} jobs** have completed work but are still open!
+        
+        💰 **Revenue at Risk**: ${revenue_risk['total_revenue_at_risk']:,.0f}  
+        📅 **Average Days Overdue**: {revenue_risk['avg_days_overdue']:.1f} days
+        
+        **Action Required**: Review invoicing status and close completed jobs immediately.
+        """)
+        
+        # Detailed breakdown of invoicing issues
+        with st.expander(
+            f"🔴 **CRITICAL: Work Completed - Job Not Closed** ({invoicing_issue['count']} jobs)", 
+            expanded=True
+        ):
+            issue_df = invoicing_issue['data']
+            
+            if not issue_df.empty:
+                # Calculate completion type and days overdue for each job
+                display_data = []
+                
+                for _, row in issue_df.iterrows():
+                    completion_info = []
+                    completion_date = None
+                    
+                    if pd.notna(row.get('Install_Date')) and row['Install_Date'] < today:
+                        completion_info.append("Installed")
+                        completion_date = row['Install_Date']
+                    
+                    if pd.notna(row.get('Pick_Up_Date')) and row['Pick_Up_Date'] < today:
+                        completion_info.append("Picked Up")
+                        if completion_date is None or row['Pick_Up_Date'] > completion_date:
+                            completion_date = row['Pick_Up_Date']
+                    
+                    if pd.notna(row.get('Delivery_Date')) and row['Delivery_Date'] < today:
+                        completion_info.append("Delivered")
+                        if completion_date is None or row['Delivery_Date'] > completion_date:
+                            completion_date = row['Delivery_Date']
+                    
+                    days_overdue = (today - completion_date).days if completion_date else 0
+                    
+                    display_data.append({
+                        'Job_Name': row.get('Job_Name', 'N/A'),
+                        'Revenue': row.get('Revenue', 0),
+                        'Completion_Status': ' + '.join(completion_info),
+                        'Completion_Date': completion_date.strftime('%Y-%m-%d') if completion_date else 'N/A',
+                        'Days_Overdue': days_overdue,
+                        'Salesperson': row.get('Salesperson', 'N/A'),
+                        'Link': row.get('Link', '')
+                    })
+                
+                display_df = pd.DataFrame(display_data)
+                display_df = display_df.sort_values('Days_Overdue', ascending=False)
+                
+                # Format revenue column
+                display_df['Revenue_Formatted'] = display_df['Revenue'].apply(lambda x: f"${x:,.0f}")
+                
+                # Display table with proper formatting
+                st.dataframe(
+                    display_df[['Job_Name', 'Revenue_Formatted', 'Completion_Status', 'Completion_Date', 'Days_Overdue', 'Salesperson', 'Link']],
+                    column_config={
+                        "Link": st.column_config.LinkColumn(
+                            "Prod #", 
+                            display_text=r".*search=(.*)"
+                        ),
+                        "Revenue_Formatted": "Revenue",
+                        "Days_Overdue": st.column_config.NumberColumn(
+                            "Days Overdue",
+                            format="%d days"
+                        )
+                    },
+                    use_container_width=True,
+                    hide_index=True
+                )
+                
+                # Summary statistics
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Revenue at Risk", f"${revenue_risk['total_revenue_at_risk']:,.0f}")
+                with col2:
+                    max_overdue = display_df['Days_Overdue'].max() if not display_df.empty else 0
+                    st.metric("Longest Overdue", f"{max_overdue} days")
+                with col3:
+                    high_value_count = len(display_df[display_df['Revenue'] > 10000])
+                    st.metric("High Value Jobs (>$10k)", high_value_count)
+    
+    # Display other critical issues (excluding the invoicing one we handled above)
+    other_issues = {k: v for k, v in critical_issues.items() if k != 'completed_not_invoiced'}
+    
+    for issue_type, issue_data in other_issues.items():
         severity = issue_data['severity']
         expanded = severity == 'critical'
         
@@ -381,6 +489,10 @@ def render_daily_priorities(df, today):
                 display_cols = ['Job_Name', 'Current_Stage', 'Salesperson', 'Days_In_Current_Stage']
                 available_cols = [col for col in display_cols if col in issue_df.columns]
                 
+                # Add revenue for context
+                if 'Revenue' in issue_df.columns:
+                    available_cols.insert(-1, 'Revenue')
+                
                 if 'Link' in issue_df.columns:
                     available_cols.insert(0, 'Link')
                 
@@ -390,9 +502,14 @@ def render_daily_priorities(df, today):
                         "Link": st.column_config.LinkColumn(
                             "Prod #", 
                             display_text=r".*search=(.*)"
+                        ),
+                        "Revenue": st.column_config.NumberColumn(
+                            "Revenue",
+                            format="$%.0f"
                         )
                     },
-                    use_container_width=True
+                    use_container_width=True,
+                    hide_index=True
                 )
 
 def render_workload_calendar(df, today):
