@@ -298,6 +298,22 @@ def get_critical_issues(df, today):
     
     issues = {}
     
+    # **NEW: Completed work not invoiced/closed**
+    completed_not_closed = active_jobs[
+        ((active_jobs['Install_Date'].notna()) & (active_jobs['Install_Date'] < today)) |
+        ((active_jobs['Pick_Up_Date'].notna()) & (active_jobs['Pick_Up_Date'] < today)) |
+        ((active_jobs['Delivery_Date'].notna()) & (active_jobs['Delivery_Date'] < today))
+    ]
+    
+    if not completed_not_closed.empty:
+        issues['completed_not_invoiced'] = {
+            'count': len(completed_not_closed),
+            'severity': 'critical',
+            'description': 'Work completed but job not closed (likely invoicing issue)',
+            'data': completed_not_closed,
+            'priority': 1  # Highest priority for cash flow
+        }
+    
     # Missing next activity
     missing_activity = active_jobs[
         (active_jobs['Next_Sched_Activity'].isna()) & 
@@ -308,7 +324,8 @@ def get_critical_issues(df, today):
             'count': len(missing_activity),
             'severity': 'critical',
             'description': 'Jobs missing next scheduled activity',
-            'data': missing_activity
+            'data': missing_activity,
+            'priority': 2
         }
     
     # Stale jobs
@@ -318,7 +335,8 @@ def get_critical_issues(df, today):
             'count': len(stale_jobs),
             'severity': 'warning',
             'description': f'Jobs with no activity for >{TIMELINE_THRESHOLDS["stale_job_threshold"]} days',
-            'data': stale_jobs
+            'data': stale_jobs,
+            'priority': 4
         }
     
     # Template to RTF bottleneck
@@ -332,7 +350,8 @@ def get_critical_issues(df, today):
             'count': len(template_stuck),
             'severity': 'warning',
             'description': 'Template to Ready-to-Fab bottleneck',
-            'data': template_stuck
+            'data': template_stuck,
+            'priority': 5
         }
     
     # Upcoming installs missing product
@@ -346,7 +365,8 @@ def get_critical_issues(df, today):
             'count': len(upcoming_installs),
             'severity': 'critical',
             'description': 'Upcoming installs missing product',
-            'data': upcoming_installs
+            'data': upcoming_installs,
+            'priority': 3
         }
     
     # High-risk jobs
@@ -356,10 +376,66 @@ def get_critical_issues(df, today):
             'count': len(high_risk),
             'severity': 'warning',
             'description': 'High-risk jobs (Risk Score ≥ 30)',
-            'data': high_risk
+            'data': high_risk,
+            'priority': 6
         }
     
-    return issues
+    # Sort issues by priority (lower number = higher priority)
+    return dict(sorted(issues.items(), key=lambda x: x[1].get('priority', 999)))
+
+
+def calculate_revenue_at_risk(df, today):
+    """Calculate revenue at risk from completed but not invoiced jobs."""
+    
+    if df.empty:
+        return {'total_revenue_at_risk': 0, 'jobs_at_risk': 0, 'avg_days_overdue': 0}
+    
+    # Identify completed but not closed jobs
+    completed_not_closed = df[
+        (df['Job_Status'] != 'Complete') &
+        (
+            ((df['Install_Date'].notna()) & (df['Install_Date'] < today)) |
+            ((df['Pick_Up_Date'].notna()) & (df['Pick_Up_Date'] < today)) |
+            ((df['Delivery_Date'].notna()) & (df['Delivery_Date'] < today))
+        )
+    ]
+    
+    if completed_not_closed.empty:
+        return {'total_revenue_at_risk': 0, 'jobs_at_risk': 0, 'avg_days_overdue': 0}
+    
+    # Calculate metrics
+    total_revenue = completed_not_closed.get('Revenue', pd.Series([0])).sum()
+    job_count = len(completed_not_closed)
+    
+    # Calculate average days overdue
+    completed_not_closed = completed_not_closed.copy()
+    
+    # Find the latest completion date for each job
+    completion_dates = []
+    for _, row in completed_not_closed.iterrows():
+        dates = [
+            row.get('Install_Date'),
+            row.get('Pick_Up_Date'), 
+            row.get('Delivery_Date')
+        ]
+        valid_dates = [d for d in dates if pd.notna(d) and d < today]
+        if valid_dates:
+            completion_dates.append(max(valid_dates))
+        else:
+            completion_dates.append(today)  # Fallback
+    
+    if completion_dates:
+        days_overdue = [(today - date).days for date in completion_dates]
+        avg_days_overdue = sum(days_overdue) / len(days_overdue)
+    else:
+        avg_days_overdue = 0
+    
+    return {
+        'total_revenue_at_risk': total_revenue,
+        'jobs_at_risk': job_count,
+        'avg_days_overdue': avg_days_overdue,
+        'jobs_data': completed_not_closed
+    }
 
 def calculate_performance_metrics(df, role_type, today):
     """Calculate performance metrics for different roles (Salesperson, Template, Install)."""
