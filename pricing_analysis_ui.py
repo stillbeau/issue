@@ -1,7 +1,7 @@
 # pricing_analysis_ui.py
 """
-UI Component for Pricing Analysis Dashboard - FIXED for Your Data Structure
-Works with your actual plant invoice data instead of Stone Details
+UI Component for Pricing Analysis Dashboard - FIXED Data Type Issues
+Works with your actual plant invoice data and handles string/numeric conversion
 """
 
 import streamlit as st
@@ -10,37 +10,88 @@ import plotly.express as px
 import plotly.graph_objects as go
 from business_logic import analyze_job_pricing
 
+def safe_numeric_conversion(value):
+    """Safely convert value to numeric, handling strings with $ and commas"""
+    if pd.isna(value):
+        return 0.0
+    
+    # Convert to string and clean
+    str_value = str(value).replace('$', '').replace(',', '').strip()
+    
+    try:
+        return float(str_value)
+    except (ValueError, TypeError):
+        return 0.0
+
 def analyze_interbranch_pricing_direct(df):
     """
     Analyze interbranch pricing using your actual data structure
-    (Phase Throughput - Phase Plant Invoice)
+    (Phase Throughput - Phase Plant Invoice) - FIXED for data type issues
     """
     results = []
     
+    # Create a copy and ensure numeric columns are properly converted
+    df_work = df.copy()
+    
+    # Convert key columns to numeric with safe conversion
+    numeric_columns = ['Total_Job_SqFT', 'Total_Job_Price_', 'Phase_Dollars_Plant_Invoice_']
+    
+    for col in numeric_columns:
+        if col in df_work.columns:
+            df_work[col] = df_work[col].apply(safe_numeric_conversion)
+    
     # Filter for jobs that should have interbranch costs (Stone/Quartz with plant costs)
-    candidates = df[
-        (df.get('Division_Type', '') == 'Stone/Quartz') &
-        (df['Job_Material'].notna()) &
-        (df['Total_Job_SqFT'].notna()) &
-        (df['Total_Job_SqFT'] > 0) &
-        (df['Total_Job_Price_'].notna()) &
-        (df['Total_Job_Price_'] > 0) &
-        (df['Phase_Dollars_Plant_Invoice_'].notna()) &
-        (df['Phase_Dollars_Plant_Invoice_'] > 0)
-    ]
+    try:
+        candidates = df_work[
+            (df_work.get('Division_Type', '') == 'Stone/Quartz') &
+            (df_work['Job_Material'].notna()) &
+            (df_work['Total_Job_SqFT'].notna()) &
+            (df_work['Total_Job_SqFT'] > 0) &
+            (df_work['Total_Job_Price_'].notna()) &
+            (df_work['Total_Job_Price_'] > 0) &
+            (df_work['Phase_Dollars_Plant_Invoice_'].notna()) &
+            (df_work['Phase_Dollars_Plant_Invoice_'] > 0)
+        ]
+    except Exception as e:
+        st.error(f"Error filtering data: {e}")
+        st.info("Attempting alternative filtering method...")
+        
+        # Alternative filtering with more robust checks
+        mask = pd.Series([True] * len(df_work))
+        
+        # Division check
+        if 'Division_Type' in df_work.columns:
+            mask &= (df_work['Division_Type'] == 'Stone/Quartz')
+        
+        # Material check
+        if 'Job_Material' in df_work.columns:
+            mask &= df_work['Job_Material'].notna()
+        
+        # Numeric checks with safe conversion
+        for col in ['Total_Job_SqFT', 'Total_Job_Price_', 'Phase_Dollars_Plant_Invoice_']:
+            if col in df_work.columns:
+                mask &= (df_work[col] > 0)
+        
+        candidates = df_work[mask]
+    
+    st.info(f"Found {len(candidates)} candidate jobs for interbranch pricing analysis")
     
     for idx, row in candidates.iterrows():
         # Use the existing pricing analysis from business_logic
-        analysis = analyze_job_pricing(row)
+        try:
+            analysis = analyze_job_pricing(row)
+        except Exception as e:
+            st.warning(f"Error analyzing job {row.get('Job_Name', 'Unknown')}: {e}")
+            continue
         
         if isinstance(analysis, dict):
-            # Extract key information
+            # Extract key information with safe conversions
             job_info = {
                 'Job_Name': row.get('Job_Name', ''),
                 'Production_': row.get('Production_', ''),
                 'Division': row.get('Division', ''),
-                'Total_SqFt': row.get('Total_Job_SqFT', 0),
-                'Actual_Plant_Cost': row.get('Phase_Dollars_Plant_Invoice_', 0),
+                'Total_SqFt': safe_numeric_conversion(row.get('Total_Job_SqFT', 0)),
+                'Actual_Plant_Cost': safe_numeric_conversion(row.get('Phase_Dollars_Plant_Invoice_', 0)),
                 'Analysis': analysis
             }
             
@@ -102,7 +153,7 @@ def get_pricing_summary_stats_direct(pricing_results):
 
 def render_pricing_analysis_tab(df):
     """
-    Render the comprehensive pricing analysis tab - FIXED for your data structure
+    Render the comprehensive pricing analysis tab - FIXED for data type issues
     """
     st.header("🔍 Interbranch Pricing Analysis")
     st.markdown("Detailed analysis of plant invoice costs vs. expected interbranch pricing using your actual data structure.")
@@ -111,10 +162,28 @@ def render_pricing_analysis_tab(df):
         st.warning("No data available for pricing analysis.")
         return
     
+    # Show data quality information
+    with st.expander("📊 Data Quality Check"):
+        st.subheader("Column Data Types")
+        
+        key_columns = ['Division_Type', 'Job_Material', 'Total_Job_SqFT', 'Total_Job_Price_', 'Phase_Dollars_Plant_Invoice_']
+        
+        for col in key_columns:
+            if col in df.columns:
+                sample_values = df[col].dropna().head(3).tolist()
+                st.write(f"**{col}**: {sample_values}")
+            else:
+                st.write(f"**{col}**: ❌ Missing")
+    
     # Generate pricing analysis using your actual data structure
     with st.spinner("Analyzing interbranch pricing for all jobs..."):
-        pricing_results = analyze_interbranch_pricing_direct(df)
-        summary_stats = get_pricing_summary_stats_direct(pricing_results)
+        try:
+            pricing_results = analyze_interbranch_pricing_direct(df)
+            summary_stats = get_pricing_summary_stats_direct(pricing_results)
+        except Exception as e:
+            st.error(f"Error during analysis: {e}")
+            st.info("Please check the data quality above for potential issues.")
+            return
     
     # Summary metrics
     render_pricing_summary_metrics(summary_stats)
@@ -300,19 +369,20 @@ def render_pricing_overview_direct(pricing_results, summary_stats):
         # Show what jobs we do have
         st.subheader("📋 Available Jobs for Analysis")
         
-        jobs_summary = pd.DataFrame([
-            {
-                'Job Name': r['Job_Name'],
-                'Production #': r['Production_'],
-                'Division': r['Division'],
-                'SqFt': r['Total_SqFt'],
-                'Plant Cost': f"${r['Actual_Plant_Cost']:,.2f}",
-                'Analysis Status': r['Analysis'].get('status', 'unknown') if isinstance(r['Analysis'], dict) else 'error'
-            }
-            for r in pricing_results[:10]  # Show first 10
-        ])
-        
-        st.dataframe(jobs_summary, use_container_width=True, hide_index=True)
+        if pricing_results:
+            jobs_summary = pd.DataFrame([
+                {
+                    'Job Name': r['Job_Name'],
+                    'Production #': r['Production_'],
+                    'Division': r['Division'],
+                    'SqFt': r['Total_SqFt'],
+                    'Plant Cost': f"${r['Actual_Plant_Cost']:,.2f}",
+                    'Analysis Status': r['Analysis'].get('status', 'unknown') if isinstance(r['Analysis'], dict) else 'error'
+                }
+                for r in pricing_results[:10]  # Show first 10
+            ])
+            
+            st.dataframe(jobs_summary, use_container_width=True, hide_index=True)
 
 def render_critical_variances_direct(pricing_results):
     """
