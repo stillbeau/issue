@@ -23,7 +23,7 @@ STONE_CONFIG = {
     "name": "Stone/Quartz",
     "numeric_map": {
         'Total_Job_Price_': 'Revenue', 
-        'Phase_Dollars_Plant_Invoice_': 'Cost_From_Plant',
+        'Phase Throughput - Phase Plant Invoice': 'Cost_From_Plant',
         'Total_Job_SqFT': 'Total_Job_SqFt', 
         'Job_Throughput_Job_GM_original': 'Original_GM',
         'Rework_Stone_Shop_Rework_Price': 'Rework_Price', 
