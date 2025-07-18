@@ -1,33 +1,120 @@
 # pricing_analysis_ui.py
 """
-UI Component for Pricing Analysis Dashboard
+UI Component for Pricing Analysis Dashboard - FIXED for Your Data Structure
+Works with your actual plant invoice data instead of Stone Details
 """
 
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from enhanced_pricing_analysis import (
-    generate_pricing_report, 
-    get_pricing_summary_stats,
-    analyze_job_interbranch_pricing
-)
+from business_logic import analyze_job_pricing
+
+def analyze_interbranch_pricing_direct(df):
+    """
+    Analyze interbranch pricing using your actual data structure
+    (Phase Throughput - Phase Plant Invoice)
+    """
+    results = []
+    
+    # Filter for jobs that should have interbranch costs (Stone/Quartz with plant costs)
+    candidates = df[
+        (df.get('Division_Type', '') == 'Stone/Quartz') &
+        (df['Job_Material'].notna()) &
+        (df['Total_Job_SqFT'].notna()) &
+        (df['Total_Job_SqFT'] > 0) &
+        (df['Total_Job_Price_'].notna()) &
+        (df['Total_Job_Price_'] > 0) &
+        (df['Phase_Dollars_Plant_Invoice_'].notna()) &
+        (df['Phase_Dollars_Plant_Invoice_'] > 0)
+    ]
+    
+    for idx, row in candidates.iterrows():
+        # Use the existing pricing analysis from business_logic
+        analysis = analyze_job_pricing(row)
+        
+        if isinstance(analysis, dict):
+            # Extract key information
+            job_info = {
+                'Job_Name': row.get('Job_Name', ''),
+                'Production_': row.get('Production_', ''),
+                'Division': row.get('Division', ''),
+                'Total_SqFt': row.get('Total_Job_SqFT', 0),
+                'Actual_Plant_Cost': row.get('Phase_Dollars_Plant_Invoice_', 0),
+                'Analysis': analysis
+            }
+            
+            # Check if this job has interbranch cost analysis
+            if analysis.get('status') == 'analyzed' and 'expected_plant' in analysis:
+                expected_plant = analysis['expected_plant']
+                job_info['Expected_Plant_Cost'] = expected_plant.get('total_cost_avg', 0)
+                job_info['Variance_Amount'] = job_info['Actual_Plant_Cost'] - job_info['Expected_Plant_Cost']
+                job_info['Variance_Percent'] = (job_info['Variance_Amount'] / job_info['Expected_Plant_Cost'] * 100) if job_info['Expected_Plant_Cost'] > 0 else 0
+                
+                # Determine severity
+                if abs(job_info['Variance_Percent']) > 20:
+                    job_info['Severity'] = 'critical'
+                elif abs(job_info['Variance_Percent']) > 10:
+                    job_info['Severity'] = 'warning'
+                else:
+                    job_info['Severity'] = 'normal'
+                
+                job_info['Has_Variance'] = True
+            else:
+                job_info['Has_Variance'] = False
+                job_info['Expected_Plant_Cost'] = 0
+                job_info['Variance_Amount'] = 0
+                job_info['Variance_Percent'] = 0
+                job_info['Severity'] = 'no_analysis'
+            
+            results.append(job_info)
+    
+    return results
+
+def get_pricing_summary_stats_direct(pricing_results):
+    """
+    Generate summary statistics for the direct pricing analysis
+    """
+    total_jobs = len(pricing_results)
+    
+    # Jobs with variance analysis
+    variance_jobs = [r for r in pricing_results if r.get('Has_Variance', False)]
+    
+    # Count by severity
+    critical_variances = len([r for r in variance_jobs if r.get('Severity') == 'critical'])
+    warning_variances = len([r for r in variance_jobs if r.get('Severity') == 'warning'])
+    
+    # Calculate totals
+    total_expected = sum([r.get('Expected_Plant_Cost', 0) for r in variance_jobs])
+    total_actual = sum([r.get('Actual_Plant_Cost', 0) for r in variance_jobs])
+    
+    return {
+        'total_jobs': total_jobs,
+        'analyzed_jobs': total_jobs,
+        'jobs_with_variance': len(variance_jobs),
+        'critical_variances': critical_variances,
+        'warning_variances': warning_variances,
+        'total_expected_cost': total_expected,
+        'total_actual_cost': total_actual,
+        'overall_variance': total_actual - total_expected if total_expected > 0 else 0,
+        'overall_variance_percent': ((total_actual - total_expected) / total_expected * 100) if total_expected > 0 else 0
+    }
 
 def render_pricing_analysis_tab(df):
     """
-    Render the comprehensive pricing analysis tab.
+    Render the comprehensive pricing analysis tab - FIXED for your data structure
     """
     st.header("🔍 Interbranch Pricing Analysis")
-    st.markdown("Detailed analysis of plant invoice costs vs. expected interbranch pricing using Stone Details data.")
+    st.markdown("Detailed analysis of plant invoice costs vs. expected interbranch pricing using your actual data structure.")
     
     if df.empty:
         st.warning("No data available for pricing analysis.")
         return
     
-    # Generate pricing analysis
+    # Generate pricing analysis using your actual data structure
     with st.spinner("Analyzing interbranch pricing for all jobs..."):
-        pricing_results = generate_pricing_report(df)
-        summary_stats = get_pricing_summary_stats(pricing_results)
+        pricing_results = analyze_interbranch_pricing_direct(df)
+        summary_stats = get_pricing_summary_stats_direct(pricing_results)
     
     # Summary metrics
     render_pricing_summary_metrics(summary_stats)
@@ -42,23 +129,23 @@ def render_pricing_analysis_tab(df):
     ])
     
     with analysis_tabs[0]:
-        render_pricing_overview(pricing_results, summary_stats)
+        render_pricing_overview_direct(pricing_results, summary_stats)
     
     with analysis_tabs[1]:
-        render_critical_variances(pricing_results)
+        render_critical_variances_direct(pricing_results)
     
     with analysis_tabs[2]:
-        render_variance_warnings(pricing_results)
+        render_variance_warnings_direct(pricing_results)
     
     with analysis_tabs[3]:
-        render_detailed_analysis(pricing_results)
+        render_detailed_analysis_direct(pricing_results)
     
     with analysis_tabs[4]:
-        render_variance_trends(pricing_results)
+        render_variance_trends_direct(pricing_results)
 
 def render_pricing_summary_metrics(summary_stats):
     """
-    Render high-level summary metrics.
+    Render high-level summary metrics
     """
     st.subheader("📈 Pricing Analysis Summary")
     
@@ -68,7 +155,7 @@ def render_pricing_summary_metrics(summary_stats):
         st.metric(
             "Total Jobs Analyzed", 
             summary_stats['analyzed_jobs'],
-            delta=f"{summary_stats['total_jobs']} total"
+            delta=f"{summary_stats['total_jobs']} candidates"
         )
     
     with col2:
@@ -109,15 +196,18 @@ def render_pricing_summary_metrics(summary_stats):
     else:
         st.error(f"🔴 {summary_stats['critical_variances']} jobs have critical pricing variances requiring immediate attention.")
 
-def render_pricing_overview(pricing_results, summary_stats):
+def render_pricing_overview_direct(pricing_results, summary_stats):
     """
-    Render overview dashboard with charts and key insights.
+    Render overview dashboard with charts and key insights
     """
     st.subheader("📊 Pricing Analysis Overview")
     
+    if not pricing_results:
+        st.info("No jobs found with interbranch pricing data.")
+        return
+    
     # Create variance distribution chart
-    variance_jobs = [r for r in pricing_results 
-                    if r['Analysis'].get('variance_analysis') is not None]
+    variance_jobs = [r for r in pricing_results if r.get('Has_Variance', False)]
     
     if variance_jobs:
         col1, col2 = st.columns(2)
@@ -125,81 +215,113 @@ def render_pricing_overview(pricing_results, summary_stats):
         with col1:
             # Variance distribution pie chart
             severity_counts = {
-                'Normal': len([r for r in variance_jobs if r['Analysis']['variance_analysis']['severity'] == 'normal']),
-                'Warning': len([r for r in variance_jobs if r['Analysis']['variance_analysis']['severity'] == 'warning']),
-                'Critical': len([r for r in variance_jobs if r['Analysis']['variance_analysis']['severity'] == 'critical'])
+                'Normal': len([r for r in variance_jobs if r.get('Severity') == 'normal']),
+                'Warning': len([r for r in variance_jobs if r.get('Severity') == 'warning']),
+                'Critical': len([r for r in variance_jobs if r.get('Severity') == 'critical'])
             }
             
-            fig_pie = px.pie(
-                values=list(severity_counts.values()),
-                names=list(severity_counts.keys()),
-                title="Pricing Variance Severity Distribution",
-                color_discrete_map={
-                    'Normal': '#28a745',
-                    'Warning': '#ffc107', 
-                    'Critical': '#dc3545'
-                }
-            )
-            st.plotly_chart(fig_pie, use_container_width=True)
+            # Only show chart if we have data
+            if sum(severity_counts.values()) > 0:
+                fig_pie = px.pie(
+                    values=list(severity_counts.values()),
+                    names=list(severity_counts.keys()),
+                    title="Pricing Variance Severity Distribution",
+                    color_discrete_map={
+                        'Normal': '#28a745',
+                        'Warning': '#ffc107', 
+                        'Critical': '#dc3545'
+                    }
+                )
+                st.plotly_chart(fig_pie, use_container_width=True)
         
         with col2:
             # Variance amount histogram
-            variance_amounts = [r['Analysis']['variance_analysis']['variance_percent'] 
-                              for r in variance_jobs]
+            variance_amounts = [r.get('Variance_Percent', 0) for r in variance_jobs if r.get('Has_Variance', False)]
             
-            fig_hist = px.histogram(
-                x=variance_amounts,
-                nbins=20,
-                title="Distribution of Variance Percentages",
-                labels={'x': 'Variance %', 'y': 'Number of Jobs'}
-            )
-            fig_hist.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="Expected")
-            st.plotly_chart(fig_hist, use_container_width=True)
+            if variance_amounts:
+                fig_hist = px.histogram(
+                    x=variance_amounts,
+                    nbins=20,
+                    title="Distribution of Variance Percentages",
+                    labels={'x': 'Variance %', 'y': 'Number of Jobs'}
+                )
+                fig_hist.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="Expected")
+                st.plotly_chart(fig_hist, use_container_width=True)
         
         # Top variance jobs
         st.subheader("🔍 Largest Pricing Variances")
         
-        variance_df = pd.DataFrame([
+        # Sort by absolute variance amount
+        sorted_variance_jobs = sorted(
+            variance_jobs, 
+            key=lambda x: abs(x.get('Variance_Amount', 0)), 
+            reverse=True
+        )
+        
+        if sorted_variance_jobs:
+            variance_df = pd.DataFrame([
+                {
+                    'Job Name': r['Job_Name'],
+                    'Production #': r['Production_'],
+                    'Moraware Link': f"https://floformcountertops.moraware.net/sys/search?&search={r['Production_']}" if r['Production_'] else None,
+                    'Expected Cost': f"${r.get('Expected_Plant_Cost', 0):,.2f}",
+                    'Actual Cost': f"${r.get('Actual_Plant_Cost', 0):,.2f}",
+                    'Variance': f"${r.get('Variance_Amount', 0):+,.2f}",
+                    'Variance %': f"{r.get('Variance_Percent', 0):+.1f}%",
+                    'Severity': r.get('Severity', 'unknown').title()
+                }
+                for r in sorted_variance_jobs[:10]
+            ])
+            
+            st.dataframe(
+                variance_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Moraware Link": st.column_config.LinkColumn(
+                        "🔗 Moraware",
+                        display_text="Open Job"
+                    ),
+                    "Severity": st.column_config.TextColumn(
+                        "Severity",
+                        help="Variance severity level"
+                    )
+                }
+            )
+    
+    else:
+        st.info("No jobs with variance analysis found. This could mean:")
+        st.markdown("""
+        - No quartz jobs with plant invoice costs found
+        - Material recognition issues preventing analysis
+        - All jobs are within normal variance ranges
+        """)
+        
+        # Show what jobs we do have
+        st.subheader("📋 Available Jobs for Analysis")
+        
+        jobs_summary = pd.DataFrame([
             {
                 'Job Name': r['Job_Name'],
                 'Production #': r['Production_'],
-                'Moraware Link': f"https://floformcountertops.moraware.net/sys/search?&search={r['Production_']}" if r['Production_'] else None,
-                'Expected Cost': f"${r['Analysis']['total_expected_cost']:,.2f}",
-                'Actual Cost': f"${r['Analysis']['actual_plant_cost']:,.2f}",
-                'Variance': f"${r['Analysis']['variance_analysis']['variance_amount']:+,.2f}",
-                'Variance %': f"{r['Analysis']['variance_analysis']['variance_percent']:+.1f}%",
-                'Severity': r['Analysis']['variance_analysis']['severity'].title()
+                'Division': r['Division'],
+                'SqFt': r['Total_SqFt'],
+                'Plant Cost': f"${r['Actual_Plant_Cost']:,.2f}",
+                'Analysis Status': r['Analysis'].get('status', 'unknown') if isinstance(r['Analysis'], dict) else 'error'
             }
-            for r in sorted(variance_jobs, 
-                          key=lambda x: abs(x['Analysis']['variance_analysis']['variance_amount']), 
-                          reverse=True)[:10]
+            for r in pricing_results[:10]  # Show first 10
         ])
         
-        st.dataframe(
-            variance_df,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Moraware Link": st.column_config.LinkColumn(
-                    "🔗 Moraware",
-                    display_text="Open Job"
-                ),
-                "Severity": st.column_config.TextColumn(
-                    "Severity",
-                    help="Variance severity level"
-                )
-            }
-        )
+        st.dataframe(jobs_summary, use_container_width=True, hide_index=True)
 
-def render_critical_variances(pricing_results):
+def render_critical_variances_direct(pricing_results):
     """
-    Render critical variance issues requiring immediate attention.
+    Render critical variance issues requiring immediate attention
     """
     st.subheader("🚨 Critical Pricing Variances")
     
     critical_jobs = [r for r in pricing_results 
-                    if r['Analysis'].get('variance_analysis') and 
-                    r['Analysis']['variance_analysis']['severity'] == 'critical']
+                    if r.get('Severity') == 'critical']
     
     if not critical_jobs:
         st.success("✅ No critical pricing variances found!")
@@ -208,49 +330,48 @@ def render_critical_variances(pricing_results):
     st.warning(f"Found {len(critical_jobs)} jobs with critical pricing variances (>20% difference)")
     
     for job in critical_jobs:
-        analysis = job['Analysis']
-        variance = analysis['variance_analysis']
+        variance_pct = job.get('Variance_Percent', 0)
         
         with st.expander(
-            f"🔴 {job['Job_Name']} - Variance: {variance['variance_percent']:+.1f}%",
+            f"🔴 {job['Job_Name']} - Variance: {variance_pct:+.1f}%",
             expanded=True
         ):
             col1, col2, col3, col4 = st.columns(4)
             
             with col1:
-                st.metric("Expected Cost", f"${analysis['total_expected_cost']:,.2f}")
+                st.metric("Expected Cost", f"${job.get('Expected_Plant_Cost', 0):,.2f}")
             with col2:
-                st.metric("Actual Cost", f"${analysis['actual_plant_cost']:,.2f}")
+                st.metric("Actual Cost", f"${job.get('Actual_Plant_Cost', 0):,.2f}")
             with col3:
-                st.metric("Variance", f"${variance['variance_amount']:+,.2f}")
+                st.metric("Variance", f"${job.get('Variance_Amount', 0):+,.2f}")
             with col4:
                 # Add Moraware link button
-                if job['Production_']:
+                if job.get('Production_'):
                     moraware_url = f"https://floformcountertops.moraware.net/sys/search?&search={job['Production_']}"
                     st.link_button("🔗 Open in Moraware", moraware_url)
             
-            # Material breakdown
-            st.subheader("Material Breakdown:")
-            for material in analysis['material_details']:
-                if material.get('recognized', False):
-                    expected = material.get('expected_cost')
-                    if expected:
-                        st.write(f"• **{material['material']}** ({material['sqft']} sq ft)")
-                        st.write(f"  - Group {material['material_group']} - Expected: ${expected['total_cost_avg']:.2f}")
-                    else:
-                        st.write(f"• **{material['material']}** ({material['sqft']} sq ft) - {material.get('note', 'No cost data')}")
-                else:
-                    st.write(f"• **{material['material']}** - ❌ {material.get('note', 'Not recognized')}")
+            # Show analysis details if available
+            analysis = job.get('Analysis', {})
+            if isinstance(analysis, dict) and analysis.get('status') == 'analyzed':
+                st.subheader("Analysis Details:")
+                
+                if 'expected_retail' in analysis:
+                    retail_info = analysis['expected_retail']
+                    st.write(f"• **Material Group**: {retail_info.get('material_group', 'Unknown')}")
+                    st.write(f"• **Material Type**: {retail_info.get('material_type', 'Unknown')}")
+                
+                if 'expected_plant' in analysis:
+                    plant_info = analysis['expected_plant']
+                    st.write(f"• **Expected Cost Range**: ${plant_info.get('total_cost_min', 0):.2f} - ${plant_info.get('total_cost_max', 0):.2f}")
 
-def render_variance_warnings(pricing_results):
+def render_variance_warnings_direct(pricing_results):
     """
-    Render warning-level variances.
+    Render warning-level variances
     """
     st.subheader("⚠️ Pricing Variance Warnings")
     
     warning_jobs = [r for r in pricing_results 
-                   if r['Analysis'].get('variance_analysis') and 
-                   r['Analysis']['variance_analysis']['severity'] == 'warning']
+                   if r.get('Severity') == 'warning']
     
     if not warning_jobs:
         st.success("✅ No pricing variance warnings found!")
@@ -264,10 +385,10 @@ def render_variance_warnings(pricing_results):
             'Production #': job['Production_'],
             'Moraware Link': f"https://floformcountertops.moraware.net/sys/search?&search={job['Production_']}" if job['Production_'] else None,
             'Total SqFt': job['Total_SqFt'],
-            'Expected Cost': job['Analysis']['total_expected_cost'],
-            'Actual Cost': job['Analysis']['actual_plant_cost'],
-            'Variance Amount': job['Analysis']['variance_analysis']['variance_amount'],
-            'Variance %': job['Analysis']['variance_analysis']['variance_percent']
+            'Expected Cost': job.get('Expected_Plant_Cost', 0),
+            'Actual Cost': job.get('Actual_Plant_Cost', 0),
+            'Variance Amount': job.get('Variance_Amount', 0),
+            'Variance %': job.get('Variance_Percent', 0)
         }
         for job in warning_jobs
     ])
@@ -288,51 +409,50 @@ def render_variance_warnings(pricing_results):
         }
     )
 
-def render_detailed_analysis(pricing_results):
+def render_detailed_analysis_direct(pricing_results):
     """
-    Render detailed material-by-material analysis.
+    Render detailed analysis for all jobs
     """
-    st.subheader("📋 Detailed Material Analysis")
+    st.subheader("📋 Detailed Analysis")
+    
+    if not pricing_results:
+        st.info("No pricing analysis results available.")
+        return
     
     # Filter options
     col1, col2 = st.columns(2)
     
     with col1:
-        show_recognized_only = st.checkbox("Show only recognized materials", value=True)
-    
-    with col2:
         show_variances_only = st.checkbox("Show only jobs with variances", value=False)
     
-    # Process data for detailed view
-    detailed_data = []
+    with col2:
+        show_critical_only = st.checkbox("Show only critical/warning issues", value=False)
     
-    for job in pricing_results:
-        if job['Analysis']['status'] != 'analyzed':
-            continue
-            
-        if show_variances_only and not job['Analysis'].get('variance_analysis'):
-            continue
-        
-        for material in job['Analysis']['material_details']:
-            if show_recognized_only and not material.get('recognized', False):
-                continue
-            
-            detailed_data.append({
-                'Job Name': job['Job_Name'],
-                'Production #': job['Production_'],
-                'Moraware Link': f"https://floformcountertops.moraware.net/sys/search?&search={job['Production_']}" if job['Production_'] else None,
-                'Material': material['material'],
-                'SqFt': material['sqft'],
-                'Material Type': material.get('material_type', 'Unknown'),
-                'Material Group': material.get('material_group', 'Unknown'),
-                'Recognized': '✅' if material.get('recognized') else '❌',
-                'Expected Cost/SqFt': material.get('expected_cost', {}).get('cost_per_sqft_avg', 0) if material.get('expected_cost') else 0,
-                'Expected Total': material.get('expected_cost', {}).get('total_cost_avg', 0) if material.get('expected_cost') else 0,
-                'Notes': material.get('note', '')
-            })
+    # Apply filters
+    filtered_results = pricing_results
     
-    if detailed_data:
-        detailed_df = pd.DataFrame(detailed_data)
+    if show_variances_only:
+        filtered_results = [r for r in filtered_results if r.get('Has_Variance', False)]
+    
+    if show_critical_only:
+        filtered_results = [r for r in filtered_results if r.get('Severity') in ['critical', 'warning']]
+    
+    if filtered_results:
+        detailed_df = pd.DataFrame([
+            {
+                'Job Name': r['Job_Name'],
+                'Production #': r['Production_'],
+                'Moraware Link': f"https://floformcountertops.moraware.net/sys/search?&search={r['Production_']}" if r['Production_'] else None,
+                'SqFt': r['Total_SqFt'],
+                'Expected Cost': r.get('Expected_Plant_Cost', 0),
+                'Actual Cost': r.get('Actual_Plant_Cost', 0),
+                'Variance': r.get('Variance_Amount', 0),
+                'Variance %': r.get('Variance_Percent', 0),
+                'Severity': r.get('Severity', 'unknown').title(),
+                'Analysis Status': r['Analysis'].get('status', 'unknown') if isinstance(r['Analysis'], dict) else 'error'
+            }
+            for r in filtered_results
+        ])
         
         st.dataframe(
             detailed_df,
@@ -343,8 +463,10 @@ def render_detailed_analysis(pricing_results):
                     "🔗 Moraware",
                     display_text="Open Job"
                 ),
-                "Expected Cost/SqFt": st.column_config.NumberColumn("Expected Cost/SqFt", format="$%.2f"),
-                "Expected Total": st.column_config.NumberColumn("Expected Total", format="$%.2f")
+                "Expected Cost": st.column_config.NumberColumn("Expected Cost", format="$%.2f"),
+                "Actual Cost": st.column_config.NumberColumn("Actual Cost", format="$%.2f"),
+                "Variance": st.column_config.NumberColumn("Variance", format="$%.2f"),
+                "Variance %": st.column_config.NumberColumn("Variance %", format="%.1f%%")
             }
         )
         
@@ -353,70 +475,47 @@ def render_detailed_analysis(pricing_results):
         st.download_button(
             label="📥 Download Detailed Analysis",
             data=csv,
-            file_name="pricing_analysis_detailed.csv",
+            file_name="interbranch_pricing_analysis.csv",
             mime="text/csv"
         )
     else:
         st.info("No data matches the current filters.")
 
-def render_variance_trends(pricing_results):
+def render_variance_trends_direct(pricing_results):
     """
-    Render variance trend analysis.
+    Render variance trend analysis
     """
     st.subheader("📈 Variance Trends & Insights")
     
-    variance_jobs = [r for r in pricing_results 
-                    if r['Analysis'].get('variance_analysis') is not None]
-    
-    if not variance_jobs:
+    if not pricing_results:
         st.info("No variance data available for trend analysis.")
         return
     
-    # Material group variance analysis
-    group_variances = {}
+    variance_jobs = [r for r in pricing_results if r.get('Has_Variance', False)]
     
-    for job in variance_jobs:
-        for material in job['Analysis']['material_details']:
-            if material.get('material_group') is not None:
-                group = f"Group {material['material_group']}"
-                if group not in group_variances:
-                    group_variances[group] = []
-                
-                if material.get('expected_cost'):
-                    # Calculate this material's contribution to variance
-                    expected = material['expected_cost']['total_cost_avg']
-                    # Approximate actual cost proportionally
-                    job_variance_ratio = job['Analysis']['variance_analysis']['variance_amount'] / job['Analysis']['total_expected_cost']
-                    actual = expected * (1 + job_variance_ratio)
-                    material_variance = actual - expected
-                    
-                    group_variances[group].append(material_variance)
-    
-    # Create group variance chart
-    if group_variances:
-        group_avg_variances = {group: sum(variances)/len(variances) 
-                              for group, variances in group_variances.items()}
-        
-        fig_group = px.bar(
-            x=list(group_avg_variances.keys()),
-            y=list(group_avg_variances.values()),
-            title="Average Variance by Material Group",
-            labels={'x': 'Material Group', 'y': 'Average Variance ($)'}
-        )
-        st.plotly_chart(fig_group, use_container_width=True)
+    if not variance_jobs:
+        st.info("No jobs with variance data found.")
+        return
     
     # Key insights
     st.subheader("💡 Key Insights")
     
-    over_budget = len([j for j in variance_jobs if j['Analysis']['variance_analysis']['variance_amount'] > 0])
-    under_budget = len([j for j in variance_jobs if j['Analysis']['variance_analysis']['variance_amount'] < 0])
+    over_budget = len([j for j in variance_jobs if j.get('Variance_Amount', 0) > 0])
+    under_budget = len([j for j in variance_jobs if j.get('Variance_Amount', 0) < 0])
     
-    insights = [
-        f"📊 **Budget Performance**: {over_budget} jobs over budget, {under_budget} jobs under budget",
-        f"💰 **Average Variance**: ${sum(j['Analysis']['variance_analysis']['variance_amount'] for j in variance_jobs) / len(variance_jobs):,.2f}",
-        f"📈 **Largest Overage**: ${max(j['Analysis']['variance_analysis']['variance_amount'] for j in variance_jobs):,.2f}",
-        f"📉 **Largest Savings**: ${min(j['Analysis']['variance_analysis']['variance_amount'] for j in variance_jobs):,.2f}"
-    ]
-    
-    for insight in insights:
-        st.info(insight)
+    if variance_jobs:
+        avg_variance = sum(j.get('Variance_Amount', 0) for j in variance_jobs) / len(variance_jobs)
+        max_overage = max((j.get('Variance_Amount', 0) for j in variance_jobs), default=0)
+        min_variance = min((j.get('Variance_Amount', 0) for j in variance_jobs), default=0)
+        
+        insights = [
+            f"📊 **Budget Performance**: {over_budget} jobs over budget, {under_budget} jobs under budget",
+            f"💰 **Average Variance**: ${avg_variance:,.2f}",
+            f"📈 **Largest Overage**: ${max_overage:,.2f}",
+            f"📉 **Largest Savings**: ${min_variance:,.2f}"
+        ]
+        
+        for insight in insights:
+            st.info(insight)
+    else:
+        st.info("No variance data available for insights.")
