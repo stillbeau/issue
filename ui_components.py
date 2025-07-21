@@ -425,15 +425,21 @@ def render_daily_priorities(df, today):
                     
                     days_overdue = (today - completion_date).days if completion_date else 0
                     
-                    display_data.append({
-                        'Job_Name': row.get('Job_Name', 'N/A'),
-                        'Revenue': row.get('Revenue', 0),
-                        'Completion_Status': ' + '.join(completion_info),
-                        'Completion_Date': completion_date.strftime('%Y-%m-%d') if completion_date else 'N/A',
-                        'Days_Overdue': days_overdue,
-                        'Salesperson': row.get('Salesperson', 'N/A'),
-                        'Link': row.get('Link', '')
-                    })
+             # Get invoice status and clean it up for display
+invoice_status = str(row.get('Invoice_Status', 'Unknown')).strip()
+if not invoice_status or invoice_status.lower() in ['nan', 'none', '']:
+    invoice_status = 'Not Set'
+
+display_data.append({
+    'Job_Name': row.get('Job_Name', 'N/A'),
+    'Revenue': row.get('Revenue', 0),
+    'Completion_Status': ' + '.join(completion_info),
+    'Completion_Date': completion_date.strftime('%Y-%m-%d') if completion_date else 'N/A',
+    'Days_Overdue': days_overdue,
+    'Salesperson': row.get('Salesperson', 'N/A'),
+    'Invoice_Status': invoice_status,  # ADDED THIS LINE
+    'Link': row.get('Link', '')
+})
                 
                 display_df = pd.DataFrame(display_data)
                 display_df = display_df.sort_values('Days_Overdue', ascending=False)
@@ -441,23 +447,26 @@ def render_daily_priorities(df, today):
                 # Format revenue column
                 display_df['Revenue_Formatted'] = display_df['Revenue'].apply(lambda x: f"${x:,.0f}")
                 
-                # Display table with proper formatting
-                st.dataframe(
-                    display_df[['Job_Name', 'Revenue_Formatted', 'Completion_Status', 'Completion_Date', 'Days_Overdue', 'Salesperson', 'Link']],
-                    column_config={
-                        "Link": st.column_config.LinkColumn(
-                            "Prod #", 
-                            display_text=r".*search=(.*)"
-                        ),
-                        "Revenue_Formatted": "Revenue",
-                        "Days_Overdue": st.column_config.NumberColumn(
-                            "Days Overdue",
-                            format="%d days"
-                        )
-                    },
-                    use_container_width=True,
-                    hide_index=True
-                )
+               st.dataframe(
+    display_df[['Job_Name', 'Revenue_Formatted', 'Completion_Status', 'Completion_Date', 'Days_Overdue', 'Invoice_Status', 'Salesperson', 'Link']],
+    column_config={
+        "Link": st.column_config.LinkColumn(
+            "Prod #", 
+            display_text=r".*search=(.*)"
+        ),
+        "Revenue_Formatted": "Revenue",
+        "Days_Overdue": st.column_config.NumberColumn(
+            "Days Overdue",
+            format="%d days"
+        ),
+        "Invoice_Status": st.column_config.TextColumn(
+            "Invoice Status",
+            help="Current invoicing status from Moraware"
+        )
+    },
+    use_container_width=True,
+    hide_index=True
+)
                 
                 # Summary statistics
                 col1, col2, col3 = st.columns(3)
