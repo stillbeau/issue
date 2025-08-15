@@ -16,7 +16,7 @@ from business_logic import (
     calculate_performance_metrics, generate_business_insights,
     calculate_timeline_metrics, calculate_revenue_at_risk, TIMELINE_THRESHOLDS
 )
-from data_processing import filter_data, get_data_summary
+from data_processing import filter_data, get_data_summary, export_data_summary
 from visualization import (
     create_timeline_chart, create_risk_distribution_chart,
     create_performance_metrics_chart, create_health_score_gauge
@@ -310,26 +310,30 @@ def render_operational_dashboard(df, today):
 
     # Operational sub-tabs
     op_tabs = st.tabs([
-        "🚨 Daily Priorities", 
-        "📅 Workload Calendar", 
-        "📊 Timeline Analytics", 
-        "🔮 Predictive Analytics", 
+        "📬 Close-Out",
+        "🚨 Daily Priorities",
+        "📅 Workload Calendar",
+        "📊 Timeline Analytics",
+        "🔮 Predictive Analytics",
         "🎯 Performance Scorecards"
     ])
-    
+
     with op_tabs[0]:
-        render_daily_priorities(df_filtered, today)
-    
+        render_close_out_dashboard(df_filtered, today)
+
     with op_tabs[1]:
-        render_workload_calendar(df_filtered, today)
-    
+        render_daily_priorities(df_filtered, today)
+
     with op_tabs[2]:
-        render_timeline_analytics(df_filtered)
-    
+        render_workload_calendar(df_filtered, today)
+
     with op_tabs[3]:
-        render_predictive_analytics(df_filtered)
-    
+        render_timeline_analytics(df_filtered)
+
     with op_tabs[4]:
+        render_predictive_analytics(df_filtered)
+
+    with op_tabs[5]:
         render_performance_scorecards(df_filtered)
 
 def render_daily_priorities(df, today):
@@ -672,6 +676,76 @@ def render_performance_scorecards(df):
     # Detailed performance table
     with st.expander("📊 Detailed Performance Data"):
         st.dataframe(scorecards_df, use_container_width=True, hide_index=True)
+
+def render_close_out_dashboard(df, today):
+    """Display jobs ready for billing and overdue tasks."""
+
+    st.subheader("📬 Ready to Bill Jobs")
+
+    ready_df = df[df.get('Ready_For_Billing', False)]
+
+    if ready_df.empty:
+        st.success("No jobs currently ready for billing.")
+    else:
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Jobs Ready", len(ready_df))
+        with col2:
+            total_profit = ready_df.get('Branch_Profit', pd.Series([0])).sum()
+            st.metric("Potential T$", f"${total_profit:,.0f}")
+
+        ready_df = ready_df.sort_values(by='Branch_Profit', ascending=False)
+
+        display_cols = [
+            'Job_Name', 'Install_Date', 'Days_Since_Install',
+            'Branch_Profit', 'Branch_Profit_Margin_%', 'Phase_Summary'
+        ]
+        if 'Link' in ready_df.columns:
+            ready_df['Moraware'] = ready_df['Link'].apply(lambda x: f"[Open]({x})" if x else '')
+            display_cols.append('Moraware')
+
+        st.dataframe(
+            ready_df[display_cols],
+            use_container_width=True,
+            hide_index=True
+        )
+
+        csv, fname = export_data_summary(ready_df, filename_prefix="ready_to_bill")
+        if csv:
+            st.download_button(
+                "⬇️ Download Close-Out Checklist",
+                csv,
+                file_name=fname,
+                mime="text/csv"
+            )
+
+        missing = ready_df[ready_df.get('Has_Missing_Dates', False)]
+        if not missing.empty:
+            st.warning("Some completed phases are missing dates")
+            st.table(missing[['Job_Name', 'Missing_Dates']])
+
+    st.markdown("---")
+    st.subheader("⏰ Overdue Jobs")
+
+    overdue = df[df.get('Is_Overdue', False)]
+    if overdue.empty:
+        st.success("No overdue jobs!")
+    else:
+        st.caption(f"{len(overdue)} jobs exceed 30 days since creation")
+        st.dataframe(
+            overdue[['Job_Name', 'Days_Since_Job_Creation', 'Current_Stage', 'Phase_Summary']],
+            use_container_width=True,
+            hide_index=True
+        )
+
+    escalation = df[df.get('Needs_Escalation', False)]
+    if not escalation.empty:
+        st.error(f"{len(escalation)} jobs require phase escalation")
+        st.dataframe(
+            escalation[['Job_Name', 'Phase_Summary']],
+            use_container_width=True,
+            hide_index=True
+        )
 
 def render_profitability_dashboard(df_stone, df_laminate, today):
     """Enhanced profitability dashboard with comprehensive financial analysis."""
