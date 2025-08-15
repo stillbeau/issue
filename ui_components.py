@@ -116,13 +116,15 @@ def render_sidebar_config():
     
     # Auto-refresh option
     auto_refresh = st.sidebar.checkbox(
-        "🔄 Auto-refresh (5 min)", 
+        "🔄 Auto-refresh (5 min)",
         help="Automatically refresh data every 5 minutes"
     )
     
     if auto_refresh:
-        time.sleep(300)  # 5 minutes
-        st.rerun()
+        st.sidebar.markdown(
+            "<script>setTimeout(function(){window.location.reload();}, 300000);</script>",
+            unsafe_allow_html=True,
+        )
     
     # Performance monitoring
     st.sidebar.markdown("---")
