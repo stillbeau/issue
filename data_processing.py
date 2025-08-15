@@ -60,16 +60,18 @@ def clean_column_names(df):
 def add_missing_columns(df):
     """Add any missing expected columns with default values"""
     expected_cols = [
-        'Template - Date', 'Ready to Fab - Date', 'Ship - Date', 'Install - Date', 
-        'Service - Date', 'Delivery - Date', 'Job Creation', 'Next Sched. - Date', 
-        'Product Rcvd - Date', 'Pick Up - Date', 'Job Material', 'Rework - Stone Shop - Rework Price', 
-        'Production #', 'Total Job Price $', 'Total Job SqFT', 'Job Throughput - Job GM (original)', 
-        'Salesperson', 'Division', 'Next Sched. - Activity', 'Install - Assigned To', 
-        'Template - Assigned To', 'Job Name', 'Rework - Stone Shop - Reason', 'Ready to Fab - Status', 
+        'Template - Date', 'Ready to Fab - Date', 'Ship - Date', 'Install - Date',
+        'Service - Date', 'Delivery - Date', 'Job Creation', 'Next Sched. - Date',
+        'Product Rcvd - Date', 'Pick Up - Date', 'Invoice - Date', 'Plant INV - Date',
+        'Job Material', 'Rework - Stone Shop - Rework Price', 'Production #',
+        'Total Job Price $', 'Total Job SqFT', 'Job Throughput - Job GM (original)',
+        'Salesperson', 'Division', 'Next Sched. - Activity', 'Install - Assigned To',
+        'Template - Assigned To', 'Job Name', 'Rework - Stone Shop - Reason',
+        'Ready to Fab - Status', 'Template - Status', 'Plant INV - Status',
+        'Invoice - Status', 'Install - Status', 'Pick Up - Status', 'Delivery - Status',
         'Job Type', 'Order Type', 'Lead Source', 'Phase Throughput - Phase Plant Invoice',
-        'Job Throughput - Rework COGS', 'Job Throughput - Rework Job Labor', 
-        'Job Throughput - Total COGS', 'Branch INV $', 'Plant INV $', 'Job Status', 
-        'Invoice - Status', 'Install - Status', 'Pick Up - Status', 'Delivery - Status'
+        'Job Throughput - Rework COGS', 'Job Throughput - Rework Job Labor',
+        'Job Throughput - Total COGS', 'Branch INV $', 'Plant INV $', 'Job Status'
     ]
     
     for col in expected_cols:
@@ -81,9 +83,9 @@ def add_missing_columns(df):
 def process_date_columns(df):
     """Process and standardize all date columns"""
     date_cols = [
-        'Template - Date', 'Ready to Fab - Date', 'Ship - Date', 'Install - Date', 
-        'Service - Date', 'Delivery - Date', 'Job Creation', 'Next Sched. - Date', 
-        'Product Rcvd - Date', 'Pick Up - Date'
+        'Template - Date', 'Ready to Fab - Date', 'Ship - Date', 'Install - Date',
+        'Service - Date', 'Delivery - Date', 'Job Creation', 'Next Sched. - Date',
+        'Product Rcvd - Date', 'Pick Up - Date', 'Invoice - Date', 'Plant INV - Date'
     ]
     
     for col in date_cols: 
@@ -105,6 +107,8 @@ def create_standardized_column_names(df):
     df['Service_Date'] = df['Service - Date']
     df['Delivery_Date'] = df['Delivery - Date']
     df['Next_Sched_Date'] = df['Next Sched. - Date']
+    df['Invoice_Date'] = df['Invoice - Date']
+    df['Plant_INV_Date'] = df['Plant INV - Date']
     df['Job_Creation'] = df['Job Creation']
     
     # Other important columns for business logic
@@ -120,10 +124,12 @@ def create_standardized_column_names(df):
     df['Template_Assigned_To'] = df['Template - Assigned To']
     df['Rework_Stone_Shop_Rework_Price'] = df['Rework - Stone Shop - Rework Price']
     df['Rework_Stone_Shop_Reason'] = df['Rework - Stone Shop - Reason']
+    df['Template_Status'] = df['Template - Status']
     df['Ready_to_Fab_Status'] = df['Ready to Fab - Status']
-    df['Job_Status'] = df['Job Status']
+    df['Plant_INV_Status'] = df['Plant INV - Status']
     df['Invoice_Status'] = df['Invoice - Status']
     df['Install_Status'] = df['Install - Status']
+    df['Job_Status'] = df['Job Status']
     df['Pick_Up_Status'] = df['Pick Up - Status']
     df['Delivery_Status'] = df['Delivery - Status']
     
@@ -211,6 +217,65 @@ def calculate_risk_metrics(df):
         lambda row: pd.Series(calculate_delay_probability(row)), axis=1
     )
     
+    return df
+
+def calculate_close_out_metrics(df, today):
+    """Compute metrics to identify jobs ready for billing and overdue items."""
+
+    df = create_standardized_column_names(df)
+
+    # Days since key milestones
+    df['Days_Since_Install'] = (today - df['Install_Date']).dt.days
+    df['Days_Since_Job_Creation'] = (today - df['Job_Creation']).dt.days
+
+    # Overdue flag based on job age
+    df['Is_Overdue'] = df['Days_Since_Job_Creation'] > 30
+
+    incomplete_status = ['estimate', 'auto-schedule', 'no date', '']
+
+    # Ready for billing when install complete but invoice incomplete
+    install_complete = df['Install_Status'].str.lower().isin(['complete', 'confirmed'])
+    invoice_incomplete = df['Invoice_Status'].fillna('').str.lower().isin(incomplete_status)
+    df['Ready_For_Billing'] = install_complete & invoice_incomplete
+
+    # Phase escalation when downstream is complete but upstream or invoice incomplete
+    plant_incomplete = df['Plant_INV_Status'].fillna('').str.lower().isin(incomplete_status)
+    df['Needs_Escalation'] = install_complete & (plant_incomplete | invoice_incomplete)
+
+    # Missing required dates
+    phase_date_pairs = [
+        ('Template_Status', 'Template_Date', 'Template'),
+        ('Ready_to_Fab_Status', 'Ready_to_Fab_Date', 'Ready to Fab'),
+        ('Plant_INV_Status', 'Plant_INV_Date', 'Plant INV'),
+        ('Install_Status', 'Install_Date', 'Install'),
+        ('Invoice_Status', 'Invoice_Date', 'Invoice')
+    ]
+
+    def get_missing_phases(row):
+        missing = [name for status_col, date_col, name in phase_date_pairs
+                  if str(row.get(status_col, '')).lower() in ['complete', 'confirmed']
+                  and pd.isna(row.get(date_col))]
+        return ', '.join(missing)
+
+    df['Missing_Dates'] = df.apply(get_missing_phases, axis=1)
+    df['Has_Missing_Dates'] = df['Missing_Dates'] != ''
+
+    # Phase summary for quick review
+    summary_fields = [
+        ('Template', 'Template_Status'),
+        ('Ready to Fab', 'Ready_to_Fab_Status'),
+        ('Plant INV', 'Plant_INV_Status'),
+        ('Install', 'Install_Status'),
+        ('Invoice', 'Invoice_Status')
+    ]
+
+    df['Phase_Summary'] = df.apply(
+        lambda row: ' | '.join(
+            f"{name}:{row.get(col, '')}" for name, col in summary_fields if row.get(col)
+        ),
+        axis=1
+    )
+
     return df
 
 def perform_pricing_analysis(df):
@@ -364,6 +429,7 @@ def process_loaded_data(df, today, install_cost):
     df = calculate_stage_metrics(df, today)
     df = calculate_quality_metrics(df)
     df = calculate_risk_metrics(df)
+    df = calculate_close_out_metrics(df, today)
     
     # Step 3: Perform pricing analysis
     df = perform_pricing_analysis(df)
@@ -440,12 +506,12 @@ def filter_data(df, filters):
     if df.empty:
         return df
     
-    filtered_df = df.copy()
-    
+    mask = pd.Series(True, index=df.index)
+
     # Status filters - Using standardized column names
     if filters.get('status_filter'):
-        status_mask = pd.Series([False] * len(df), index=df.index)
-        
+        status_mask = pd.Series(False, index=df.index)
+
         if "Active" in filters['status_filter']:
             status_mask |= (df.get('Job_Status', '') != 'Complete')
         if "Complete" in filters['status_filter']:
@@ -453,38 +519,34 @@ def filter_data(df, filters):
         if "30+ Days Old" in filters['status_filter']:
             thirty_days_ago = pd.Timestamp.now() - timedelta(days=30)
             status_mask |= (
-                (df.get('Job_Creation', pd.NaT) < thirty_days_ago) & 
+                (df.get('Job_Creation', pd.NaT) < thirty_days_ago) &
                 (df.get('Job_Status', '') != 'Complete')
             )
         if "Unscheduled" in filters['status_filter']:
             status_mask |= (
-                df.get('Next_Sched_Date', pd.NaT).isna() & 
+                df.get('Next_Sched_Date', pd.NaT).isna() &
                 (df.get('Job_Status', '') != 'Complete')
             )
-        
-        filtered_df = df[status_mask]
-    
+
+        mask &= status_mask
+
     # Salesperson filter
     if filters.get('salesperson') and filters['salesperson'] != 'All':
-        filtered_df = filtered_df[
-            filtered_df.get('Salesperson', '') == filters['salesperson']
-        ]
-    
+        mask &= df.get('Salesperson', '') == filters['salesperson']
+
     # Division filter
     if filters.get('division') and filters['division'] != 'All':
-        filtered_df = filtered_df[
-            filtered_df.get('Division_Type', '') == filters['division']
-        ]
-    
+        mask &= df.get('Division_Type', '') == filters['division']
+
     # Date range filter - Using standardized column name
     if filters.get('date_range'):
         start_date, end_date = filters['date_range']
-        filtered_df = filtered_df[
-            (filtered_df.get('Job_Creation', pd.NaT) >= start_date) & 
-            (filtered_df.get('Job_Creation', pd.NaT) <= end_date)
-        ]
-    
-    return filtered_df
+        mask &= (
+            (df.get('Job_Creation', pd.NaT) >= start_date) &
+            (df.get('Job_Creation', pd.NaT) <= end_date)
+        )
+
+    return df[mask]
 
 def export_data_summary(df, filename_prefix="floform_data"):
     """Generate data export summary for download"""
