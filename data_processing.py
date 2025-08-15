@@ -440,12 +440,12 @@ def filter_data(df, filters):
     if df.empty:
         return df
     
-    filtered_df = df.copy()
-    
+    mask = pd.Series(True, index=df.index)
+
     # Status filters - Using standardized column names
     if filters.get('status_filter'):
-        status_mask = pd.Series([False] * len(df), index=df.index)
-        
+        status_mask = pd.Series(False, index=df.index)
+
         if "Active" in filters['status_filter']:
             status_mask |= (df.get('Job_Status', '') != 'Complete')
         if "Complete" in filters['status_filter']:
@@ -453,38 +453,34 @@ def filter_data(df, filters):
         if "30+ Days Old" in filters['status_filter']:
             thirty_days_ago = pd.Timestamp.now() - timedelta(days=30)
             status_mask |= (
-                (df.get('Job_Creation', pd.NaT) < thirty_days_ago) & 
+                (df.get('Job_Creation', pd.NaT) < thirty_days_ago) &
                 (df.get('Job_Status', '') != 'Complete')
             )
         if "Unscheduled" in filters['status_filter']:
             status_mask |= (
-                df.get('Next_Sched_Date', pd.NaT).isna() & 
+                df.get('Next_Sched_Date', pd.NaT).isna() &
                 (df.get('Job_Status', '') != 'Complete')
             )
-        
-        filtered_df = df[status_mask]
-    
+
+        mask &= status_mask
+
     # Salesperson filter
     if filters.get('salesperson') and filters['salesperson'] != 'All':
-        filtered_df = filtered_df[
-            filtered_df.get('Salesperson', '') == filters['salesperson']
-        ]
-    
+        mask &= df.get('Salesperson', '') == filters['salesperson']
+
     # Division filter
     if filters.get('division') and filters['division'] != 'All':
-        filtered_df = filtered_df[
-            filtered_df.get('Division_Type', '') == filters['division']
-        ]
-    
+        mask &= df.get('Division_Type', '') == filters['division']
+
     # Date range filter - Using standardized column name
     if filters.get('date_range'):
         start_date, end_date = filters['date_range']
-        filtered_df = filtered_df[
-            (filtered_df.get('Job_Creation', pd.NaT) >= start_date) & 
-            (filtered_df.get('Job_Creation', pd.NaT) <= end_date)
-        ]
-    
-    return filtered_df
+        mask &= (
+            (df.get('Job_Creation', pd.NaT) >= start_date) &
+            (df.get('Job_Creation', pd.NaT) <= end_date)
+        )
+
+    return df[mask]
 
 def export_data_summary(df, filename_prefix="floform_data"):
     """Generate data export summary for download"""
