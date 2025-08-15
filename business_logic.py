@@ -32,10 +32,12 @@ def parse_material(s: str) -> tuple[str, str]:
     """Enhanced material parsing with better brand/color extraction."""
     if pd.isna(s) or not s:
         return "N/A", "N/A"
-    
+
     s = str(s)
-    brand_match = re.search(r'-\s*,\d+\s*-\s*([A-Za-z0-9 ]+?)\s*\(', s)
-    color_match = re.search(r'\)\s*([^()]+?)\s*\(', s)
+    # Match patterns like "- 1234 - Brand (Color)" without requiring a comma
+    brand_match = re.search(r'-\s*\d+\s*-\s*([A-Za-z0-9 ]+?)\s*\(', s)
+    # Extract the first parenthesized value as the color
+    color_match = re.search(r'\(([^()]+)\)', s)
     brand = brand_match.group(1).strip() if brand_match else "N/A"
     color = color_match.group(1).strip() if color_match else "N/A"
     return brand, color
