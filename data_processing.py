@@ -546,6 +546,14 @@ def filter_data(df, filters):
             (df.get('Job_Creation', pd.NaT) <= end_date)
         )
 
+    # Text search filter
+    if filters.get('search_query'):
+        query = str(filters['search_query']).strip().lower()
+        if query:
+            name_match = df.get('Job_Name', '').str.lower().str.contains(query, na=False)
+            po_match = df.get('Production_', '').astype(str).str.contains(query, na=False)
+            mask &= name_match | po_match
+
     return df[mask]
 
 def export_data_summary(df, filename_prefix="floform_data"):
