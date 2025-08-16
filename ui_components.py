@@ -19,7 +19,8 @@ from business_logic import (
 from data_processing import filter_data, get_data_summary, export_data_summary
 from visualization import (
     create_timeline_chart, create_risk_distribution_chart,
-    create_performance_metrics_chart, create_health_score_gauge
+    create_performance_metrics_chart, create_health_score_gauge,
+    create_monthly_installs_trend
 )
 
 def render_login_screen():
@@ -190,7 +191,28 @@ def render_overall_health_tab(df, today):
         total_sqft = df.get('Total_Job_SqFt', pd.Series([0])).sum()
         avg_sqft = total_sqft / total_jobs if total_jobs > 0 else 0
         st.metric("Total SqFt", f"{total_sqft:,.0f}", delta=f"{avg_sqft:.0f} avg/job")
-    
+
+    # Monthly installs KPI with trendline
+    if 'Install_Date' in df.columns and df['Install_Date'].notna().any():
+        st.subheader("📆 Monthly Installs")
+
+        installs_this_month = df[df['Install_Date'].dt.to_period('M') == today.to_period('M')]
+        installs_last_month = df[
+            df['Install_Date'].dt.to_period('M') == (today - pd.DateOffset(months=1)).to_period('M')
+        ]
+
+        col_inst1, col_inst2 = st.columns([1, 3])
+        with col_inst1:
+            st.metric(
+                "Installs This Month",
+                len(installs_this_month),
+                delta=len(installs_this_month) - len(installs_last_month)
+            )
+        with col_inst2:
+            fig_installs = create_monthly_installs_trend(df, today)
+            if fig_installs:
+                st.plotly_chart(fig_installs, use_container_width=True)
+
     st.markdown("---")
     
     # Business Health Score Display
@@ -280,29 +302,36 @@ def render_operational_dashboard(df, today):
     # Operational filters
     with st.expander("🔧 Operational Filters", expanded=False):
         op_cols = st.columns(3)
-        
+
         with op_cols[0]:
             status_options = ["Active", "Complete", "30+ Days Old", "Unscheduled"]
             status_filter = st.multiselect(
-                "Job Status Filter", 
-                status_options, 
-                default=["Active"], 
+                "Job Status Filter",
+                status_options,
+                default=["Active"],
                 key="op_status_multi"
             )
-        
+
         with op_cols[1]:
             salesperson_list = ['All'] + sorted(df['Salesperson'].dropna().unique().tolist())
             salesperson_filter = st.selectbox("Salesperson Filter", salesperson_list, key="op_sales")
-        
+
         with op_cols[2]:
             division_list = ['All'] + sorted(df['Division_Type'].dropna().unique().tolist())
             division_filter = st.selectbox("Division Filter", division_list, key="op_div")
+
+        search_query = st.text_input(
+            "Search Job or PO",
+            key="op_search",
+            placeholder="Enter job name or production #"
+        )
 
     # Apply filters
     filters = {
         'status_filter': status_filter,
         'salesperson': salesperson_filter,
-        'division': division_filter
+        'division': division_filter,
+        'search_query': search_query
     }
     
     df_filtered = filter_data(df, filters)

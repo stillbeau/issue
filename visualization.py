@@ -375,7 +375,40 @@ def create_revenue_trend_chart(df):
     
     # Format y-axis as currency
     fig.update_yaxes(tickformat='$,.0f')
-    
+
+    return fig
+
+
+def create_monthly_installs_trend(df, today):
+    """Create line chart showing installs for the current month."""
+
+    if df.empty or 'Install_Date' not in df.columns:
+        return None
+
+    start_of_month = pd.Timestamp(today.year, today.month, 1)
+    month_df = df[(df['Install_Date'].notna()) &
+                  (df['Install_Date'] >= start_of_month) &
+                  (df['Install_Date'] <= today)]
+
+    if month_df.empty:
+        return None
+
+    daily_installs = (month_df
+                      .groupby(month_df['Install_Date'].dt.date)
+                      .size()
+                      .reset_index(name='Installs'))
+
+    fig = px.line(
+        daily_installs,
+        x='Install_Date',
+        y='Installs',
+        title='Daily Installs This Month',
+        markers=True,
+        labels={'Install_Date': 'Date', 'Installs': 'Number of Installs'}
+    )
+
+    fig.update_layout(height=250, margin=dict(l=20, r=20, t=40, b=20))
+
     return fig
 
 def create_profitability_scatter(df):
