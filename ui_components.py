@@ -316,20 +316,22 @@ def render_overall_health_tab(df, today):
                     display_df = issue_df.copy()
                     if 'Link' in display_df.columns:
                         display_df = display_df.rename(columns={'Link': 'PO'})
-                        display_cols = ['PO'] + [c for c in display_df.columns if c != 'PO']
-                        st.dataframe(
-                            display_df[display_cols],
-                            use_container_width=True,
-                            hide_index=True,
-                            column_config={
-                                "PO": st.column_config.LinkColumn(
-                                    "PO",
-                                    display_text=r".*search=(.*)"
-                                )
-                            }
+                    display_cols = (
+                        ['PO'] + [c for c in display_df.columns if c != 'PO']
+                        if 'PO' in display_df.columns
+                        else display_df.columns
+                    )
+                    column_config = {}
+                    if 'PO' in display_df.columns:
+                        column_config["PO"] = st.column_config.LinkColumn(
+                            "PO", display_text=r".*search=(.*)"
                         )
-                    else:
-                        st.dataframe(display_df, use_container_width=True, hide_index=True)
+                    st.dataframe(
+                        display_df[display_cols],
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config=column_config,
+                    )
                 else:
                     st.write("No job details available.")
     else:
