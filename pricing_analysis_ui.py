@@ -10,6 +10,10 @@ import plotly.express as px
 import plotly.graph_objects as go
 from business_logic import analyze_job_pricing
 
+# Jobs where the plant invoice exceeds expected cost by more than this
+# percentage will be flagged as potentially overpriced.
+OVERPRICE_THRESHOLD = 15
+
 def safe_numeric_conversion(value):
     """Safely convert value to numeric, handling strings with $ and commas"""
     if pd.isna(value):
@@ -50,7 +54,7 @@ def analyze_interbranch_pricing_direct(df):
             (df_work['Total_Job_Price_'].notna()) &
             (df_work['Total_Job_Price_'] > 0) &
             (df_work['Phase_Dollars_Plant_Invoice_'].notna()) &
-            (df_work['Phase_Dollars_Plant_Invoice_'] > 0)
+            (df_work['Phase_Dollars_Plant_Invoice_'] >= 0)
         ]
     except Exception as e:
         st.error(f"Error filtering data: {e}")
@@ -70,7 +74,10 @@ def analyze_interbranch_pricing_direct(df):
         # Numeric checks with safe conversion
         for col in ['Total_Job_SqFT', 'Total_Job_Price_', 'Phase_Dollars_Plant_Invoice_']:
             if col in df_work.columns:
-                mask &= (df_work[col] > 0)
+                if col == 'Phase_Dollars_Plant_Invoice_':
+                    mask &= (df_work[col] >= 0)
+                else:
+                    mask &= (df_work[col] > 0)
         
         candidates = df_work[mask]
     
@@ -86,12 +93,13 @@ def analyze_interbranch_pricing_direct(df):
         
         if isinstance(analysis, dict):
             # Extract key information with safe conversions
+            actual_cost = safe_numeric_conversion(row.get('Phase_Dollars_Plant_Invoice_', 0))
             job_info = {
                 'Job_Name': row.get('Job_Name', ''),
                 'Production_': row.get('Production_', ''),
                 'Division': row.get('Division', ''),
                 'Total_SqFt': safe_numeric_conversion(row.get('Total_Job_SqFT', 0)),
-                'Actual_Plant_Cost': safe_numeric_conversion(row.get('Phase_Dollars_Plant_Invoice_', 0)),
+                'Actual_Plant_Cost': actual_cost,
                 'Analysis': analysis
             }
             
@@ -99,8 +107,25 @@ def analyze_interbranch_pricing_direct(df):
             if analysis.get('status') == 'analyzed' and 'expected_plant' in analysis:
                 expected_plant = analysis['expected_plant']
                 job_info['Expected_Plant_Cost'] = expected_plant.get('total_cost_avg', 0)
-                job_info['Variance_Amount'] = job_info['Actual_Plant_Cost'] - job_info['Expected_Plant_Cost']
-                job_info['Variance_Percent'] = (job_info['Variance_Amount'] / job_info['Expected_Plant_Cost'] * 100) if job_info['Expected_Plant_Cost'] > 0 else 0
+
+                # Determine which invoice value to use
+                if actual_cost > 0:
+                    job_info['Plant_Invoice_Used'] = actual_cost
+                    job_info['Invoice_Type'] = 'Actual'
+                else:
+                    job_info['Plant_Invoice_Used'] = job_info['Expected_Plant_Cost']
+                    job_info['Invoice_Type'] = 'Estimated'
+
+                job_info['Plant_Profit'] = job_info['Plant_Invoice_Used'] - job_info['Expected_Plant_Cost']
+                job_info['Plant_Profit_Margin_%'] = (
+                    job_info['Plant_Profit'] / job_info['Expected_Plant_Cost'] * 100
+                ) if job_info['Expected_Plant_Cost'] > 0 else 0
+
+                job_info['Variance_Amount'] = actual_cost - job_info['Expected_Plant_Cost']
+                job_info['Variance_Percent'] = (
+                    job_info['Variance_Amount'] / job_info['Expected_Plant_Cost'] * 100
+                ) if job_info['Expected_Plant_Cost'] > 0 else 0
+                job_info['Overpriced'] = job_info['Variance_Percent'] > OVERPRICE_THRESHOLD
                 
                 # Determine severity
                 if abs(job_info['Variance_Percent']) > 20:
@@ -117,6 +142,11 @@ def analyze_interbranch_pricing_direct(df):
                 job_info['Variance_Amount'] = 0
                 job_info['Variance_Percent'] = 0
                 job_info['Severity'] = 'no_analysis'
+                job_info['Plant_Invoice_Used'] = job_info['Actual_Plant_Cost']
+                job_info['Invoice_Type'] = 'Actual' if job_info['Actual_Plant_Cost'] > 0 else 'Estimated'
+                job_info['Plant_Profit'] = 0
+                job_info['Plant_Profit_Margin_%'] = 0
+                job_info['Overpriced'] = False
             
             results.append(job_info)
     
@@ -138,6 +168,8 @@ def get_pricing_summary_stats_direct(pricing_results):
     # Calculate totals
     total_expected = sum([r.get('Expected_Plant_Cost', 0) for r in variance_jobs])
     total_actual = sum([r.get('Actual_Plant_Cost', 0) for r in variance_jobs])
+    total_actual_profit = sum([r.get('Plant_Profit', 0) for r in variance_jobs if r.get('Invoice_Type') == 'Actual'])
+    total_estimated_profit = sum([r.get('Plant_Profit', 0) for r in variance_jobs if r.get('Invoice_Type') == 'Estimated'])
     
     return {
         'total_jobs': total_jobs,
@@ -148,7 +180,9 @@ def get_pricing_summary_stats_direct(pricing_results):
         'total_expected_cost': total_expected,
         'total_actual_cost': total_actual,
         'overall_variance': total_actual - total_expected if total_expected > 0 else 0,
-        'overall_variance_percent': ((total_actual - total_expected) / total_expected * 100) if total_expected > 0 else 0
+        'overall_variance_percent': ((total_actual - total_expected) / total_expected * 100) if total_expected > 0 else 0,
+        'total_actual_plant_profit': total_actual_profit,
+        'total_estimated_plant_profit': total_estimated_profit
     }
 
 def render_pricing_analysis_tab(df):
@@ -218,7 +252,7 @@ def render_pricing_summary_metrics(summary_stats):
     """
     st.subheader("📈 Pricing Analysis Summary")
     
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
     
     with col1:
         st.metric(
@@ -252,9 +286,21 @@ def render_pricing_summary_metrics(summary_stats):
     with col5:
         overall_variance = summary_stats['overall_variance_percent']
         st.metric(
-            "Overall Variance", 
+            "Overall Variance",
             f"{overall_variance:+.1f}%",
             delta=f"${summary_stats['overall_variance']:+,.0f}"
+        )
+
+    with col6:
+        st.metric(
+            "Actual Plant Profit",
+            f"${summary_stats['total_actual_plant_profit']:,.0f}"
+        )
+
+    with col7:
+        st.metric(
+            "Estimated Plant Profit",
+            f"${summary_stats['total_estimated_plant_profit']:,.0f}"
         )
     
     # Health indicator
@@ -334,9 +380,13 @@ def render_pricing_overview_direct(pricing_results, summary_stats):
                     'Production #': r['Production_'],
                     'Moraware Link': f"https://floformcountertops.moraware.net/sys/search?&search={r['Production_']}" if r['Production_'] else None,
                     'Expected Cost': f"${r.get('Expected_Plant_Cost', 0):,.2f}",
-                    'Actual Cost': f"${r.get('Actual_Plant_Cost', 0):,.2f}",
+                    'Plant Invoice': f"${r.get('Plant_Invoice_Used', 0):,.2f}",
+                    'Invoice Type': r.get('Invoice_Type', ''),
+                    'Plant Profit': f"${r.get('Plant_Profit', 0):+,.2f}",
+                    'Plant Profit %': f"{r.get('Plant_Profit_Margin_%', 0):+.1f}%",
                     'Variance': f"${r.get('Variance_Amount', 0):+,.2f}",
                     'Variance %': f"{r.get('Variance_Percent', 0):+.1f}%",
+                    'Overpriced': '🚩' if r.get('Overpriced') else '',
                     'Severity': r.get('Severity', 'unknown').title()
                 }
                 for r in sorted_variance_jobs[:10]
@@ -376,7 +426,8 @@ def render_pricing_overview_direct(pricing_results, summary_stats):
                     'Production #': r['Production_'],
                     'Division': r['Division'],
                     'SqFt': r['Total_SqFt'],
-                    'Plant Cost': f"${r['Actual_Plant_Cost']:,.2f}",
+                    'Plant Invoice': f"${r['Plant_Invoice_Used']:,.2f}",
+                    'Invoice Type': r['Invoice_Type'],
                     'Analysis Status': r['Analysis'].get('status', 'unknown') if isinstance(r['Analysis'], dict) else 'error'
                 }
                 for r in pricing_results[:10]  # Show first 10
@@ -398,23 +449,27 @@ def render_critical_variances_direct(pricing_results):
         return
     
     st.warning(f"Found {len(critical_jobs)} jobs with critical pricing variances (>20% difference)")
-    
+
     for job in critical_jobs:
         variance_pct = job.get('Variance_Percent', 0)
-        
+
+        icon = "🚩 " if job.get('Overpriced') else ""
         with st.expander(
-            f"🔴 {job['Job_Name']} - Variance: {variance_pct:+.1f}%",
+            f"🔴 {icon}{job['Job_Name']} - Variance: {variance_pct:+.1f}%",
             expanded=True
         ):
-            col1, col2, col3, col4 = st.columns(4)
-            
+            col1, col2, col3, col4, col5 = st.columns(5)
+
             with col1:
                 st.metric("Expected Cost", f"${job.get('Expected_Plant_Cost', 0):,.2f}")
             with col2:
-                st.metric("Actual Cost", f"${job.get('Actual_Plant_Cost', 0):,.2f}")
+                cost_label = "Plant Invoice" if job.get('Invoice_Type') == 'Actual' else "Plant Invoice (Estimated)"
+                st.metric(cost_label, f"${job.get('Plant_Invoice_Used', 0):,.2f}")
             with col3:
-                st.metric("Variance", f"${job.get('Variance_Amount', 0):+,.2f}")
+                st.metric("Plant Profit", f"${job.get('Plant_Profit', 0):+,.2f}")
             with col4:
+                st.metric("Variance", f"${job.get('Variance_Amount', 0):+,.2f}")
+            with col5:
                 # Add Moraware link button
                 if job.get('Production_'):
                     moraware_url = f"https://floformcountertops.moraware.net/sys/search?&search={job['Production_']}"
@@ -456,9 +511,13 @@ def render_variance_warnings_direct(pricing_results):
             'Moraware Link': f"https://floformcountertops.moraware.net/sys/search?&search={job['Production_']}" if job['Production_'] else None,
             'Total SqFt': job['Total_SqFt'],
             'Expected Cost': job.get('Expected_Plant_Cost', 0),
-            'Actual Cost': job.get('Actual_Plant_Cost', 0),
+            'Plant Invoice': job.get('Plant_Invoice_Used', 0),
+            'Invoice Type': job.get('Invoice_Type'),
+            'Plant Profit': job.get('Plant_Profit', 0),
+            'Plant Profit %': job.get('Plant_Profit_Margin_%', 0),
             'Variance Amount': job.get('Variance_Amount', 0),
-            'Variance %': job.get('Variance_Percent', 0)
+            'Variance %': job.get('Variance_Percent', 0),
+            'Overpriced': '🚩' if job.get('Overpriced') else ''
         }
         for job in warning_jobs
     ])
@@ -467,17 +526,19 @@ def render_variance_warnings_direct(pricing_results):
         warning_df,
         use_container_width=True,
         hide_index=True,
-        column_config={
-            "Moraware Link": st.column_config.LinkColumn(
-                "🔗 Moraware",
-                display_text="Open Job"
-            ),
-            "Expected Cost": st.column_config.NumberColumn("Expected Cost", format="$%.2f"),
-            "Actual Cost": st.column_config.NumberColumn("Actual Cost", format="$%.2f"),
-            "Variance Amount": st.column_config.NumberColumn("Variance Amount", format="$%.2f"),
-            "Variance %": st.column_config.NumberColumn("Variance %", format="%.1f%%")
-        }
-    )
+            column_config={
+                "Moraware Link": st.column_config.LinkColumn(
+                    "🔗 Moraware",
+                    display_text="Open Job"
+                ),
+                "Expected Cost": st.column_config.NumberColumn("Expected Cost", format="$%.2f"),
+                "Plant Invoice": st.column_config.NumberColumn("Plant Invoice", format="$%.2f"),
+                "Plant Profit": st.column_config.NumberColumn("Plant Profit", format="$%.2f"),
+                "Plant Profit %": st.column_config.NumberColumn("Plant Profit %", format="%.1f%%"),
+                "Variance Amount": st.column_config.NumberColumn("Variance Amount", format="$%.2f"),
+                "Variance %": st.column_config.NumberColumn("Variance %", format="%.1f%%")
+            }
+        )
 
 def render_detailed_analysis_direct(pricing_results):
     """
@@ -515,9 +576,13 @@ def render_detailed_analysis_direct(pricing_results):
                 'Moraware Link': f"https://floformcountertops.moraware.net/sys/search?&search={r['Production_']}" if r['Production_'] else None,
                 'SqFt': r['Total_SqFt'],
                 'Expected Cost': r.get('Expected_Plant_Cost', 0),
-                'Actual Cost': r.get('Actual_Plant_Cost', 0),
+                'Plant Invoice': r.get('Plant_Invoice_Used', 0),
+                'Invoice Type': r.get('Invoice_Type'),
+                'Plant Profit': r.get('Plant_Profit', 0),
+                'Plant Profit %': r.get('Plant_Profit_Margin_%', 0),
                 'Variance': r.get('Variance_Amount', 0),
                 'Variance %': r.get('Variance_Percent', 0),
+                'Overpriced': '🚩' if r.get('Overpriced') else '',
                 'Severity': r.get('Severity', 'unknown').title(),
                 'Analysis Status': r['Analysis'].get('status', 'unknown') if isinstance(r['Analysis'], dict) else 'error'
             }
@@ -534,7 +599,9 @@ def render_detailed_analysis_direct(pricing_results):
                     display_text="Open Job"
                 ),
                 "Expected Cost": st.column_config.NumberColumn("Expected Cost", format="$%.2f"),
-                "Actual Cost": st.column_config.NumberColumn("Actual Cost", format="$%.2f"),
+                "Plant Invoice": st.column_config.NumberColumn("Plant Invoice", format="$%.2f"),
+                "Plant Profit": st.column_config.NumberColumn("Plant Profit", format="$%.2f"),
+                "Plant Profit %": st.column_config.NumberColumn("Plant Profit %", format="%.1f%%"),
                 "Variance": st.column_config.NumberColumn("Variance", format="$%.2f"),
                 "Variance %": st.column_config.NumberColumn("Variance %", format="%.1f%%")
             }
