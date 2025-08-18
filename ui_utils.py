@@ -16,7 +16,13 @@ def display_po_links(
     order number extracted from the link.
     """
     if df is None:
-        st.dataframe(df, column_config=column_config, use_container_width=use_container_width, hide_index=hide_index, **kwargs)
+        st.dataframe(
+            pd.DataFrame(),
+            column_config=column_config,
+            use_container_width=use_container_width,
+            hide_index=hide_index,
+            **kwargs,
+        )
         return
 
     display_df = df.copy()

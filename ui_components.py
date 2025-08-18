@@ -458,12 +458,11 @@ def render_daily_priorities(df, today):
         
         # Detailed breakdown of invoicing issues
         with st.expander(
-            f"🔴 **CRITICAL: Work Completed - Job Not Closed** ({invoicing_issue['count']} jobs)", 
+            f"🔴 **CRITICAL: Work Completed - Job Not Closed** ({invoicing_issue['count']} jobs)",
             expanded=True
         ):
             issue_df = invoicing_issue['data']
-            
-            if not issue_df.empty:
+            if isinstance(issue_df, pd.DataFrame) and not issue_df.empty:
                 # Calculate completion type and days overdue for each job
                 display_data = []
                 
@@ -558,12 +557,11 @@ def render_daily_priorities(df, today):
         severity_emoji = "🔴" if severity == 'critical' else "🟡"
         
         with st.expander(
-            f"{severity_emoji} {issue_data['description']} ({issue_data['count']} jobs)", 
+            f"{severity_emoji} {issue_data['description']} ({issue_data['count']} jobs)",
             expanded=expanded
         ):
             issue_df = issue_data['data']
-            
-            if not issue_df.empty:
+            if isinstance(issue_df, pd.DataFrame) and not issue_df.empty:
                 display_cols = ['Job_Name', 'Current_Stage', 'Salesperson', 'Days_In_Current_Stage']
                 available_cols = [col for col in display_cols if col in issue_df.columns]
                 
