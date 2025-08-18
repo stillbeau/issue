@@ -313,7 +313,23 @@ def render_overall_health_tab(df, today):
             with st.expander(f"{severity_emoji} {issue_data['description']} ({issue_data['count']} jobs)"):
                 issue_df = issue_data.get('data')
                 if isinstance(issue_df, pd.DataFrame) and not issue_df.empty:
-                    st.dataframe(issue_df, use_container_width=True)
+                    display_df = issue_df.copy()
+                    if 'Link' in display_df.columns:
+                        display_df = display_df.rename(columns={'Link': 'PO'})
+                        display_cols = ['PO'] + [c for c in display_df.columns if c != 'PO']
+                        st.dataframe(
+                            display_df[display_cols],
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "PO": st.column_config.LinkColumn(
+                                    "PO",
+                                    display_text=r".*search=(.*)"
+                                )
+                            }
+                        )
+                    else:
+                        st.dataframe(display_df, use_container_width=True, hide_index=True)
                 else:
                     st.write("No job details available.")
     else:
