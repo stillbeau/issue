@@ -326,38 +326,36 @@ def render_pricing_overview_direct(pricing_results, summary_stats):
             key=lambda x: abs(x.get('Variance_Amount', 0)), 
             reverse=True
         )
-        
+
         if sorted_variance_jobs:
             variance_df = pd.DataFrame([
                 {
-                    'Job Name': r['Job_Name'],
-                    'Production #': r['Production_'],
-                    'Moraware Link': f"https://floformcountertops.moraware.net/sys/search?&search={r['Production_']}" if r['Production_'] else None,
-                    'Expected Cost': f"${r.get('Expected_Plant_Cost', 0):,.2f}",
-                    'Actual Cost': f"${r.get('Actual_Plant_Cost', 0):,.2f}",
-                    'Variance': f"${r.get('Variance_Amount', 0):+,.2f}",
-                    'Variance %': f"{r.get('Variance_Percent', 0):+.1f}%",
-                    'Severity': r.get('Severity', 'unknown').title()
-                }
-                for r in sorted_variance_jobs[:10]
+                    "PO": f"https://floformcountertops.moraware.net/sys/search?&search={r['Production_']}" if r['Production_'] else None,
+                    "Job Name": r['Job_Name'],
+                    "Expected Cost": f"${r.get('Expected_Plant_Cost', 0):,.2f}",
+                    "Actual Cost": f"${r.get('Actual_Plant_Cost', 0):,.2f}",
+                    "Variance": f"${r.get('Variance_Amount', 0):+,.2f}",
+                    "Variance %": f"{r.get('Variance_Percent', 0):+.1f}%",
+                "Severity": r.get('Severity', "unknown").title()
+            }
+            for r in sorted_variance_jobs[:10]
             ])
-            
+
             st.dataframe(
-                variance_df,
+                variance_df[["PO", "Job Name", "Expected Cost", "Actual Cost", "Variance", "Variance %", "Severity"]],
                 use_container_width=True,
                 hide_index=True,
                 column_config={
-                    "Moraware Link": st.column_config.LinkColumn(
-                        "🔗 Moraware",
-                        display_text="Open Job"
+                    "PO": st.column_config.LinkColumn(
+                        "PO",
+                        display_text=r".*search=(.*)"
                     ),
                     "Severity": st.column_config.TextColumn(
                         "Severity",
-                        help="Variance severity level"
+                        help="Variance severity level",
                     )
                 }
             )
-    
     else:
         st.info("No jobs with variance analysis found. This could mean:")
         st.markdown("""
@@ -372,8 +370,8 @@ def render_pricing_overview_direct(pricing_results, summary_stats):
         if pricing_results:
             jobs_summary = pd.DataFrame([
                 {
+                    'PO': f"https://floformcountertops.moraware.net/sys/search?&search={r['Production_']}" if r['Production_'] else None,
                     'Job Name': r['Job_Name'],
-                    'Production #': r['Production_'],
                     'Division': r['Division'],
                     'SqFt': r['Total_SqFt'],
                     'Plant Cost': f"${r['Actual_Plant_Cost']:,.2f}",
@@ -381,8 +379,18 @@ def render_pricing_overview_direct(pricing_results, summary_stats):
                 }
                 for r in pricing_results[:10]  # Show first 10
             ])
-            
-            st.dataframe(jobs_summary, use_container_width=True, hide_index=True)
+
+            st.dataframe(
+                jobs_summary[['PO', 'Job Name', 'Division', 'SqFt', 'Plant Cost', 'Analysis Status']],
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "PO": st.column_config.LinkColumn(
+                        "PO",
+                        display_text=r".*search=(.*)"
+                    )
+                }
+            )
 
 def render_critical_variances_direct(pricing_results):
     """
@@ -448,12 +456,11 @@ def render_variance_warnings_direct(pricing_results):
         return
     
     st.info(f"Found {len(warning_jobs)} jobs with moderate pricing variances (10-20% difference)")
-    
+
     warning_df = pd.DataFrame([
         {
+            'PO': f"https://floformcountertops.moraware.net/sys/search?&search={job['Production_']}" if job['Production_'] else None,
             'Job Name': job['Job_Name'],
-            'Production #': job['Production_'],
-            'Moraware Link': f"https://floformcountertops.moraware.net/sys/search?&search={job['Production_']}" if job['Production_'] else None,
             'Total SqFt': job['Total_SqFt'],
             'Expected Cost': job.get('Expected_Plant_Cost', 0),
             'Actual Cost': job.get('Actual_Plant_Cost', 0),
@@ -462,15 +469,15 @@ def render_variance_warnings_direct(pricing_results):
         }
         for job in warning_jobs
     ])
-    
+
     st.dataframe(
-        warning_df,
+        warning_df[['PO', 'Job Name', 'Total SqFt', 'Expected Cost', 'Actual Cost', 'Variance Amount', 'Variance %']],
         use_container_width=True,
         hide_index=True,
         column_config={
-            "Moraware Link": st.column_config.LinkColumn(
-                "🔗 Moraware",
-                display_text="Open Job"
+            "PO": st.column_config.LinkColumn(
+                "PO",
+                display_text=r".*search=(.*)"
             ),
             "Expected Cost": st.column_config.NumberColumn("Expected Cost", format="$%.2f"),
             "Actual Cost": st.column_config.NumberColumn("Actual Cost", format="$%.2f"),
@@ -510,9 +517,8 @@ def render_detailed_analysis_direct(pricing_results):
     if filtered_results:
         detailed_df = pd.DataFrame([
             {
+                'PO': f"https://floformcountertops.moraware.net/sys/search?&search={r['Production_']}" if r['Production_'] else None,
                 'Job Name': r['Job_Name'],
-                'Production #': r['Production_'],
-                'Moraware Link': f"https://floformcountertops.moraware.net/sys/search?&search={r['Production_']}" if r['Production_'] else None,
                 'SqFt': r['Total_SqFt'],
                 'Expected Cost': r.get('Expected_Plant_Cost', 0),
                 'Actual Cost': r.get('Actual_Plant_Cost', 0),
@@ -523,15 +529,15 @@ def render_detailed_analysis_direct(pricing_results):
             }
             for r in filtered_results
         ])
-        
+
         st.dataframe(
-            detailed_df,
+            detailed_df[['PO', 'Job Name', 'SqFt', 'Expected Cost', 'Actual Cost', 'Variance', 'Variance %', 'Severity', 'Analysis Status']],
             use_container_width=True,
             hide_index=True,
             column_config={
-                "Moraware Link": st.column_config.LinkColumn(
-                    "🔗 Moraware",
-                    display_text="Open Job"
+                "PO": st.column_config.LinkColumn(
+                    "PO",
+                    display_text=r".*search=(.*)"
                 ),
                 "Expected Cost": st.column_config.NumberColumn("Expected Cost", format="$%.2f"),
                 "Actual Cost": st.column_config.NumberColumn("Actual Cost", format="$%.2f"),

@@ -398,7 +398,6 @@ def load_raw_data():
             st.warning("No data received from Google Sheets.")
             return pd.DataFrame()
         
-        st.success(f"✅ Successfully loaded {len(df)} rows from Google Sheets")
         return df
         
     except Exception as e:
@@ -462,16 +461,6 @@ def load_and_process_data(today, install_cost):
         if total_jobs == 0:
             st.warning("No jobs found after processing.")
             return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-        
-        # Log processing summary
-        st.success(f"✅ Successfully processed {total_jobs} jobs")
-        
-        if 'Pricing_Analysis' in df_combined.columns:
-            pricing_issues = df_combined['Pricing_Issues_Count'].sum()
-            pricing_warnings = df_combined['Pricing_Warnings_Count'].sum()
-            
-            if pricing_issues > 0 or pricing_warnings > 0:
-                st.info(f"🔍 Pricing Analysis: {pricing_issues} critical issues, {pricing_warnings} warnings")
         
         return df_stone, df_laminate, df_combined
         

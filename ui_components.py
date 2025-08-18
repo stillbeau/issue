@@ -20,7 +20,7 @@ from data_processing import filter_data, get_data_summary, export_data_summary
 from visualization import (
     create_timeline_chart, create_risk_distribution_chart,
     create_performance_metrics_chart, create_health_score_gauge,
-    create_monthly_installs_trend
+    create_monthly_installs_trend, create_monthly_templates_trend
 )
 
 def render_login_screen():
@@ -213,6 +213,27 @@ def render_overall_health_tab(df, today):
             if fig_installs:
                 st.plotly_chart(fig_installs, use_container_width=True)
 
+    # Monthly templates KPI with trendline
+    if 'Template_Date' in df.columns and df['Template_Date'].notna().any():
+        st.subheader("📅 Monthly Templates")
+
+        templates_this_month = df[df['Template_Date'].dt.to_period('M') == today.to_period('M')]
+        templates_last_month = df[
+            df['Template_Date'].dt.to_period('M') == (today - pd.DateOffset(months=1)).to_period('M')
+        ]
+
+        col_tmp1, col_tmp2 = st.columns([1, 3])
+        with col_tmp1:
+            st.metric(
+                "Templates This Month",
+                len(templates_this_month),
+                delta=len(templates_this_month) - len(templates_last_month)
+            )
+        with col_tmp2:
+            fig_templates = create_monthly_templates_trend(df, today)
+            if fig_templates:
+                st.plotly_chart(fig_templates, use_container_width=True)
+
     st.markdown("---")
     
     # Business Health Score Display
@@ -286,10 +307,31 @@ def render_overall_health_tab(df, today):
     
     if critical_issues:
         st.subheader("⚠️ Critical Issues Summary")
-        
+
         for issue_type, issue_data in critical_issues.items():
             severity_emoji = "🔴" if issue_data['severity'] == 'critical' else "🟡"
-            st.warning(f"{severity_emoji} **{issue_data['description']}**: {issue_data['count']} jobs")
+            with st.expander(f"{severity_emoji} {issue_data['description']} ({issue_data['count']} jobs)"):
+                issue_df = issue_data.get('data')
+                if isinstance(issue_df, pd.DataFrame) and not issue_df.empty:
+                    display_df = issue_df.copy()
+                    if 'Link' in display_df.columns:
+                        display_df = display_df.rename(columns={'Link': 'PO'})
+                        display_cols = ['PO'] + [c for c in display_df.columns if c != 'PO']
+                        st.dataframe(
+                            display_df[display_cols],
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "PO": st.column_config.LinkColumn(
+                                    "PO",
+                                    display_text=r".*search=(.*)"
+                                )
+                            }
+                        )
+                    else:
+                        st.dataframe(display_df, use_container_width=True, hide_index=True)
+                else:
+                    st.write("No job details available.")
     else:
         st.success("✅ No critical issues identified across all operations.")
 
@@ -483,11 +525,12 @@ def render_daily_priorities(df, today):
                 display_df['Revenue_Formatted'] = display_df['Revenue'].apply(lambda x: f"${x:,.0f}")
                 
                 # Display table with proper formatting including Invoice Status
+                display_df = display_df.rename(columns={'Link': 'PO'})
                 st.dataframe(
-                    display_df[['Job_Name', 'Revenue_Formatted', 'Completion_Status', 'Completion_Date', 'Days_Overdue', 'Invoice_Status', 'Salesperson', 'Link']],
+                    display_df[['PO', 'Job_Name', 'Revenue_Formatted', 'Completion_Status', 'Completion_Date', 'Days_Overdue', 'Invoice_Status', 'Salesperson']],
                     column_config={
-                        "Link": st.column_config.LinkColumn(
-                            "Prod #", 
+                        "PO": st.column_config.LinkColumn(
+                            "PO",
                             display_text=r".*search=(.*)"
                         ),
                         "Revenue_Formatted": "Revenue",
@@ -533,19 +576,21 @@ def render_daily_priorities(df, today):
             if not issue_df.empty:
                 display_cols = ['Job_Name', 'Current_Stage', 'Salesperson', 'Days_In_Current_Stage']
                 available_cols = [col for col in display_cols if col in issue_df.columns]
-                
+
                 # Add revenue for context
                 if 'Revenue' in issue_df.columns:
                     available_cols.insert(-1, 'Revenue')
-                
-                if 'Link' in issue_df.columns:
-                    available_cols.insert(0, 'Link')
-                
+
+                display_df = issue_df.copy()
+                if 'Link' in display_df.columns:
+                    display_df = display_df.rename(columns={'Link': 'PO'})
+                    available_cols.insert(0, 'PO')
+
                 st.dataframe(
-                    issue_df[available_cols],
+                    display_df[available_cols],
                     column_config={
-                        "Link": st.column_config.LinkColumn(
-                            "Prod #", 
+                        "PO": st.column_config.LinkColumn(
+                            "PO",
                             display_text=r".*search=(.*)"
                         ),
                         "Revenue": st.column_config.NumberColumn(
@@ -644,10 +689,21 @@ def render_predictive_analytics(df):
         st.subheader(f"⚠️ Jobs Above {high_risk_threshold}% Risk Threshold")
         
         risk_display_cols = ['Job_Name', 'Current_Stage', 'Delay_Probability', 'Risk_Factors', 'Salesperson']
-        available_risk_cols = [col for col in risk_display_cols if col in high_risk_jobs.columns]
-        
+        display_df = high_risk_jobs.copy()
+        if 'Link' in display_df.columns:
+            display_df = display_df.rename(columns={'Link': 'PO'})
+            available_risk_cols = ['PO'] + [col for col in risk_display_cols if col in display_df.columns]
+        else:
+            available_risk_cols = [col for col in risk_display_cols if col in display_df.columns]
+
         st.dataframe(
-            high_risk_jobs[available_risk_cols].sort_values('Delay_Probability', ascending=False),
+            display_df[available_risk_cols].sort_values('Delay_Probability', ascending=False),
+            column_config={
+                "PO": st.column_config.LinkColumn(
+                    "PO",
+                    display_text=r".*search=(.*)"
+                )
+            },
             use_container_width=True
         )
     else:
@@ -725,16 +781,25 @@ def render_close_out_dashboard(df, today):
 
         ready_df = ready_df.sort_values(by='Branch_Profit', ascending=False)
 
-        display_cols = [
+        base_cols = [
             'Job_Name', 'Install_Date', 'Days_Since_Install',
             'Branch_Profit', 'Branch_Profit_Margin_%', 'Phase_Summary'
         ]
-        if 'Link' in ready_df.columns:
-            ready_df['Moraware'] = ready_df['Link'].apply(lambda x: f"[Open]({x})" if x else '')
-            display_cols.append('Moraware')
+        display_df = ready_df.copy()
+        if 'Link' in display_df.columns:
+            display_df = display_df.rename(columns={'Link': 'PO'})
+            display_cols = ['PO'] + base_cols
+        else:
+            display_cols = base_cols
 
         st.dataframe(
-            ready_df[display_cols],
+            display_df[display_cols],
+            column_config={
+                "PO": st.column_config.LinkColumn(
+                    "PO",
+                    display_text=r".*search=(.*)"
+                )
+            },
             use_container_width=True,
             hide_index=True
         )
@@ -751,7 +816,18 @@ def render_close_out_dashboard(df, today):
         missing = ready_df[ready_df.get('Has_Missing_Dates', False)]
         if not missing.empty:
             st.warning("Some completed phases are missing dates")
-            st.table(missing[['Job_Name', 'Missing_Dates']])
+            missing_df = missing.rename(columns={'Link': 'PO'}) if 'Link' in missing.columns else missing
+            st.dataframe(
+                missing_df[['PO', 'Job_Name', 'Missing_Dates']] if 'PO' in missing_df.columns else missing_df[['Job_Name', 'Missing_Dates']],
+                column_config={
+                    "PO": st.column_config.LinkColumn(
+                        "PO",
+                        display_text=r".*search=(.*)"
+                    )
+                },
+                use_container_width=True,
+                hide_index=True
+            )
 
     st.markdown("---")
     st.subheader("⏰ Overdue Jobs")
@@ -761,8 +837,15 @@ def render_close_out_dashboard(df, today):
         st.success("No overdue jobs!")
     else:
         st.caption(f"{len(overdue)} jobs exceed 30 days since creation")
+        overdue_df = overdue.rename(columns={'Link': 'PO'}) if 'Link' in overdue.columns else overdue
         st.dataframe(
-            overdue[['Job_Name', 'Days_Since_Job_Creation', 'Current_Stage', 'Phase_Summary']],
+            overdue_df[['PO', 'Job_Name', 'Days_Since_Job_Creation', 'Current_Stage', 'Phase_Summary']] if 'PO' in overdue_df.columns else overdue_df[['Job_Name', 'Days_Since_Job_Creation', 'Current_Stage', 'Phase_Summary']],
+            column_config={
+                "PO": st.column_config.LinkColumn(
+                    "PO",
+                    display_text=r".*search=(.*)"
+                )
+            },
             use_container_width=True,
             hide_index=True
         )
@@ -770,8 +853,15 @@ def render_close_out_dashboard(df, today):
     escalation = df[df.get('Needs_Escalation', False)]
     if not escalation.empty:
         st.error(f"{len(escalation)} jobs require phase escalation")
+        esc_df = escalation.rename(columns={'Link': 'PO'}) if 'Link' in escalation.columns else escalation
         st.dataframe(
-            escalation[['Job_Name', 'Phase_Summary']],
+            esc_df[['PO', 'Job_Name', 'Phase_Summary']] if 'PO' in esc_df.columns else esc_df[['Job_Name', 'Phase_Summary']],
+            column_config={
+                "PO": st.column_config.LinkColumn(
+                    "PO",
+                    display_text=r".*search=(.*)"
+                )
+            },
             use_container_width=True,
             hide_index=True
         )
