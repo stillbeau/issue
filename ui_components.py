@@ -12,7 +12,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 from business_logic import (
-    calculate_business_health_score, get_critical_issues, 
+    calculate_business_health_score, get_critical_issues,
     calculate_performance_metrics, generate_business_insights,
     calculate_timeline_metrics, calculate_revenue_at_risk, TIMELINE_THRESHOLDS
 )
@@ -22,6 +22,7 @@ from visualization import (
     create_performance_metrics_chart, create_health_score_gauge,
     create_monthly_installs_trend, create_monthly_templates_trend
 )
+from ui_utils import display_po_links
 
 def render_login_screen():
     """Enhanced login screen with professional styling."""
@@ -268,7 +269,7 @@ def render_overall_health_tab(df, today):
                 })
             
             components_df = pd.DataFrame(components_data)
-            st.dataframe(components_df, use_container_width=True, hide_index=True)
+            display_po_links(components_df, use_container_width=True, hide_index=True)
     
     # Division performance comparison
     if 'Division_Type' in df.columns:
@@ -293,7 +294,7 @@ def render_overall_health_tab(df, today):
             'Risk_Score_mean': 'Avg Risk Score'
         })
         
-        st.dataframe(division_metrics, use_container_width=True)
+        display_po_links(division_metrics, use_container_width=True, hide_index=False)
     
     # Key insights and recommendations
     st.subheader("💡 Business Insights & Recommendations")
@@ -313,7 +314,7 @@ def render_overall_health_tab(df, today):
             with st.expander(f"{severity_emoji} {issue_data['description']} ({issue_data['count']} jobs)"):
                 issue_df = issue_data.get('data')
                 if isinstance(issue_df, pd.DataFrame) and not issue_df.empty:
-                    st.dataframe(issue_df, use_container_width=True)
+                    display_po_links(issue_df, use_container_width=True, hide_index=True)
                 else:
                     st.write("No job details available.")
     else:
@@ -509,25 +510,31 @@ def render_daily_priorities(df, today):
                 display_df['Revenue_Formatted'] = display_df['Revenue'].apply(lambda x: f"${x:,.0f}")
                 
                 # Display table with proper formatting including Invoice Status
-                st.dataframe(
-                    display_df[['Job_Name', 'Revenue_Formatted', 'Completion_Status', 'Completion_Date', 'Days_Overdue', 'Invoice_Status', 'Salesperson', 'Link']],
+                display_po_links(
+                    display_df[
+                        [
+                            'Job_Name',
+                            'Revenue_Formatted',
+                            'Completion_Status',
+                            'Completion_Date',
+                            'Days_Overdue',
+                            'Invoice_Status',
+                            'Salesperson',
+                            'Link',
+                        ]
+                    ],
                     column_config={
-                        "Link": st.column_config.LinkColumn(
-                            "Prod #", 
-                            display_text=r".*search=(.*)"
-                        ),
                         "Revenue_Formatted": "Revenue",
                         "Days_Overdue": st.column_config.NumberColumn(
-                            "Days Overdue",
-                            format="%d days"
+                            "Days Overdue", format="%d days"
                         ),
                         "Invoice_Status": st.column_config.TextColumn(
                             "Invoice Status",
-                            help="Current invoicing status from Moraware"
-                        )
+                            help="Current invoicing status from Moraware",
+                        ),
                     },
                     use_container_width=True,
-                    hide_index=True
+                    hide_index=True,
                 )
                 
                 # Summary statistics
@@ -566,21 +573,16 @@ def render_daily_priorities(df, today):
                 
                 if 'Link' in issue_df.columns:
                     available_cols.insert(0, 'Link')
-                
-                st.dataframe(
+
+                display_po_links(
                     issue_df[available_cols],
                     column_config={
-                        "Link": st.column_config.LinkColumn(
-                            "Prod #", 
-                            display_text=r".*search=(.*)"
-                        ),
                         "Revenue": st.column_config.NumberColumn(
-                            "Revenue",
-                            format="$%.0f"
+                            "Revenue", format="$%.0f"
                         )
                     },
                     use_container_width=True,
-                    hide_index=True
+                    hide_index=True,
                 )
 
 def render_workload_calendar(df, today):
@@ -672,9 +674,10 @@ def render_predictive_analytics(df):
         risk_display_cols = ['Job_Name', 'Current_Stage', 'Delay_Probability', 'Risk_Factors', 'Salesperson']
         available_risk_cols = [col for col in risk_display_cols if col in high_risk_jobs.columns]
         
-        st.dataframe(
+        display_po_links(
             high_risk_jobs[available_risk_cols].sort_values('Delay_Probability', ascending=False),
-            use_container_width=True
+            use_container_width=True,
+            hide_index=False,
         )
     else:
         st.success(f"✅ No jobs exceed {high_risk_threshold}% risk threshold.")
@@ -730,7 +733,7 @@ def render_performance_scorecards(df):
     
     # Detailed performance table
     with st.expander("📊 Detailed Performance Data"):
-        st.dataframe(scorecards_df, use_container_width=True, hide_index=True)
+        display_po_links(scorecards_df, use_container_width=True, hide_index=True)
 
 def render_close_out_dashboard(df, today):
     """Display jobs ready for billing and overdue tasks."""
@@ -756,13 +759,12 @@ def render_close_out_dashboard(df, today):
             'Branch_Profit', 'Branch_Profit_Margin_%', 'Phase_Summary'
         ]
         if 'Link' in ready_df.columns:
-            ready_df['Moraware'] = ready_df['Link'].apply(lambda x: f"[Open]({x})" if x else '')
-            display_cols.append('Moraware')
+            display_cols.insert(0, 'Link')
 
-        st.dataframe(
+        display_po_links(
             ready_df[display_cols],
             use_container_width=True,
-            hide_index=True
+            hide_index=True,
         )
 
         csv, fname = export_data_summary(ready_df, filename_prefix="ready_to_bill")
@@ -787,19 +789,19 @@ def render_close_out_dashboard(df, today):
         st.success("No overdue jobs!")
     else:
         st.caption(f"{len(overdue)} jobs exceed 30 days since creation")
-        st.dataframe(
+        display_po_links(
             overdue[['Job_Name', 'Days_Since_Job_Creation', 'Current_Stage', 'Phase_Summary']],
             use_container_width=True,
-            hide_index=True
+            hide_index=True,
         )
 
     escalation = df[df.get('Needs_Escalation', False)]
     if not escalation.empty:
         st.error(f"{len(escalation)} jobs require phase escalation")
-        st.dataframe(
+        display_po_links(
             escalation[['Job_Name', 'Phase_Summary']],
             use_container_width=True,
-            hide_index=True
+            hide_index=True,
         )
 
 def render_profitability_dashboard(df_stone, df_laminate, today):
@@ -930,7 +932,7 @@ def render_combined_profitability_analysis(df_stone, df_laminate):
         display_df['Avg Margin %'] = display_df['Avg Margin %'].apply(lambda x: f"{x:.1f}%")
         display_df['Avg Job Value'] = display_df['Avg Job Value'].apply(lambda x: f"${x:,.0f}")
         
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        display_po_links(display_df, use_container_width=True, hide_index=True)
         
         # Division performance visualization
         if len(comparison_data) > 1:

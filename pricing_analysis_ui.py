@@ -9,6 +9,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from business_logic import analyze_job_pricing
+from ui_utils import display_po_links
 
 def safe_numeric_conversion(value):
     """Safely convert value to numeric, handling strings with $ and commas"""
@@ -342,20 +343,15 @@ def render_pricing_overview_direct(pricing_results, summary_stats):
                 for r in sorted_variance_jobs[:10]
             ])
             
-            st.dataframe(
+            display_po_links(
                 variance_df,
+                column_config={
+                    "Severity": st.column_config.TextColumn(
+                        "Severity", help="Variance severity level"
+                    )
+                },
                 use_container_width=True,
                 hide_index=True,
-                column_config={
-                    "Moraware Link": st.column_config.LinkColumn(
-                        "🔗 Moraware",
-                        display_text="Open Job"
-                    ),
-                    "Severity": st.column_config.TextColumn(
-                        "Severity",
-                        help="Variance severity level"
-                    )
-                }
             )
     
     else:
@@ -382,7 +378,7 @@ def render_pricing_overview_direct(pricing_results, summary_stats):
                 for r in pricing_results[:10]  # Show first 10
             ])
             
-            st.dataframe(jobs_summary, use_container_width=True, hide_index=True)
+            display_po_links(jobs_summary, use_container_width=True, hide_index=True)
 
 def render_critical_variances_direct(pricing_results):
     """
@@ -463,20 +459,16 @@ def render_variance_warnings_direct(pricing_results):
         for job in warning_jobs
     ])
     
-    st.dataframe(
+    display_po_links(
         warning_df,
-        use_container_width=True,
-        hide_index=True,
         column_config={
-            "Moraware Link": st.column_config.LinkColumn(
-                "🔗 Moraware",
-                display_text="Open Job"
-            ),
             "Expected Cost": st.column_config.NumberColumn("Expected Cost", format="$%.2f"),
             "Actual Cost": st.column_config.NumberColumn("Actual Cost", format="$%.2f"),
             "Variance Amount": st.column_config.NumberColumn("Variance Amount", format="$%.2f"),
-            "Variance %": st.column_config.NumberColumn("Variance %", format="%.1f%%")
-        }
+            "Variance %": st.column_config.NumberColumn("Variance %", format="%.1f%%"),
+        },
+        use_container_width=True,
+        hide_index=True,
     )
 
 def render_detailed_analysis_direct(pricing_results):
@@ -524,20 +516,16 @@ def render_detailed_analysis_direct(pricing_results):
             for r in filtered_results
         ])
         
-        st.dataframe(
+        display_po_links(
             detailed_df,
-            use_container_width=True,
-            hide_index=True,
             column_config={
-                "Moraware Link": st.column_config.LinkColumn(
-                    "🔗 Moraware",
-                    display_text="Open Job"
-                ),
                 "Expected Cost": st.column_config.NumberColumn("Expected Cost", format="$%.2f"),
                 "Actual Cost": st.column_config.NumberColumn("Actual Cost", format="$%.2f"),
                 "Variance": st.column_config.NumberColumn("Variance", format="$%.2f"),
-                "Variance %": st.column_config.NumberColumn("Variance %", format="%.1f%%")
-            }
+                "Variance %": st.column_config.NumberColumn("Variance %", format="%.1f%%"),
+            },
+            use_container_width=True,
+            hide_index=True,
         )
         
         # Download option
