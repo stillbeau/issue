@@ -527,7 +527,18 @@ def render_daily_priorities(df, today):
                 # Display table with proper formatting including Invoice Status
                 display_df = display_df.rename(columns={'Link': 'PO'})
                 st.dataframe(
-                    display_df[['PO', 'Job_Name', 'Revenue_Formatted', 'Completion_Status', 'Completion_Date', 'Days_Overdue', 'Invoice_Status', 'Salesperson']],
+                    display_df[
+                        [
+                            'PO',
+                            'Job_Name',
+                            'Revenue_Formatted',
+                            'Completion_Status',
+                            'Completion_Date',
+                            'Days_Overdue',
+                            'Invoice_Status',
+                            'Salesperson'
+                        ]
+                    ],
                     column_config={
                         "PO": st.column_config.LinkColumn(
                             "PO",
