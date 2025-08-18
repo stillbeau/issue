@@ -411,6 +411,39 @@ def create_monthly_installs_trend(df, today):
 
     return fig
 
+
+def create_monthly_templates_trend(df, today):
+    """Create line chart showing templates for the current month."""
+
+    if df.empty or 'Template_Date' not in df.columns:
+        return None
+
+    start_of_month = pd.Timestamp(today.year, today.month, 1)
+    month_df = df[(df['Template_Date'].notna()) &
+                  (df['Template_Date'] >= start_of_month) &
+                  (df['Template_Date'] <= today)]
+
+    if month_df.empty:
+        return None
+
+    daily_templates = (month_df
+                       .groupby(month_df['Template_Date'].dt.date)
+                       .size()
+                       .reset_index(name='Templates'))
+
+    fig = px.line(
+        daily_templates,
+        x='Template_Date',
+        y='Templates',
+        title='Daily Templates This Month',
+        markers=True,
+        labels={'Template_Date': 'Date', 'Templates': 'Number of Templates'}
+    )
+
+    fig.update_layout(height=250, margin=dict(l=20, r=20, t=40, b=20))
+
+    return fig
+
 def create_profitability_scatter(df):
     """Create profitability scatter plot (Revenue vs Profit)."""
     

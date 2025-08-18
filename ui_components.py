@@ -20,7 +20,7 @@ from data_processing import filter_data, get_data_summary, export_data_summary
 from visualization import (
     create_timeline_chart, create_risk_distribution_chart,
     create_performance_metrics_chart, create_health_score_gauge,
-    create_monthly_installs_trend
+    create_monthly_installs_trend, create_monthly_templates_trend
 )
 
 def render_login_screen():
@@ -213,6 +213,27 @@ def render_overall_health_tab(df, today):
             if fig_installs:
                 st.plotly_chart(fig_installs, use_container_width=True)
 
+    # Monthly templates KPI with trendline
+    if 'Template_Date' in df.columns and df['Template_Date'].notna().any():
+        st.subheader("📅 Monthly Templates")
+
+        templates_this_month = df[df['Template_Date'].dt.to_period('M') == today.to_period('M')]
+        templates_last_month = df[
+            df['Template_Date'].dt.to_period('M') == (today - pd.DateOffset(months=1)).to_period('M')
+        ]
+
+        col_tmp1, col_tmp2 = st.columns([1, 3])
+        with col_tmp1:
+            st.metric(
+                "Templates This Month",
+                len(templates_this_month),
+                delta=len(templates_this_month) - len(templates_last_month)
+            )
+        with col_tmp2:
+            fig_templates = create_monthly_templates_trend(df, today)
+            if fig_templates:
+                st.plotly_chart(fig_templates, use_container_width=True)
+
     st.markdown("---")
     
     # Business Health Score Display
@@ -286,10 +307,15 @@ def render_overall_health_tab(df, today):
     
     if critical_issues:
         st.subheader("⚠️ Critical Issues Summary")
-        
+
         for issue_type, issue_data in critical_issues.items():
             severity_emoji = "🔴" if issue_data['severity'] == 'critical' else "🟡"
-            st.warning(f"{severity_emoji} **{issue_data['description']}**: {issue_data['count']} jobs")
+            with st.expander(f"{severity_emoji} {issue_data['description']} ({issue_data['count']} jobs)"):
+                issue_df = issue_data.get('data')
+                if isinstance(issue_df, pd.DataFrame) and not issue_df.empty:
+                    st.dataframe(issue_df, use_container_width=True)
+                else:
+                    st.write("No job details available.")
     else:
         st.success("✅ No critical issues identified across all operations.")
 
