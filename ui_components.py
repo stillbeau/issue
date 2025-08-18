@@ -315,21 +315,9 @@ def render_overall_health_tab(df, today):
                 if isinstance(issue_df, pd.DataFrame) and not issue_df.empty:
                     display_df = issue_df.copy()
                     if 'Link' in display_df.columns:
-                        display_df = display_df.rename(columns={'Link': 'PO'})
-                        display_cols = ['PO'] + [c for c in display_df.columns if c != 'PO']
-                        st.dataframe(
-                            display_df[display_cols],
-                            use_container_width=True,
-                            hide_index=True,
-                            column_config={
-                                "PO": st.column_config.LinkColumn(
-                                    "PO",
-                                    display_text=r".*search=(.*)"
-                                )
-                            }
-                        )
-                    else:
-                        st.dataframe(display_df, use_container_width=True, hide_index=True)
+                        display_df['Prod #'] = display_df['Link'].str.extract(r'search=(.*)')
+                        display_df = display_df.drop(columns=['Link'])
+                    st.dataframe(display_df, use_container_width=True, hide_index=True)
                 else:
                     st.write("No job details available.")
     else:
@@ -378,6 +366,14 @@ def render_operational_dashboard(df, today):
     
     df_filtered = filter_data(df, filters)
     st.info(f"📊 Displaying **{len(df_filtered):,}** jobs based on current filters")
+
+    # Allow users to export the filtered data for further analysis
+    st.download_button(
+        "📥 Download Filtered Jobs",
+        df_filtered.to_csv(index=False).encode('utf-8'),
+        file_name="filtered_jobs.csv",
+        mime="text/csv",
+    )
 
     # Operational sub-tabs
     op_tabs = st.tabs([
@@ -520,26 +516,33 @@ def render_daily_priorities(df, today):
                 
                 display_df = pd.DataFrame(display_data)
                 display_df = display_df.sort_values('Days_Overdue', ascending=False)
-                
-                # Format revenue column
+
+                # Extract production number and format revenue column
+                display_df['Prod #'] = display_df['Link'].str.extract(r'search=(.*)')
                 display_df['Revenue_Formatted'] = display_df['Revenue'].apply(lambda x: f"${x:,.0f}")
-                
-                # Display table with proper formatting including Invoice Status
+
+                cols_to_show = [
+                    'Job_Name',
+                    'Prod #',
+                    'Revenue_Formatted',
+                    'Completion_Status',
+                    'Completion_Date',
+                    'Days_Overdue',
+                    'Invoice_Status',
+                    'Salesperson'
+                ]
+
                 st.dataframe(
-                    display_df[['Job_Name', 'Revenue_Formatted', 'Completion_Status', 'Completion_Date', 'Days_Overdue', 'Invoice_Status', 'Salesperson', 'Link']],
+                    display_df[cols_to_show],
                     column_config={
-                        "Link": st.column_config.LinkColumn(
-                            "Prod #", 
-                            display_text=r".*search=(.*)"
+                        'Revenue_Formatted': 'Revenue',
+                        'Days_Overdue': st.column_config.NumberColumn(
+                            'Days Overdue',
+                            format='%d days'
                         ),
-                        "Revenue_Formatted": "Revenue",
-                        "Days_Overdue": st.column_config.NumberColumn(
-                            "Days Overdue",
-                            format="%d days"
-                        ),
-                        "Invoice_Status": st.column_config.TextColumn(
-                            "Invoice Status",
-                            help="Current invoicing status from Moraware"
+                        'Invoice_Status': st.column_config.TextColumn(
+                            'Invoice Status',
+                            help='Current invoicing status from Moraware'
                         )
                     },
                     use_container_width=True,
@@ -581,15 +584,13 @@ def render_daily_priorities(df, today):
                     available_cols.insert(-1, 'Revenue')
                 
                 if 'Link' in issue_df.columns:
-                    available_cols.insert(0, 'Link')
-                
+                    issue_df = issue_df.copy()
+                    issue_df['Prod #'] = issue_df['Link'].str.extract(r'search=(.*)')
+                    available_cols.insert(0, 'Prod #')
+
                 st.dataframe(
                     issue_df[available_cols],
                     column_config={
-                        "Link": st.column_config.LinkColumn(
-                            "Prod #", 
-                            display_text=r".*search=(.*)"
-                        ),
                         "Revenue": st.column_config.NumberColumn(
                             "Revenue",
                             format="$%.0f"
