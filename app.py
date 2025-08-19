@@ -6,17 +6,13 @@ Modular, clean, and performant business intelligence platform
 
 import streamlit as st
 import pandas as pd
-import time
-from datetime import datetime, timedelta
-import warnings
-warnings.filterwarnings('ignore')
+from datetime import datetime
 
 # Import custom modules
 try:
     from data_processing import load_and_process_data
-    from business_logic import calculate_business_health_score
     from ui_components import (
-        render_login_screen, 
+        render_login_screen,
         render_sidebar_config,
         render_overall_health_tab,
         render_operational_dashboard,
@@ -24,7 +20,6 @@ try:
     )
     from visualization import setup_plotly_theme
     from pricing_analysis_ui import render_pricing_analysis_tab
-    import pricing_config as pc
 except ImportError as e:
     st.error(f"❌ **Module Import Error**: {e}")
     st.error("Please ensure all required files are in the same directory as app.py")
