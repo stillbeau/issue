@@ -404,7 +404,8 @@ def load_raw_data():
         ]
 
         # Ensure credentials are available in Streamlit secrets
-        if "gsheets" not in st.secrets:
+        gsheets_cfg = st.secrets.get("gsheets")
+        if not gsheets_cfg:
             st.error("Google Sheets credentials not configured.")
             st.info(
                 "Add a [gsheets] section to your Streamlit secrets. "
@@ -413,15 +414,20 @@ def load_raw_data():
             )
             return pd.DataFrame()
 
-        # Get credentials from Streamlit secrets
-        credentials_dict = dict(st.secrets["gsheets"])
+        spreadsheet_url = gsheets_cfg.get("spreadsheet")
+        if not spreadsheet_url:
+            st.error("Google Sheets spreadsheet URL not configured.")
+            st.info("Add a 'spreadsheet' entry to the [gsheets] section of your secrets.")
+            return pd.DataFrame()
+
+        credentials_dict = {k: v for k, v in gsheets_cfg.items() if k != "spreadsheet"}
         credentials = Credentials.from_service_account_info(credentials_dict, scopes=scopes)
-        
+
         # Authorize and create client
         client = gspread.authorize(credentials)
-        
+
         # Open spreadsheet by URL
-        spreadsheet = client.open_by_url(st.secrets["gsheets"]["spreadsheet"])
+        spreadsheet = client.open_by_url(spreadsheet_url)
         worksheet = spreadsheet.worksheet(WORKSHEET_NAME)
         
         # Get all records as list of dictionaries
