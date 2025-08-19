@@ -55,7 +55,7 @@ def render_login_screen():
         submitted = st.form_submit_button("🔓 Access Dashboard", use_container_width=True)
         
         if submitted:
-            correct_pin = st.secrets.get("APP_PIN")
+            correct_pin = str(st.secrets.get("APP_PIN"))
             if not correct_pin:
                 st.error("❌ Application PIN not configured.")
             elif pin == correct_pin:
