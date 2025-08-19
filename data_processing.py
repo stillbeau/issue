@@ -11,8 +11,10 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta
 from business_logic import (
-    parse_material, get_current_stage, calculate_days_in_stage,
-    calculate_risk_score, calculate_delay_probability, analyze_job_pricing
+    parse_material,
+    calculate_risk_score,
+    calculate_delay_probability,
+    analyze_job_pricing,
 )
 
 # --- Constants ---
@@ -179,11 +181,35 @@ def calculate_stage_metrics(df, today):
     # Create standardized column names for the stage calculation function
     df = create_standardized_column_names(df)
     
-    # Current stage determination
-    df['Current_Stage'] = df.apply(get_current_stage, axis=1)
-    df['Days_In_Current_Stage'] = df.apply(
-        lambda row: calculate_days_in_stage(row, today), axis=1
-    )
+    # Current stage determination using vectorized operations
+    stage_conditions = [
+        df['Install_Date'].notna() | df['Pick_Up_Date'].notna(),
+        df['Ship_Date'].notna(),
+        df['Product_Rcvd_Date'].notna(),
+        df['Ready_to_Fab_Date'].notna(),
+        df['Template_Date'].notna(),
+    ]
+    stage_choices = [
+        'Completed',
+        'Shipped',
+        'Product Received',
+        'In Fabrication',
+        'Post-Template',
+    ]
+    df['Current_Stage'] = np.select(stage_conditions, stage_choices, default='Pre-Template')
+
+    # Days spent in the current stage
+    df['Days_In_Current_Stage'] = np.nan
+    stage_to_date = {
+        'Shipped': 'Ship_Date',
+        'Product Received': 'Product_Rcvd_Date',
+        'In Fabrication': 'Ready_to_Fab_Date',
+        'Post-Template': 'Template_Date',
+    }
+    for stage, col in stage_to_date.items():
+        mask = df['Current_Stage'] == stage
+        df.loc[mask, 'Days_In_Current_Stage'] = (today - df.loc[mask, col]).dt.days
+    df.loc[df['Current_Stage'] == 'Completed', 'Days_In_Current_Stage'] = 0
     
     # Timeline calculations - Using standardized column names
     df['Days_Template_to_RTF'] = (df['Ready_to_Fab_Date'] - df['Template_Date']).dt.days

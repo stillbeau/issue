@@ -6,8 +6,6 @@ This module contains all pricing data and logic for all FloForm Express programs
 Includes retail pricing for quartz, granite, porcelain, laminate, and solid surface.
 """
 
-import pandas as pd
-import numpy as np
 
 # --- QUARTZ PRICING (Updated June 2025) ---
 QUARTZ_GROUPS = {
@@ -279,7 +277,7 @@ def identify_material_type(material_description):
     if any(indicator in desc_lower for indicator in quartz_indicators):
         return 'quartz'
     
-    return 'quartz'  # Default assumption
+    return None  # Unknown material type
 
 def get_material_group(material_name, material_type=None):
     """

@@ -5,21 +5,19 @@ Contains all user interface rendering functions and components
 
 import streamlit as st
 import pandas as pd
-import numpy as np
 import time
 from datetime import datetime, timedelta
 import plotly.express as px
-import plotly.graph_objects as go
 
 from business_logic import (
-    calculate_business_health_score, get_critical_issues, 
+    calculate_business_health_score, get_critical_issues,
     calculate_performance_metrics, generate_business_insights,
     calculate_timeline_metrics, calculate_revenue_at_risk, TIMELINE_THRESHOLDS
 )
-from data_processing import filter_data, get_data_summary, export_data_summary
+from data_processing import filter_data, export_data_summary
 from visualization import (
     create_timeline_chart, create_risk_distribution_chart,
-    create_performance_metrics_chart, create_health_score_gauge,
+    create_health_score_gauge,
     create_monthly_installs_trend, create_monthly_templates_trend
 )
 
@@ -57,8 +55,10 @@ def render_login_screen():
         submitted = st.form_submit_button("🔓 Access Dashboard", use_container_width=True)
         
         if submitted:
-            correct_pin = st.secrets.get("APP_PIN", "1234")
-            if pin == correct_pin:
+            correct_pin = st.secrets.get("APP_PIN")
+            if not correct_pin:
+                st.error("❌ Application PIN not configured.")
+            elif pin == correct_pin:
                 st.session_state.authenticated = True
                 st.success("✅ Authentication successful!")
                 time.sleep(1)
