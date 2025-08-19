@@ -38,7 +38,7 @@ def analyze_interbranch_pricing_direct(df):
     df_work = df.copy()
     
     # Convert key columns to numeric with safe conversion
-    numeric_columns = ['Total_Job_SqFT', 'Total_Job_Price_', 'Phase_Dollars_Plant_Invoice_']
+    numeric_columns = ['Total_Job_SqFT', 'Total_Job_Price_', 'Phase_Dollars_Plant_Invoice_', 'Job_Plant_Invoice']
     
     for col in numeric_columns:
         if col in df_work.columns:
@@ -93,14 +93,16 @@ def analyze_interbranch_pricing_direct(df):
         
         if isinstance(analysis, dict):
             # Extract key information with safe conversions
-            actual_cost = safe_numeric_conversion(row.get('Phase_Dollars_Plant_Invoice_', 0))
+            plant_cost = safe_numeric_conversion(row.get('Phase_Dollars_Plant_Invoice_', 0))
+            plant_invoice = safe_numeric_conversion(row.get('Job_Plant_Invoice', 0))
             job_info = {
                 'Job_Name': row.get('Job_Name', ''),
                 'Production_': row.get('Production_', ''),
                 'Division': row.get('Division', ''),
                 'Total_SqFt': safe_numeric_conversion(row.get('Total_Job_SqFT', 0)),
                 'Job_Revenue': safe_numeric_conversion(row.get('Total_Job_Price_', 0)),
-                'Actual_Plant_Cost': actual_cost,
+                'Actual_Plant_Cost': plant_cost,
+                'Actual_Plant_Invoice': plant_invoice,
                 'Analysis': analysis
             }
             
@@ -110,28 +112,31 @@ def analyze_interbranch_pricing_direct(df):
                 job_info['Expected_Plant_Cost'] = expected_plant.get('total_cost_avg', 0)
 
                 # Determine which invoice value to use
-                if actual_cost > 0:
-                    job_info['Plant_Invoice_Used'] = actual_cost
+                if plant_invoice > 0:
+                    job_info['Plant_Invoice_Used'] = plant_invoice
                     job_info['Invoice_Type'] = 'Actual'
                 else:
                     job_info['Plant_Invoice_Used'] = job_info['Expected_Plant_Cost']
                     job_info['Invoice_Type'] = 'Estimated'
 
-                job_info['Plant_Profit'] = job_info['Plant_Invoice_Used'] - job_info['Expected_Plant_Cost']
+                job_info['Plant_Profit'] = job_info['Plant_Invoice_Used'] - plant_cost
                 job_info['Plant_Profit_Margin_%'] = (
-                    job_info['Plant_Profit'] / job_info['Expected_Plant_Cost'] * 100
-                ) if job_info['Expected_Plant_Cost'] > 0 else 0
+                    job_info['Plant_Profit'] / job_info['Plant_Invoice_Used'] * 100
+                ) if job_info['Plant_Invoice_Used'] > 0 else 0
                 job_info['Expected_Cost_per_SqFt'] = (
                     job_info['Expected_Plant_Cost'] / job_info['Total_SqFt']
                 ) if job_info['Total_SqFt'] > 0 else 0
                 job_info['Invoice_per_SqFt'] = (
                     job_info['Plant_Invoice_Used'] / job_info['Total_SqFt']
                 ) if job_info['Total_SqFt'] > 0 else 0
+                job_info['Plant_Cost_per_SqFt'] = (
+                    plant_cost / job_info['Total_SqFt']
+                ) if job_info['Total_SqFt'] > 0 else 0
                 job_info['Plant_Profit_per_SqFt'] = (
                     job_info['Plant_Profit'] / job_info['Total_SqFt']
                 ) if job_info['Total_SqFt'] > 0 else 0
 
-                job_info['Variance_Amount'] = actual_cost - job_info['Expected_Plant_Cost']
+                job_info['Variance_Amount'] = job_info['Plant_Invoice_Used'] - job_info['Expected_Plant_Cost']
                 job_info['Variance_Percent'] = (
                     job_info['Variance_Amount'] / job_info['Expected_Plant_Cost'] * 100
                 ) if job_info['Expected_Plant_Cost'] > 0 else 0
@@ -152,15 +157,22 @@ def analyze_interbranch_pricing_direct(df):
                 job_info['Variance_Amount'] = 0
                 job_info['Variance_Percent'] = 0
                 job_info['Severity'] = 'no_analysis'
-                job_info['Plant_Invoice_Used'] = job_info['Actual_Plant_Cost']
-                job_info['Invoice_Type'] = 'Actual' if job_info['Actual_Plant_Cost'] > 0 else 'Estimated'
-                job_info['Plant_Profit'] = 0
-                job_info['Plant_Profit_Margin_%'] = 0
+                job_info['Plant_Invoice_Used'] = job_info['Actual_Plant_Invoice']
+                job_info['Invoice_Type'] = 'Actual' if job_info['Actual_Plant_Invoice'] > 0 else 'Estimated'
+                job_info['Plant_Profit'] = job_info['Plant_Invoice_Used'] - job_info['Actual_Plant_Cost']
+                job_info['Plant_Profit_Margin_%'] = (
+                    job_info['Plant_Profit'] / job_info['Plant_Invoice_Used'] * 100
+                ) if job_info['Plant_Invoice_Used'] > 0 else 0
                 job_info['Expected_Cost_per_SqFt'] = 0
                 job_info['Invoice_per_SqFt'] = (
                     job_info['Plant_Invoice_Used'] / job_info['Total_SqFt']
                 ) if job_info['Total_SqFt'] > 0 else 0
-                job_info['Plant_Profit_per_SqFt'] = 0
+                job_info['Plant_Cost_per_SqFt'] = (
+                    job_info['Actual_Plant_Cost'] / job_info['Total_SqFt']
+                ) if job_info['Total_SqFt'] > 0 else 0
+                job_info['Plant_Profit_per_SqFt'] = (
+                    job_info['Plant_Profit'] / job_info['Total_SqFt']
+                ) if job_info['Total_SqFt'] > 0 else 0
                 job_info['Overpriced'] = False
             
             results.append(job_info)
@@ -182,7 +194,7 @@ def get_pricing_summary_stats_direct(pricing_results):
     
     # Calculate totals
     total_expected = sum([r.get('Expected_Plant_Cost', 0) for r in variance_jobs])
-    total_actual = sum([r.get('Actual_Plant_Cost', 0) for r in variance_jobs])
+    total_invoice = sum([r.get('Plant_Invoice_Used', 0) for r in variance_jobs])
     total_actual_profit = sum([r.get('Plant_Profit', 0) for r in variance_jobs if r.get('Invoice_Type') == 'Actual'])
     total_estimated_profit = sum([r.get('Plant_Profit', 0) for r in variance_jobs if r.get('Invoice_Type') == 'Estimated'])
     
@@ -193,9 +205,9 @@ def get_pricing_summary_stats_direct(pricing_results):
         'critical_variances': critical_variances,
         'warning_variances': warning_variances,
         'total_expected_cost': total_expected,
-        'total_actual_cost': total_actual,
-        'overall_variance': total_actual - total_expected if total_expected > 0 else 0,
-        'overall_variance_percent': ((total_actual - total_expected) / total_expected * 100) if total_expected > 0 else 0,
+        'total_invoice_amount': total_invoice,
+        'overall_variance': total_invoice - total_expected if total_expected > 0 else 0,
+        'overall_variance_percent': ((total_invoice - total_expected) / total_expected * 100) if total_expected > 0 else 0,
         'total_actual_plant_profit': total_actual_profit,
         'total_estimated_plant_profit': total_estimated_profit
     }
@@ -215,7 +227,7 @@ def render_pricing_analysis_tab(df):
     with st.expander("📊 Data Quality Check"):
         st.subheader("Column Data Types")
         
-        key_columns = ['Division_Type', 'Job_Material', 'Total_Job_SqFT', 'Total_Job_Price_', 'Phase_Dollars_Plant_Invoice_']
+        key_columns = ['Division_Type', 'Job_Material', 'Total_Job_SqFT', 'Total_Job_Price_', 'Phase_Dollars_Plant_Invoice_', 'Job_Plant_Invoice']
         
         for col in key_columns:
             if col in df.columns:
@@ -399,11 +411,13 @@ def render_pricing_overview_direct(pricing_results, summary_stats):
                     'Job Revenue': r.get('Job_Revenue', 0),
                     'Expected Cost': r.get('Expected_Plant_Cost', 0),
                     'Plant Invoice': r.get('Plant_Invoice_Used', 0),
+                    'Plant Cost': r.get('Actual_Plant_Cost', 0),
                     'Invoice Type': r.get('Invoice_Type', ''),
                     'Plant Profit': r.get('Plant_Profit', 0),
                     'Plant Profit %': r.get('Plant_Profit_Margin_%', 0),
                     'Expected $/SqFt': r.get('Expected_Cost_per_SqFt', 0),
                     'Invoice $/SqFt': r.get('Invoice_per_SqFt', 0),
+                    'Cost $/SqFt': r.get('Plant_Cost_per_SqFt', 0),
                     'Profit $/SqFt': r.get('Plant_Profit_per_SqFt', 0),
                     'Variance Amount': r.get('Variance_Amount', 0),
                     'Variance %': r.get('Variance_Percent', 0),
@@ -425,10 +439,12 @@ def render_pricing_overview_direct(pricing_results, summary_stats):
                     "Job Revenue": st.column_config.NumberColumn("Job Revenue", format="$%.2f"),
                     "Expected Cost": st.column_config.NumberColumn("Expected Cost", format="$%.2f"),
                     "Plant Invoice": st.column_config.NumberColumn("Plant Invoice", format="$%.2f"),
+                    "Plant Cost": st.column_config.NumberColumn("Plant Cost", format="$%.2f"),
                     "Plant Profit": st.column_config.NumberColumn("Plant Profit", format="$%.2f"),
                     "Plant Profit %": st.column_config.NumberColumn("Plant Profit %", format="%.1f%%"),
                     "Expected $/SqFt": st.column_config.NumberColumn("Expected $/SqFt", format="$%.2f"),
                     "Invoice $/SqFt": st.column_config.NumberColumn("Invoice $/SqFt", format="$%.2f"),
+                    "Cost $/SqFt": st.column_config.NumberColumn("Cost $/SqFt", format="$%.2f"),
                     "Profit $/SqFt": st.column_config.NumberColumn("Profit $/SqFt", format="$%.2f"),
                     "Variance Amount": st.column_config.NumberColumn("Variance Amount", format="$%.2f"),
                     "Variance %": st.column_config.NumberColumn("Variance %", format="%.1f%%"),
@@ -616,11 +632,13 @@ def render_detailed_analysis_direct(pricing_results):
                 'Job Revenue': r.get('Job_Revenue', 0),
                 'Expected Cost': r.get('Expected_Plant_Cost', 0),
                 'Plant Invoice': r.get('Plant_Invoice_Used', 0),
+                'Plant Cost': r.get('Actual_Plant_Cost', 0),
                 'Invoice Type': r.get('Invoice_Type'),
                 'Plant Profit': r.get('Plant_Profit', 0),
                 'Plant Profit %': r.get('Plant_Profit_Margin_%', 0),
                 'Expected $/SqFt': r.get('Expected_Cost_per_SqFt', 0),
                 'Invoice $/SqFt': r.get('Invoice_per_SqFt', 0),
+                'Cost $/SqFt': r.get('Plant_Cost_per_SqFt', 0),
                 'Profit $/SqFt': r.get('Plant_Profit_per_SqFt', 0),
                 'Variance': r.get('Variance_Amount', 0),
                 'Variance %': r.get('Variance_Percent', 0),
@@ -644,10 +662,12 @@ def render_detailed_analysis_direct(pricing_results):
                 "Job Revenue": st.column_config.NumberColumn("Job Revenue", format="$%.2f"),
                 "Expected Cost": st.column_config.NumberColumn("Expected Cost", format="$%.2f"),
                 "Plant Invoice": st.column_config.NumberColumn("Plant Invoice", format="$%.2f"),
+                "Plant Cost": st.column_config.NumberColumn("Plant Cost", format="$%.2f"),
                 "Plant Profit": st.column_config.NumberColumn("Plant Profit", format="$%.2f"),
                 "Plant Profit %": st.column_config.NumberColumn("Plant Profit %", format="%.1f%%"),
                 "Expected $/SqFt": st.column_config.NumberColumn("Expected $/SqFt", format="$%.2f"),
                 "Invoice $/SqFt": st.column_config.NumberColumn("Invoice $/SqFt", format="$%.2f"),
+                "Cost $/SqFt": st.column_config.NumberColumn("Cost $/SqFt", format="$%.2f"),
                 "Profit $/SqFt": st.column_config.NumberColumn("Profit $/SqFt", format="$%.2f"),
                 "Variance": st.column_config.NumberColumn("Variance", format="$%.2f"),
                 "Variance %": st.column_config.NumberColumn("Variance %", format="%.1f%%"),
