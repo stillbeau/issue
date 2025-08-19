@@ -46,8 +46,9 @@ def analyze_interbranch_pricing_direct(df):
     
     # Filter for jobs that should have interbranch costs (Stone/Quartz with plant costs)
     try:
+        division_col = 'Division_Type' if 'Division_Type' in df_work.columns else 'Division'
         candidates = df_work[
-            (df_work.get('Division_Type', '') == 'Stone/Quartz') &
+            (df_work[division_col] == 'Stone/Quartz') &
             (df_work['Job_Material'].notna()) &
             (df_work['Total_Job_SqFT'].notna()) &
             (df_work['Total_Job_SqFT'] > 0) &
@@ -59,13 +60,14 @@ def analyze_interbranch_pricing_direct(df):
     except Exception as e:
         st.error(f"Error filtering data: {e}")
         st.info("Attempting alternative filtering method...")
-        
+
         # Alternative filtering with more robust checks
         mask = pd.Series([True] * len(df_work))
-        
+
         # Division check
-        if 'Division_Type' in df_work.columns:
-            mask &= (df_work['Division_Type'] == 'Stone/Quartz')
+        division_col = 'Division_Type' if 'Division_Type' in df_work.columns else 'Division'
+        if division_col in df_work.columns:
+            mask &= (df_work[division_col] == 'Stone/Quartz')
         
         # Material check
         if 'Job_Material' in df_work.columns:
