@@ -124,18 +124,25 @@ def analyze_interbranch_pricing_direct(df):
                 expected_plant = analysis['expected_plant']
                 job_info['Expected_Plant_Cost'] = expected_plant.get('total_cost_avg', 0)
 
-                # Determine which invoice value to use
-                if plant_invoice > 0:
-                    job_info['Plant_Invoice_Used'] = plant_invoice
-                    job_info['Invoice_Type'] = 'Actual'
-                else:
+                # If no actual plant cost, fall back to estimated values
+                if plant_cost <= 0:
                     job_info['Plant_Invoice_Used'] = job_info['Expected_Plant_Cost']
                     job_info['Invoice_Type'] = 'Estimated'
+                    job_info['Plant_Profit'] = 0
+                    job_info['Plant_Profit_Margin_%'] = 0
+                else:
+                    # Determine which invoice value to use
+                    if plant_invoice > 0:
+                        job_info['Plant_Invoice_Used'] = plant_invoice
+                        job_info['Invoice_Type'] = 'Actual'
+                    else:
+                        job_info['Plant_Invoice_Used'] = job_info['Expected_Plant_Cost']
+                        job_info['Invoice_Type'] = 'Estimated'
 
-                job_info['Plant_Profit'] = job_info['Plant_Invoice_Used'] - plant_cost
-                job_info['Plant_Profit_Margin_%'] = (
-                    job_info['Plant_Profit'] / job_info['Plant_Invoice_Used'] * 100
-                ) if job_info['Plant_Invoice_Used'] > 0 else 0
+                    job_info['Plant_Profit'] = job_info['Plant_Invoice_Used'] - plant_cost
+                    job_info['Plant_Profit_Margin_%'] = (
+                        job_info['Plant_Profit'] / job_info['Plant_Invoice_Used'] * 100
+                    ) if job_info['Plant_Invoice_Used'] > 0 else 0
                 job_info['Expected_Cost_per_SqFt'] = (
                     job_info['Expected_Plant_Cost'] / job_info['Total_SqFt']
                 ) if job_info['Total_SqFt'] > 0 else 0
@@ -149,7 +156,8 @@ def analyze_interbranch_pricing_direct(df):
                     job_info['Plant_Profit'] / job_info['Total_SqFt']
                 ) if job_info['Total_SqFt'] > 0 else 0
 
-                job_info['Variance_Amount'] = job_info['Plant_Invoice_Used'] - job_info['Expected_Plant_Cost']
+                # Compare actual plant cost to expected cost
+                job_info['Variance_Amount'] = plant_cost - job_info['Expected_Plant_Cost']
                 job_info['Variance_Percent'] = (
                     job_info['Variance_Amount'] / job_info['Expected_Plant_Cost'] * 100
                 ) if job_info['Expected_Plant_Cost'] > 0 else 0
@@ -170,12 +178,20 @@ def analyze_interbranch_pricing_direct(df):
                 job_info['Variance_Amount'] = 0
                 job_info['Variance_Percent'] = 0
                 job_info['Severity'] = 'no_analysis'
-                job_info['Plant_Invoice_Used'] = job_info['Actual_Plant_Invoice']
-                job_info['Invoice_Type'] = 'Actual' if job_info['Actual_Plant_Invoice'] > 0 else 'Estimated'
-                job_info['Plant_Profit'] = job_info['Plant_Invoice_Used'] - job_info['Actual_Plant_Cost']
-                job_info['Plant_Profit_Margin_%'] = (
-                    job_info['Plant_Profit'] / job_info['Plant_Invoice_Used'] * 100
-                ) if job_info['Plant_Invoice_Used'] > 0 else 0
+
+                if job_info['Actual_Plant_Cost'] > 0:
+                    job_info['Plant_Invoice_Used'] = job_info['Actual_Plant_Invoice']
+                    job_info['Invoice_Type'] = 'Actual' if job_info['Actual_Plant_Invoice'] > 0 else 'Estimated'
+                    job_info['Plant_Profit'] = job_info['Plant_Invoice_Used'] - job_info['Actual_Plant_Cost']
+                    job_info['Plant_Profit_Margin_%'] = (
+                        job_info['Plant_Profit'] / job_info['Plant_Invoice_Used'] * 100
+                    ) if job_info['Plant_Invoice_Used'] > 0 else 0
+                else:
+                    job_info['Plant_Invoice_Used'] = job_info['Actual_Plant_Invoice'] if job_info['Actual_Plant_Invoice'] > 0 else 0
+                    job_info['Invoice_Type'] = 'Estimated'
+                    job_info['Plant_Profit'] = 0
+                    job_info['Plant_Profit_Margin_%'] = 0
+
                 job_info['Expected_Cost_per_SqFt'] = 0
                 job_info['Invoice_per_SqFt'] = (
                     job_info['Plant_Invoice_Used'] / job_info['Total_SqFt']
@@ -207,10 +223,10 @@ def get_pricing_summary_stats_direct(pricing_results):
     
     # Calculate totals
     total_expected = sum([r.get('Expected_Plant_Cost', 0) for r in variance_jobs])
-    total_invoice = sum([r.get('Plant_Invoice_Used', 0) for r in variance_jobs])
+    total_actual = sum([r.get('Actual_Plant_Cost', 0) for r in variance_jobs])
     total_actual_profit = sum([r.get('Plant_Profit', 0) for r in variance_jobs if r.get('Invoice_Type') == 'Actual'])
     total_estimated_profit = sum([r.get('Plant_Profit', 0) for r in variance_jobs if r.get('Invoice_Type') == 'Estimated'])
-    
+
     return {
         'total_jobs': total_jobs,
         'analyzed_jobs': total_jobs,
@@ -218,9 +234,9 @@ def get_pricing_summary_stats_direct(pricing_results):
         'critical_variances': critical_variances,
         'warning_variances': warning_variances,
         'total_expected_cost': total_expected,
-        'total_invoice_amount': total_invoice,
-        'overall_variance': total_invoice - total_expected if total_expected > 0 else 0,
-        'overall_variance_percent': ((total_invoice - total_expected) / total_expected * 100) if total_expected > 0 else 0,
+        'total_actual_cost': total_actual,
+        'overall_variance': total_actual - total_expected if total_expected > 0 else 0,
+        'overall_variance_percent': ((total_actual - total_expected) / total_expected * 100) if total_expected > 0 else 0,
         'total_actual_plant_profit': total_actual_profit,
         'total_estimated_plant_profit': total_estimated_profit
     }
