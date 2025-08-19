@@ -46,8 +46,19 @@ def analyze_interbranch_pricing_direct(df):
     
     # Filter for jobs that should have interbranch costs (Stone/Quartz with plant costs)
     try:
+        division_col = (
+            'Division_Type' if 'Division_Type' in df_work.columns
+            else 'Division' if 'Division' in df_work.columns
+            else None
+        )
+
+        division_mask = (
+            df_work[division_col] == 'Stone/Quartz'
+            if division_col else pd.Series([True] * len(df_work))
+        )
+
         candidates = df_work[
-            (df_work.get('Division_Type', '') == 'Stone/Quartz') &
+            division_mask &
             (df_work['Job_Material'].notna()) &
             (df_work['Total_Job_SqFT'].notna()) &
             (df_work['Total_Job_SqFT'] > 0) &
@@ -59,18 +70,20 @@ def analyze_interbranch_pricing_direct(df):
     except Exception as e:
         st.error(f"Error filtering data: {e}")
         st.info("Attempting alternative filtering method...")
-        
+
         # Alternative filtering with more robust checks
         mask = pd.Series([True] * len(df_work))
-        
+
         # Division check
         if 'Division_Type' in df_work.columns:
             mask &= (df_work['Division_Type'] == 'Stone/Quartz')
-        
+        elif 'Division' in df_work.columns:
+            mask &= (df_work['Division'] == 'Stone/Quartz')
+
         # Material check
         if 'Job_Material' in df_work.columns:
             mask &= df_work['Job_Material'].notna()
-        
+
         # Numeric checks with safe conversion
         for col in ['Total_Job_SqFT', 'Total_Job_Price_', 'Phase_Dollars_Plant_Invoice_']:
             if col in df_work.columns:
@@ -78,7 +91,7 @@ def analyze_interbranch_pricing_direct(df):
                     mask &= (df_work[col] >= 0)
                 else:
                     mask &= (df_work[col] > 0)
-        
+
         candidates = df_work[mask]
     
     st.info(f"Found {len(candidates)} candidate jobs for interbranch pricing analysis")
