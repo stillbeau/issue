@@ -20,6 +20,7 @@ try:
     )
     from visualization import setup_plotly_theme
     from pricing_analysis_ui import render_pricing_analysis_tab
+    from production_margins_ui import render_production_margins_tab
 except ImportError as e:
     st.error(f"❌ **Module Import Error**: {e}")
     st.error("Please ensure all required files are in the same directory as app.py")
@@ -154,9 +155,10 @@ def main():
     # Main dashboard tabs (moved inside main function)
     main_tabs = st.tabs([
         "📈 Business Health",
-        "⚙️ Operations", 
+        "⚙️ Operations",
         "💰 Profitability",
-        "🔍 Pricing Analysis"
+        "🔍 Pricing Analysis",
+        "🏭 Production Margins"
     ])
     
     # Business Health Tab
@@ -170,10 +172,14 @@ def main():
     # Profitability Tab
     with main_tabs[2]:
         render_profitability_dashboard(df_stone, df_laminate, config['today_dt'])
-    
+
     # Pricing Analysis Tab
     with main_tabs[3]:
         render_pricing_analysis_tab(df_full)
+
+    # Production Margins Tab
+    with main_tabs[4]:
+        render_production_margins_tab(df_full)
     
     # Render footer
     render_footer()
