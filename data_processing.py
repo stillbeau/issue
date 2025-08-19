@@ -72,6 +72,7 @@ def add_missing_columns(df):
         'Ready to Fab - Status', 'Template - Status', 'Plant INV - Status',
         'Invoice - Status', 'Install - Status', 'Pick Up - Status', 'Delivery - Status',
         'Job Type', 'Order Type', 'Lead Source', 'Phase Throughput - Phase Plant Invoice',
+        'Job Throughput - Job Plant Invoice',
         'Job Throughput - Rework COGS', 'Job Throughput - Rework Job Labor',
         'Job Throughput - Total COGS', 'Branch INV $', 'Plant INV $', 'Job Status'
     ]
@@ -118,6 +119,10 @@ def create_standardized_column_names(df):
     df['Total_Job_SqFT'] = df['Total Job SqFT']
     df['Total_Job_Price_'] = df['Total Job Price $']
     df['Phase_Dollars_Plant_Invoice_'] = df['Phase Throughput - Phase Plant Invoice']
+    if 'Job Throughput - Job Plant Invoice' in df.columns:
+        df['Job_Plant_Invoice'] = df['Job Throughput - Job Plant Invoice']
+    else:
+        df['Job_Plant_Invoice'] = df['Plant INV $']
     df['Job_Type'] = df['Job Type']
     df['Production_'] = df['Production #']
     df['Job_Name'] = df['Job Name']
