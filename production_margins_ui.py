@@ -15,18 +15,59 @@ def prepare_production_margin_data(df: pd.DataFrame, target_cost: float = DEFAUL
     """Create derived production margin metrics from raw Google Sheet export."""
     data = df.copy()
 
-    # Base fields with fallbacks
-    data['sqft'] = data['Total Job SqFT'].fillna(data['Orders - Total Sq. Ft.'])
-    data['sell_price'] = data['Total Job Price $']
-    data['plant_invoice'] = data['Plant INV $'].fillna(data['Job Throughput - Job Plant Invoice'])
-    data['labor_cost'] = data['Job Throughput - Total Job Labor']
-    data['total_cogs'] = data['Job Throughput - Total COGS']
+    # Base fields with robust fallbacks
+    data['sqft'] = data.get('Total Job SqFT', pd.Series(dtype=float))
+    if 'Orders - Total Sq. Ft.' in data.columns:
+        data['sqft'] = data['sqft'].fillna(data['Orders - Total Sq. Ft.'])
 
-    # Derived cost components
-    data['plant_cost_per_sqft'] = data['plant_invoice'] / data['sqft']
+    if 'Total Job Price $' in data.columns:
+        data['sell_price'] = data['Total Job Price $']
+    elif 'Orders - Total Price' in data.columns:
+        data['sell_price'] = data['Orders - Total Price']
+    else:
+        data['sell_price'] = pd.NA
+
+    data['plant_invoice'] = data.get('Plant INV $', pd.Series(dtype=float))
+    if 'Job Throughput - Job Plant Invoice' in data.columns:
+        data['plant_invoice'] = data['plant_invoice'].fillna(
+            data['Job Throughput - Job Plant Invoice']
+        )
+
+    data['labor_cost'] = data.get('Job Throughput - Total Job Labor', pd.NA)
+    data['total_cogs'] = data.get('Job Throughput - Total COGS', pd.NA)
+
+    # Date handling
+    if 'Job Creation' in data.columns:
+        data['Job Creation'] = pd.to_datetime(data['Job Creation'], errors='coerce')
+
+    # Invoice date with fallback
+    date_series = data.get('Plant INV - Date', pd.Series(dtype=str))
+    if 'Invoice - Date' in data.columns:
+        date_series = date_series.fillna(data['Invoice - Date'])
+    data['Plant INV - Date'] = pd.to_datetime(date_series, errors='coerce')
+    data['plant_inv_date'] = data['Plant INV - Date']
+
+    # Ensure numeric types for calculations
+    numeric_cols = [
+        'sqft',
+        'sell_price',
+        'plant_invoice',
+        'labor_cost',
+        'total_cogs',
+        'Rework - Stone Shop - Rework Price',
+        'Job Throughput - Total Job Cost',
+    ]
+    for col in numeric_cols:
+        if col in data.columns:
+            data[col] = pd.to_numeric(data[col], errors='coerce')
+
+    # Derived cost components with safe division
+    data['plant_cost_per_sqft'] = data['plant_invoice'] / data['sqft'].replace(0, pd.NA)
     data['other_cogs'] = data['total_cogs'] - data['labor_cost'] - data['plant_invoice']
-    data['job_profit'] = data['sell_price'] - (data['plant_invoice'] + data['labor_cost'] + data['other_cogs'])
-    data['job_margin_pct'] = data['job_profit'] / data['sell_price']
+    data['job_profit'] = data['sell_price'] - (
+        data['plant_invoice'] + data['labor_cost'] + data['other_cogs']
+    )
+    data['job_margin_pct'] = data['job_profit'] / data['sell_price'].replace(0, pd.NA)
 
     data['variance_per_sqft'] = data['plant_cost_per_sqft'] - target_cost
     data['overspend_total'] = data.apply(
@@ -38,8 +79,16 @@ def prepare_production_margin_data(df: pd.DataFrame, target_cost: float = DEFAUL
         axis=1,
     )
 
-    data['rework_pct_of_cost'] = data['Rework - Stone Shop - Rework Price'] / data['Job Throughput - Total Job Cost']
+    # Safe division for rework percentage
+    if 'Job Throughput - Total Job Cost' in data.columns:
+        data['rework_pct_of_cost'] = (
+            data['Rework - Stone Shop - Rework Price'] /
+            data['Job Throughput - Total Job Cost'].replace(0, pd.NA)
+        )
+    else:
+        data['rework_pct_of_cost'] = pd.NA
 
+    # Invoice health calculation
     today = pd.Timestamp.today().normalize()
     data['Invoice Health'] = data.apply(
         lambda r: 'Missing'
@@ -47,19 +96,24 @@ def prepare_production_margin_data(df: pd.DataFrame, target_cost: float = DEFAUL
         else (
             'Stale'
             if (
-                str(r['Plant INV - Status']).lower() == 'pending'
-                and pd.to_datetime(r['Plant INV - Date']) < today - pd.Timedelta(days=30)
+                str(r.get('Plant INV - Status', '')).lower() == 'pending'
+                and r['plant_inv_date'] < today - pd.Timedelta(days=30)
             )
             else 'OK'
         ),
         axis=1,
     )
 
+    # Health status calculations with null handling
     data['Production Cost Health'] = data['plant_cost_per_sqft'].apply(
-        lambda x: 'Green' if x <= target_cost + 1 else ('Amber' if x <= target_cost + 3 else 'Red')
+        lambda x: 'Unknown' if pd.isna(x) else (
+            'Green' if x <= target_cost + 1 else ('Amber' if x <= target_cost + 3 else 'Red')
+        )
     )
     data['Margin Health'] = data['job_margin_pct'].apply(
-        lambda x: 'Green' if x >= 0.40 else ('Amber' if x >= 0.25 else 'Red')
+        lambda x: 'Unknown' if pd.isna(x) else (
+            'Green' if x >= 0.40 else ('Amber' if x >= 0.25 else 'Red')
+        )
     )
 
     return data
@@ -81,10 +135,20 @@ def render_production_margins_tab(df_full: pd.DataFrame) -> None:
         step=0.5,
     )
 
-    start_date, end_date = st.sidebar.date_input(
-        "Date Range",
-        value=(df_full['Job Creation'].min(), df_full['Job Creation'].max()),
-    )
+    # Prepare data early for date range defaults
+    data = prepare_production_margin_data(df_full, target_cost)
+
+    # Smart date range handling
+    if 'Job Creation' in data.columns and not data['Job Creation'].isna().all():
+        min_date = data['Job Creation'].min()
+        max_date = data['Job Creation'].max()
+        start_date, end_date = st.sidebar.date_input(
+            "Date Range",
+            value=(min_date, max_date),
+        )
+    else:
+        st.sidebar.warning("No valid Job Creation dates found")
+        start_date = end_date = None
 
     # Filter selectors
     filter_cols = {
@@ -107,12 +171,12 @@ def render_production_margins_tab(df_full: pd.DataFrame) -> None:
     show_overspend_only = st.sidebar.checkbox("Show Overspend Only", value=False)
     hide_missing = st.sidebar.checkbox("Hide Missing Data", value=False)
 
-    # --- Data Preparation ---
-    data = prepare_production_margin_data(df_full, target_cost)
-
     # Apply date range filter
-    if 'Job Creation' in data.columns:
-        data = data[(data['Job Creation'] >= pd.to_datetime(start_date)) & (data['Job Creation'] <= pd.to_datetime(end_date))]
+    if start_date and end_date and 'Job Creation' in data.columns:
+        data = data[
+            (data['Job Creation'] >= pd.to_datetime(start_date))
+            & (data['Job Creation'] <= pd.to_datetime(end_date))
+        ]
 
     # Apply categorical filters
     for col, value in filters.items():
@@ -125,8 +189,8 @@ def render_production_margins_tab(df_full: pd.DataFrame) -> None:
     if show_overspend_only:
         data = data[data['overspend_total'] > 0]
 
-    # --- KPIs ---
-    avg_cost = data['plant_cost_per_sqft'].mean()
+    # --- KPIs with safe calculations ---
+    avg_cost = data['plant_cost_per_sqft'].mean() if not data['plant_cost_per_sqft'].isna().all() else 0
     pct_over = (data['variance_per_sqft'] > 0).mean() * 100 if len(data) else 0
     overspend_total = data['overspend_total'].sum()
     underspend_total = data['underspend_total'].sum()
@@ -149,16 +213,22 @@ def render_production_margins_tab(df_full: pd.DataFrame) -> None:
     existing_cols = [c for c in display_cols if c in data.columns]
     table = data[existing_cols]
 
-    st.dataframe(table, use_container_width=True)
+    if not table.empty:
+        st.dataframe(table, use_container_width=True)
+    else:
+        st.info("No data matches the current filters.")
 
     # Detail view
-    selected_job = st.selectbox("Select Job for Details", data['Job Name'] if 'Job Name' in data.columns else [])
-    if selected_job:
-        job = data[data['Job Name'] == selected_job].iloc[0]
-        with st.expander("Job Details", expanded=True):
-            st.write(job.to_dict())
+    if 'Job Name' in data.columns and not data.empty:
+        job_names = data['Job Name'].dropna().unique()
+        if len(job_names) > 0:
+            selected_job = st.selectbox("Select Job for Details", job_names)
+            if selected_job:
+                job = data[data['Job Name'] == selected_job].iloc[0]
+                with st.expander("Job Details", expanded=True):
+                    st.json(job.to_dict())
 
     # --- Export ---
-    csv = data.to_csv(index=False).encode('utf-8')
-    st.download_button("📤 Export CSV", csv, "production_margins.csv", "text/csv")
-
+    if not data.empty:
+        csv = data.to_csv(index=False).encode('utf-8')
+        st.download_button("📤 Export CSV", csv, "production_margins.csv", "text/csv")
