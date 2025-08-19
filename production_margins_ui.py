@@ -15,7 +15,7 @@ def prepare_production_margin_data(df: pd.DataFrame, target_cost: float = DEFAUL
     """Create derived production margin metrics from raw Google Sheet export."""
     data = df.copy()
 
-    # Base fields with fallbacks
+    # Base fields with robust fallbacks
     data['sqft'] = data.get('Total Job SqFT', pd.Series(dtype=float))
     if 'Orders - Total Sq. Ft.' in data.columns:
         data['sqft'] = data['sqft'].fillna(data['Orders - Total Sq. Ft.'])
@@ -45,6 +45,7 @@ def prepare_production_margin_data(df: pd.DataFrame, target_cost: float = DEFAUL
         date_series = date_series.fillna(data['Invoice - Date'])
     data['Plant INV - Date'] = pd.to_datetime(date_series, errors='coerce')
     data['plant_inv_date'] = data['Plant INV - Date']
+    data['Invoice Date'] = data['plant_inv_date']  # Create unified date column
 
     # Ensure numeric types for calculations
     numeric_cols = [
@@ -60,13 +61,13 @@ def prepare_production_margin_data(df: pd.DataFrame, target_cost: float = DEFAUL
         if col in data.columns:
             data[col] = pd.to_numeric(data[col], errors='coerce')
 
-    # Derived cost components
-    data['plant_cost_per_sqft'] = data['plant_invoice'] / data['sqft']
+    # Derived cost components with safe division
+    data['plant_cost_per_sqft'] = data['plant_invoice'] / data['sqft'].replace(0, pd.NA)
     data['other_cogs'] = data['total_cogs'] - data['labor_cost'] - data['plant_invoice']
     data['job_profit'] = data['sell_price'] - (
         data['plant_invoice'] + data['labor_cost'] + data['other_cogs']
     )
-    data['job_margin_pct'] = data['job_profit'] / data['sell_price']
+    data['job_margin_pct'] = data['job_profit'] / data['sell_price'].replace(0, pd.NA)
 
     data['variance_per_sqft'] = data['plant_cost_per_sqft'] - target_cost
     data['overspend_total'] = data.apply(
@@ -78,7 +79,15 @@ def prepare_production_margin_data(df: pd.DataFrame, target_cost: float = DEFAUL
         axis=1,
     )
 
-    data['rework_pct_of_cost'] = data['Rework - Stone Shop - Rework Price'] / data['Job Throughput - Total Job Cost']
+    # Safe division for rework percentage
+    job_cost_col = 'Job Throughput - Total Job Cost'
+    if job_cost_col in data.columns:
+        data['rework_pct_of_cost'] = (
+            data['Rework - Stone Shop - Rework Price'] /
+            data[job_cost_col].replace(0, pd.NA)
+        )
+    else:
+        data['rework_pct_of_cost'] = pd.NA
 
     today = pd.Timestamp.today().normalize()
     data['Invoice Health'] = data.apply(
@@ -95,14 +104,17 @@ def prepare_production_margin_data(df: pd.DataFrame, target_cost: float = DEFAUL
         axis=1,
     )
 
+    # Health status calculations with null handling
     data['Production Cost Health'] = data['plant_cost_per_sqft'].apply(
-        lambda x: 'Green' if x <= target_cost + 1 else ('Amber' if x <= target_cost + 3 else 'Red')
+        lambda x: 'Unknown' if pd.isna(x) else (
+            'Green' if x <= target_cost + 1 else ('Amber' if x <= target_cost + 3 else 'Red')
+        )
     )
     data['Margin Health'] = data['job_margin_pct'].apply(
-        lambda x: 'Green' if x >= 0.40 else ('Amber' if x >= 0.25 else 'Red')
+        lambda x: 'Unknown' if pd.isna(x) else (
+            'Green' if x >= 0.40 else ('Amber' if x >= 0.25 else 'Red')
+        )
     )
-
-    data['Invoice Date'] = data['plant_inv_date']
 
     return data
 
@@ -126,18 +138,28 @@ def render_production_margins_tab(df_full: pd.DataFrame) -> None:
     # Prepare data early for date range defaults
     data = prepare_production_margin_data(df_full, target_cost)
 
+    # Dynamic date field selection
     date_options = []
-    if 'Job Creation' in data.columns:
+    if 'Job Creation' in data.columns and not data['Job Creation'].isna().all():
         date_options.append('Job Creation')
-    if 'Invoice Date' in data.columns:
+    if 'Invoice Date' in data.columns and not data['Invoice Date'].isna().all():
         date_options.append('Invoice Date')
 
-    date_field = st.sidebar.selectbox('Filter By Date', date_options)
-    date_series = data['Job Creation'] if date_field == 'Job Creation' else data['Invoice Date']
-    start_date, end_date = st.sidebar.date_input(
-        "Date Range",
-        value=(date_series.min(), date_series.max()),
-    )
+    if date_options:
+        date_field = st.sidebar.selectbox('Filter By Date', date_options)
+        date_series = data['Job Creation'] if date_field == 'Job Creation' else data['Invoice Date']
+
+        min_date = date_series.min() if not date_series.isna().all() else pd.Timestamp.today() - pd.Timedelta(days=365)
+        max_date = date_series.max() if not date_series.isna().all() else pd.Timestamp.today()
+
+        start_date, end_date = st.sidebar.date_input(
+            "Date Range",
+            value=(min_date, max_date),
+        )
+    else:
+        st.sidebar.warning("No valid date columns found for filtering")
+        start_date = end_date = None
+        date_field = None
 
     # Filter selectors
     filter_cols = {
@@ -161,16 +183,17 @@ def render_production_margins_tab(df_full: pd.DataFrame) -> None:
     hide_missing = st.sidebar.checkbox("Hide Missing Data", value=False)
 
     # Apply date range filter
-    if date_field == 'Job Creation' and 'Job Creation' in data.columns:
-        data = data[
-            (data['Job Creation'] >= pd.to_datetime(start_date))
-            & (data['Job Creation'] <= pd.to_datetime(end_date))
-        ]
-    elif date_field == 'Invoice Date' and 'Invoice Date' in data.columns:
-        data = data[
-            (data['Invoice Date'] >= pd.to_datetime(start_date))
-            & (data['Invoice Date'] <= pd.to_datetime(end_date))
-        ]
+    if start_date and end_date and date_field:
+        if date_field == 'Job Creation' and 'Job Creation' in data.columns:
+            data = data[
+                (data['Job Creation'] >= pd.to_datetime(start_date))
+                & (data['Job Creation'] <= pd.to_datetime(end_date))
+            ]
+        elif date_field == 'Invoice Date' and 'Invoice Date' in data.columns:
+            data = data[
+                (data['Invoice Date'] >= pd.to_datetime(start_date))
+                & (data['Invoice Date'] <= pd.to_datetime(end_date))
+            ]
 
     # Apply categorical filters
     for col, value in filters.items():
@@ -183,8 +206,8 @@ def render_production_margins_tab(df_full: pd.DataFrame) -> None:
     if show_overspend_only:
         data = data[data['overspend_total'] > 0]
 
-    # --- KPIs ---
-    avg_cost = data['plant_cost_per_sqft'].mean()
+    # --- KPIs with safe calculations ---
+    avg_cost = data['plant_cost_per_sqft'].mean() if not data['plant_cost_per_sqft'].isna().all() else 0
     pct_over = (data['variance_per_sqft'] > 0).mean() * 100 if len(data) else 0
     overspend_total = data['overspend_total'].sum()
     underspend_total = data['underspend_total'].sum()
@@ -207,16 +230,21 @@ def render_production_margins_tab(df_full: pd.DataFrame) -> None:
     existing_cols = [c for c in display_cols if c in data.columns]
     table = data[existing_cols]
 
-    st.dataframe(table, use_container_width=True)
+    if not table.empty:
+        st.dataframe(table, use_container_width=True)
+    else:
+        st.info("No data matches the current filters.")
 
     # Detail view
-    selected_job = st.selectbox("Select Job for Details", data['Job Name'] if 'Job Name' in data.columns else [])
-    if selected_job:
-        job = data[data['Job Name'] == selected_job].iloc[0]
-        with st.expander("Job Details", expanded=True):
-            st.write(job.to_dict())
+    if 'Job Name' in data.columns and not data.empty:
+        selected_job = st.selectbox("Select Job for Details", data['Job Name'].unique())
+        if selected_job:
+            job = data[data['Job Name'] == selected_job].iloc[0]
+            with st.expander("Job Details", expanded=True):
+                st.json(job.to_dict())
 
     # --- Export ---
-    csv = data.to_csv(index=False).encode('utf-8')
-    st.download_button("📤 Export CSV", csv, "production_margins.csv", "text/csv")
+    if not data.empty:
+        csv = data.to_csv(index=False).encode('utf-8')
+        st.download_button("📤 Export CSV", csv, "production_margins.csv", "text/csv")
 
