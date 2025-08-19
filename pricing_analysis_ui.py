@@ -387,26 +387,32 @@ def render_pricing_overview_direct(pricing_results, summary_stats):
             key=lambda x: abs(x.get('Variance_Amount', 0)), 
             reverse=True
         )
-        
         if sorted_variance_jobs:
             variance_df = pd.DataFrame([
                 {
                     'Job Name': r['Job_Name'],
                     'Production #': r['Production_'],
-                    'Moraware Link': f"https://floformcountertops.moraware.net/sys/search?&search={r['Production_']}" if r['Production_'] else None,
-                    'Expected Cost': f"${r.get('Expected_Plant_Cost', 0):,.2f}",
-                    'Plant Invoice': f"${r.get('Plant_Invoice_Used', 0):,.2f}",
+                    'Moraware Link': (
+                        f"https://floformcountertops.moraware.net/sys/search?&search={r['Production_']}"
+                        if r['Production_'] else None
+                    ),
+                    'Job Revenue': r.get('Job_Revenue', 0),
+                    'Expected Cost': r.get('Expected_Plant_Cost', 0),
+                    'Plant Invoice': r.get('Plant_Invoice_Used', 0),
                     'Invoice Type': r.get('Invoice_Type', ''),
-                    'Plant Profit': f"${r.get('Plant_Profit', 0):+,.2f}",
-                    'Plant Profit %': f"{r.get('Plant_Profit_Margin_%', 0):+.1f}%",
-                    'Variance': f"${r.get('Variance_Amount', 0):+,.2f}",
-                    'Variance %': f"{r.get('Variance_Percent', 0):+.1f}%",
+                    'Plant Profit': r.get('Plant_Profit', 0),
+                    'Plant Profit %': r.get('Plant_Profit_Margin_%', 0),
+                    'Expected $/SqFt': r.get('Expected_Cost_per_SqFt', 0),
+                    'Invoice $/SqFt': r.get('Invoice_per_SqFt', 0),
+                    'Profit $/SqFt': r.get('Plant_Profit_per_SqFt', 0),
+                    'Variance Amount': r.get('Variance_Amount', 0),
+                    'Variance %': r.get('Variance_Percent', 0),
                     'Overpriced': '🚩' if r.get('Overpriced') else '',
-                    'Severity': r.get('Severity', 'unknown').title()
+                    'Severity': r.get('Severity', 'unknown').title(),
                 }
                 for r in sorted_variance_jobs[:10]
             ])
-            
+
             st.dataframe(
                 variance_df,
                 use_container_width=True,
@@ -414,14 +420,23 @@ def render_pricing_overview_direct(pricing_results, summary_stats):
                 column_config={
                     "Moraware Link": st.column_config.LinkColumn(
                         "🔗 Moraware",
-                        display_text="Open Job"
+                        display_text="Open Job",
                     ),
-            "Job Revenue": st.column_config.NumberColumn("Job Revenue", format="0.2f"),
+                    "Job Revenue": st.column_config.NumberColumn("Job Revenue", format="$%.2f"),
+                    "Expected Cost": st.column_config.NumberColumn("Expected Cost", format="$%.2f"),
+                    "Plant Invoice": st.column_config.NumberColumn("Plant Invoice", format="$%.2f"),
+                    "Plant Profit": st.column_config.NumberColumn("Plant Profit", format="$%.2f"),
+                    "Plant Profit %": st.column_config.NumberColumn("Plant Profit %", format="%.1f%%"),
+                    "Expected $/SqFt": st.column_config.NumberColumn("Expected $/SqFt", format="$%.2f"),
+                    "Invoice $/SqFt": st.column_config.NumberColumn("Invoice $/SqFt", format="$%.2f"),
+                    "Profit $/SqFt": st.column_config.NumberColumn("Profit $/SqFt", format="$%.2f"),
+                    "Variance Amount": st.column_config.NumberColumn("Variance Amount", format="$%.2f"),
+                    "Variance %": st.column_config.NumberColumn("Variance %", format="%.1f%%"),
                     "Severity": st.column_config.TextColumn(
                         "Severity",
-                        help="Variance severity level"
-                    )
-                }
+                        help="Variance severity level",
+                    ),
+                },
             )
     
     else:
