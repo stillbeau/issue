@@ -402,7 +402,17 @@ def load_raw_data():
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive"
         ]
-        
+
+        # Ensure credentials are available in Streamlit secrets
+        if "gsheets" not in st.secrets:
+            st.error("Google Sheets credentials not configured.")
+            st.info(
+                "Add a [gsheets] section to your Streamlit secrets. "
+                "See https://docs.streamlit.io/streamlit-community-cloud/deploy-your-app/secrets-management "
+                "for more information."
+            )
+            return pd.DataFrame()
+
         # Get credentials from Streamlit secrets
         credentials_dict = dict(st.secrets["gsheets"])
         credentials = Credentials.from_service_account_info(credentials_dict, scopes=scopes)
