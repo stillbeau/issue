@@ -16,11 +16,35 @@ def prepare_production_margin_data(df: pd.DataFrame, target_cost: float = DEFAUL
     data = df.copy()
 
     # Base fields with fallbacks
-    data['sqft'] = data['Total Job SqFT'].fillna(data['Orders - Total Sq. Ft.'])
-    data['sell_price'] = data['Total Job Price $']
-    data['plant_invoice'] = data['Plant INV $'].fillna(data['Job Throughput - Job Plant Invoice'])
-    data['labor_cost'] = data['Job Throughput - Total Job Labor']
-    data['total_cogs'] = data['Job Throughput - Total COGS']
+    data['sqft'] = data.get('Total Job SqFT', pd.Series(dtype=float))
+    if 'Orders - Total Sq. Ft.' in data.columns:
+        data['sqft'] = data['sqft'].fillna(data['Orders - Total Sq. Ft.'])
+
+    if 'Total Job Price $' in data.columns:
+        data['sell_price'] = data['Total Job Price $']
+    elif 'Orders - Total Price' in data.columns:
+        data['sell_price'] = data['Orders - Total Price']
+    else:
+        data['sell_price'] = pd.NA
+
+    data['plant_invoice'] = data.get('Plant INV $', pd.Series(dtype=float))
+    if 'Job Throughput - Job Plant Invoice' in data.columns:
+        data['plant_invoice'] = data['plant_invoice'].fillna(
+            data['Job Throughput - Job Plant Invoice']
+        )
+
+    data['labor_cost'] = data.get('Job Throughput - Total Job Labor', pd.NA)
+    data['total_cogs'] = data.get('Job Throughput - Total COGS', pd.NA)
+
+    if 'Job Creation' in data.columns:
+        data['Job Creation'] = pd.to_datetime(data['Job Creation'], errors='coerce')
+
+    # Invoice date with fallback
+    date_series = data.get('Plant INV - Date', pd.Series(dtype=str))
+    if 'Invoice - Date' in data.columns:
+        date_series = date_series.fillna(data['Invoice - Date'])
+    data['Plant INV - Date'] = pd.to_datetime(date_series, errors='coerce')
+    data['plant_inv_date'] = data['Plant INV - Date']
 
     # Ensure numeric types for calculations
     numeric_cols = [
@@ -63,8 +87,8 @@ def prepare_production_margin_data(df: pd.DataFrame, target_cost: float = DEFAUL
         else (
             'Stale'
             if (
-                str(r['Plant INV - Status']).lower() == 'pending'
-                and pd.to_datetime(r['Plant INV - Date']) < today - pd.Timedelta(days=30)
+                str(r.get('Plant INV - Status', '')).lower() == 'pending'
+                and r['plant_inv_date'] < today - pd.Timedelta(days=30)
             )
             else 'OK'
         ),
@@ -77,6 +101,8 @@ def prepare_production_margin_data(df: pd.DataFrame, target_cost: float = DEFAUL
     data['Margin Health'] = data['job_margin_pct'].apply(
         lambda x: 'Green' if x >= 0.40 else ('Amber' if x >= 0.25 else 'Red')
     )
+
+    data['Invoice Date'] = data['plant_inv_date']
 
     return data
 
@@ -97,9 +123,20 @@ def render_production_margins_tab(df_full: pd.DataFrame) -> None:
         step=0.5,
     )
 
+    # Prepare data early for date range defaults
+    data = prepare_production_margin_data(df_full, target_cost)
+
+    date_options = []
+    if 'Job Creation' in data.columns:
+        date_options.append('Job Creation')
+    if 'Invoice Date' in data.columns:
+        date_options.append('Invoice Date')
+
+    date_field = st.sidebar.selectbox('Filter By Date', date_options)
+    date_series = data['Job Creation'] if date_field == 'Job Creation' else data['Invoice Date']
     start_date, end_date = st.sidebar.date_input(
         "Date Range",
-        value=(df_full['Job Creation'].min(), df_full['Job Creation'].max()),
+        value=(date_series.min(), date_series.max()),
     )
 
     # Filter selectors
@@ -123,12 +160,17 @@ def render_production_margins_tab(df_full: pd.DataFrame) -> None:
     show_overspend_only = st.sidebar.checkbox("Show Overspend Only", value=False)
     hide_missing = st.sidebar.checkbox("Hide Missing Data", value=False)
 
-    # --- Data Preparation ---
-    data = prepare_production_margin_data(df_full, target_cost)
-
     # Apply date range filter
-    if 'Job Creation' in data.columns:
-        data = data[(data['Job Creation'] >= pd.to_datetime(start_date)) & (data['Job Creation'] <= pd.to_datetime(end_date))]
+    if date_field == 'Job Creation' and 'Job Creation' in data.columns:
+        data = data[
+            (data['Job Creation'] >= pd.to_datetime(start_date))
+            & (data['Job Creation'] <= pd.to_datetime(end_date))
+        ]
+    elif date_field == 'Invoice Date' and 'Invoice Date' in data.columns:
+        data = data[
+            (data['Invoice Date'] >= pd.to_datetime(start_date))
+            & (data['Invoice Date'] <= pd.to_datetime(end_date))
+        ]
 
     # Apply categorical filters
     for col, value in filters.items():
@@ -160,7 +202,7 @@ def render_production_margins_tab(df_full: pd.DataFrame) -> None:
         'Job Name', 'Account', 'Salesperson', 'sqft', 'sell_price', 'plant_invoice',
         'plant_cost_per_sqft', 'variance_per_sqft', 'overspend_total', 'underspend_total',
         'job_margin_pct', 'Production Cost Health', 'Invoice Health',
-        'Plant INV - Date', 'Rework - Stone Shop - Rework Price', 'rework_pct_of_cost'
+        'Invoice Date', 'Rework - Stone Shop - Rework Price', 'rework_pct_of_cost'
     ]
     existing_cols = [c for c in display_cols if c in data.columns]
     table = data[existing_cols]
